@@ -59,6 +59,22 @@ impl ColumnData {
         }
     }
 
+    fn take_indices(&self, indices: &[usize]) -> ColumnData {
+        match self {
+            ColumnData::Bool(v) => ColumnData::Bool(indices.iter().map(|&i| v[i]).collect()),
+            ColumnData::I8(v) => ColumnData::I8(indices.iter().map(|&i| v[i]).collect()),
+            ColumnData::I16(v) => ColumnData::I16(indices.iter().map(|&i| v[i]).collect()),
+            ColumnData::I32(v) => ColumnData::I32(indices.iter().map(|&i| v[i]).collect()),
+            ColumnData::I64(v) => ColumnData::I64(indices.iter().map(|&i| v[i]).collect()),
+            ColumnData::U8(v) => ColumnData::U8(indices.iter().map(|&i| v[i]).collect()),
+            ColumnData::U16(v) => ColumnData::U16(indices.iter().map(|&i| v[i]).collect()),
+            ColumnData::U32(v) => ColumnData::U32(indices.iter().map(|&i| v[i]).collect()),
+            ColumnData::U64(v) => ColumnData::U64(indices.iter().map(|&i| v[i]).collect()),
+            ColumnData::F32(v) => ColumnData::F32(indices.iter().map(|&i| v[i]).collect()),
+            ColumnData::F64(v) => ColumnData::F64(indices.iter().map(|&i| v[i]).collect()),
+        }
+    }
+
     fn get_f64(&self, idx: usize) -> Option<f64> {
         match self {
             ColumnData::F64(v) => Some(v[idx]),
@@ -89,6 +105,10 @@ impl ColumnData {
             ColumnData::F64(v) => Some(v[idx] as i64),
             ColumnData::Bool(v) => Some(i64::from(v[idx])),
         }
+    }
+
+    fn is_float(&self) -> bool {
+        matches!(self, ColumnData::F32(_) | ColumnData::F64(_))
     }
 
     fn into_series(self, name: &str) -> Series {
@@ -318,6 +338,7 @@ impl ZarrSource {
         // Open arrays (cheap-ish metadata, but still avoid reopening per element).
         let primary_path = self.meta.arrays[&self.vars[0]].path.clone();
         let primary = Array::open(self.store.clone(), &primary_path).map_err(to_py_err)?;
+        let array_shape = primary.shape().to_vec();
 
         // Handle scalar arrays as a single “chunk”
         if primary.dimensionality() == 0 {
@@ -391,104 +412,143 @@ impl ZarrSource {
             break;
         }
 
-        let chunk_shape_nz = primary.chunk_shape(&self.chunk_indices).map_err(to_py_err)?;
-        let chunk_shape: Vec<u64> = chunk_shape_nz.iter().map(|x| x.get()).collect();
-        let chunk_len: usize = chunk_shape.iter().product::<u64>() as usize;
+        // We may need to skip “empty” batches after trimming out-of-bounds rows (e.g. sharded edges).
+        loop {
+            let chunk_shape_nz = primary.chunk_shape(&self.chunk_indices).map_err(to_py_err)?;
+            let chunk_shape: Vec<u64> = chunk_shape_nz.iter().map(|x| x.get()).collect();
+            let chunk_len: usize = chunk_shape.iter().product::<u64>() as usize;
 
-        let start = self.chunk_offset;
-        let max_len = std::cmp::min(self.batch_size, self.n_rows_left);
-        let len = std::cmp::min(chunk_len - start, max_len);
+            let start = self.chunk_offset;
+            let max_len = std::cmp::min(self.batch_size, self.n_rows_left);
+            let len = std::cmp::min(chunk_len - start, max_len);
 
-        // Origin for this chunk for dims/coords.
-        let origin = primary
-            .chunk_grid()
-            .chunk_origin(&self.chunk_indices)
-            .map_err(to_py_err)?
-            .unwrap_or_else(|| vec![0; chunk_shape.len()]);
+            // Origin for this chunk for dims/coords.
+            let origin = primary
+                .chunk_grid()
+                .chunk_origin(&self.chunk_indices)
+                .map_err(to_py_err)?
+                .unwrap_or_else(|| vec![0; chunk_shape.len()]);
 
-        // Preload coordinate slices for this chunk range (per dim).
-        let mut coord_slices: Vec<Option<ColumnData>> = Vec::with_capacity(self.dims.len());
-        for (d, dim_name) in self.dims.iter().enumerate() {
-            if let Some(coord_meta) = self.meta.arrays.get(dim_name) {
-                let coord_arr = Array::open(self.store.clone(), &coord_meta.path).map_err(to_py_err)?;
-                let dim_start = origin[d];
-                let dim_len = chunk_shape[d];
-                let coord = retrieve_1d_subset(&coord_arr, dim_start, dim_len).map_err(to_py_err)?;
-                coord_slices.push(Some(coord));
-            } else {
-                coord_slices.push(None);
-            }
-        }
+            let strides = compute_strides(&chunk_shape);
 
-        // Load chunk data for each requested var once.
-        let mut var_chunks: Vec<(String, ColumnData)> = Vec::new();
-        for v in &self.vars {
-            if !self.should_emit(v) {
-                continue;
-            }
-            let path = &self.meta.arrays[v].path;
-            let arr = Array::open(self.store.clone(), path).map_err(to_py_err)?;
-            let data = retrieve_chunk(&arr, &self.chunk_indices).map_err(to_py_err)?;
-            var_chunks.push((v.clone(), data));
-        }
-
-        let strides = compute_strides(&chunk_shape);
-
-        // Build output columns.
-        let mut cols: Vec<Column> = Vec::new();
-
-        // Dim/coord columns.
-        for (d, dim_name) in self.dims.iter().enumerate() {
-            if !self.should_emit(dim_name) {
-                continue;
-            }
-            let mut out_i64: Vec<i64> = Vec::with_capacity(len);
-            let mut out_f64: Vec<f64> = Vec::with_capacity(len);
-            let mut use_f64 = false;
-
+            // Identify in-bounds rows (important for sharded stores where shards extend beyond array shape).
+            let mut keep: Vec<usize> = Vec::with_capacity(len);
             for r in 0..len {
                 let row = start + r;
-                let local = (row as u64 / strides[d]) % chunk_shape[d];
-                if let Some(coord) = &coord_slices[d] {
-                    if let Some(v) = coord.get_f64(local as usize) {
-                        out_f64.push(v);
-                        use_f64 = true;
-                    } else if let Some(v) = coord.get_i64(local as usize) {
-                        out_i64.push(v);
-                    } else {
-                        out_i64.push((origin[d] + local) as i64);
+                let mut ok = true;
+                for d in 0..chunk_shape.len() {
+                    let local = (row as u64 / strides[d]) % chunk_shape[d];
+                    let global = origin[d] + local;
+                    if global >= array_shape[d] {
+                        ok = false;
+                        break;
                     }
-                } else {
-                    out_i64.push((origin[d] + local) as i64);
+                }
+                if ok {
+                    keep.push(r);
                 }
             }
 
-            if use_f64 {
-                cols.push(Series::new(dim_name.into(), out_f64).into());
-            } else {
-                cols.push(Series::new(dim_name.into(), out_i64).into());
+            // If everything in this slice is out-of-bounds, advance within the chunk and continue.
+            if keep.is_empty() {
+                self.chunk_offset += len;
+                if self.chunk_offset >= chunk_len {
+                    self.chunk_offset = chunk_len;
+                }
+                if self.chunk_offset >= chunk_len {
+                    self.chunk_offset = 0;
+                    if !advance_chunk_indices(&mut self.chunk_indices, &self.grid_shape) {
+                        self.done = true;
+                        return Ok(None);
+                    }
+                }
+                continue;
             }
+
+            // Preload coordinate slices for this chunk range (per dim).
+            let mut coord_slices: Vec<Option<ColumnData>> = Vec::with_capacity(self.dims.len());
+            for (d, dim_name) in self.dims.iter().enumerate() {
+                if let Some(coord_meta) = self.meta.arrays.get(dim_name) {
+                    let coord_arr =
+                        Array::open(self.store.clone(), &coord_meta.path).map_err(to_py_err)?;
+                    let dim_start = origin[d];
+                    let dim_len = chunk_shape[d];
+                    let coord =
+                        retrieve_1d_subset(&coord_arr, dim_start, dim_len).map_err(to_py_err)?;
+                    coord_slices.push(Some(coord));
+                } else {
+                    coord_slices.push(None);
+                }
+            }
+
+            // Load chunk data for each requested var once.
+            let mut var_chunks: Vec<(String, ColumnData)> = Vec::new();
+            for v in &self.vars {
+                if !self.should_emit(v) {
+                    continue;
+                }
+                let path = &self.meta.arrays[v].path;
+                let arr = Array::open(self.store.clone(), path).map_err(to_py_err)?;
+                let data = retrieve_chunk(&arr, &self.chunk_indices).map_err(to_py_err)?;
+                var_chunks.push((v.clone(), data));
+            }
+
+            // Build output columns.
+            let mut cols: Vec<Column> = Vec::new();
+
+            // Dim/coord columns.
+            for (d, dim_name) in self.dims.iter().enumerate() {
+                if !self.should_emit(dim_name) {
+                    continue;
+                }
+                if let Some(coord) = &coord_slices[d] && coord.is_float() {
+                    let mut out_f64: Vec<f64> = Vec::with_capacity(keep.len());
+                    for &r in &keep {
+                        let row = start + r;
+                        let local = (row as u64 / strides[d]) % chunk_shape[d];
+                        out_f64.push(coord.get_f64(local as usize).unwrap());
+                    }
+                    cols.push(Series::new(dim_name.into(), out_f64).into());
+                } else {
+                    let mut out_i64: Vec<i64> = Vec::with_capacity(keep.len());
+                    for &r in &keep {
+                        let row = start + r;
+                        let local = (row as u64 / strides[d]) % chunk_shape[d];
+                        if let Some(coord) = &coord_slices[d] {
+                            if let Some(v) = coord.get_i64(local as usize) {
+                                out_i64.push(v);
+                            } else {
+                                out_i64.push((origin[d] + local) as i64);
+                            }
+                        } else {
+                            out_i64.push((origin[d] + local) as i64);
+                        }
+                    }
+                    cols.push(Series::new(dim_name.into(), out_i64).into());
+                }
+            }
+
+            // Variable columns.
+            for (name, data) in var_chunks {
+                let sliced = data.slice(start, len);
+                cols.push(sliced.take_indices(&keep).into_series(&name).into());
+            }
+
+            let mut df = DataFrame::new(cols).map_err(PyPolarsErr::from)?;
+            self.chunk_offset += len;
+            self.n_rows_left = self.n_rows_left.saturating_sub(keep.len());
+
+            if let Some(predicate) = &self.predicate {
+                df = df
+                    .lazy()
+                    .filter(predicate.clone())
+                    ._with_eager(true)
+                    .collect()
+                    .map_err(PyPolarsErr::from)?;
+            }
+
+            return Ok(Some(PyDataFrame(df)));
         }
-
-        // Variable columns.
-        for (name, data) in var_chunks {
-            cols.push(data.slice(start, len).into_series(&name).into());
-        }
-
-        let mut df = DataFrame::new(cols).map_err(PyPolarsErr::from)?;
-        self.chunk_offset += len;
-        self.n_rows_left = self.n_rows_left.saturating_sub(len);
-
-        if let Some(predicate) = &self.predicate {
-            df = df
-                .lazy()
-                .filter(predicate.clone())
-                ._with_eager(true)
-                .collect()
-                .map_err(PyPolarsErr::from)?;
-        }
-
-        Ok(Some(PyDataFrame(df)))
     }
 }
 

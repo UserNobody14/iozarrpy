@@ -12,6 +12,7 @@ dependencies = ["polars>=0.20.0"]
 [project.optional-dependencies]
 test = [
     "numpy>=1.26",
+    "pandas>=2.2.0",
     "xarray>=2024.10.0",
     "zarr>=3.0.0",
     "numcodecs>=0.13.0",
