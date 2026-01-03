@@ -1,9 +1,9 @@
 [project]
 name = "iozarrpy-tests"
 version = "0.1.0"
-description = "Add your description here"
+description = "Test suite for iozarrpy"
 readme = "README.md"
-requires-python = ">=3.13"
+requires-python = ">=3.12"
 dependencies = [
     "iozarrpy",
     "polars>=0.20.0",
@@ -13,3 +13,14 @@ dependencies = [
     "zarr>=3.0.0",
     "numcodecs>=0.13.0",
 ]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
+addopts = ["-v", "--tb=short"]
