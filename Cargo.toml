@@ -18,6 +18,11 @@ polars-python = { version = "0.52.0", features = ["full", "allow_unused"] }
 pyo3-polars = { version = "0.25.0", features = ["derive", "lazy"] }
 rand = { version = "0.8.5", features = [] }
 pyo3-polars-derive = { version = "0.19.0" }
+tokio = { version = "1.45.1", features = ["rt-multi-thread"] }
+url = "2.5.4"
+zarrs = { version = "0.23.0-beta.3", features = ["async"] }
+zarrs_object_store = { version = "0.6.1", features = ["aws", "azure", "gcp", "http", "fs"] }
+serde_json = "1.0.145"
 [dependencies.arrow]
 package = "polars-arrow"
 version = "0.52.0"

@@ -7,7 +7,15 @@ authors = [
     { name = "Benjamin Sobel", email = "ben-developer@opayq.com" }
 ]
 requires-python = ">=3.13"
-dependencies = []
+dependencies = ["polars>=0.20.0"]
+
+[project.optional-dependencies]
+test = [
+    "numpy>=1.26",
+    "xarray>=2024.10.0",
+    "zarr>=3.0.0",
+    "numcodecs>=0.13.0",
+]
 
 [project.scripts]
 iozarrpy = "iozarrpy:main"

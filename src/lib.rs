@@ -1,20 +1,11 @@
-// use pyo3::prelude::*;
-
-// /// A Python module implemented in Rust. The name of this module must match
-// /// the `lib.name` setting in the `Cargo.toml`, else Python will not be able to
-// /// import the module.
-// #[pymodule]
-// mod _core {
-//     use pyo3::prelude::*;
-
-//     #[pyfunction]
-//     fn hello_from_bin() -> String {
-//         "Hello from iozarrpy!".to_string()
-//     }
-// }
+use pyo3::wrap_pyfunction;
 
 
 mod samplers;
+mod zarr_meta;
+mod zarr_source;
+mod zarr_store;
+mod test_utils;
 
 use polars::prelude::*;
 use pyo3::prelude::*;
@@ -22,6 +13,12 @@ use pyo3_polars::error::PyPolarsErr;
 use pyo3_polars::{PyDataFrame, PyExpr, PySchema};
 
 use crate::samplers::PySampler;
+use crate::zarr_source::ZarrSource;
+
+#[pyfunction]
+fn hello_from_bin() -> String {
+    "Hello from iozarrpy!".to_string()
+}
 
 #[pyclass]
 pub struct RandomSource {
@@ -129,13 +126,15 @@ impl RandomSource {
 }
 
 #[pymodule]
-fn io_plugin(m: &Bound<PyModule>) -> PyResult<()> {
-    m.add_class::<RandomSource>().unwrap();
-    m.add_class::<PySampler>().unwrap();
-    m.add_wrapped(wrap_pyfunction!(samplers::new_bernoulli))
-        .unwrap();
-    m.add_wrapped(wrap_pyfunction!(samplers::new_uniform))
-        .unwrap();
+fn _core(m: &Bound<PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(hello_from_bin, m)?)?;
+    m.add_function(wrap_pyfunction!(test_utils::_create_demo_store, m)?)?;
+
+    m.add_class::<RandomSource>()?;
+    m.add_class::<ZarrSource>()?;
+    m.add_class::<PySampler>()?;
+    m.add_wrapped(wrap_pyfunction!(samplers::new_bernoulli))?;
+    m.add_wrapped(wrap_pyfunction!(samplers::new_uniform))?;
 
     Ok(())
 }

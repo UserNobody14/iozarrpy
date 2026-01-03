@@ -6,6 +6,11 @@ dist/
 wheels/
 *.egg-info
 target/
+*.so
+
+# Test output datasets
+tests/output-datasets/
+
 
 # Virtual environments
 .venv
