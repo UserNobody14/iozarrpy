@@ -2,6 +2,13 @@ version = 1
 revision = 3
 requires-python = ">=3.13"
 
+[manifest]
+members = [
+    "iozarrpy",
+    "iozarrpy-tests",
+    "iozarrpy-workspace",
+]
+
 [[package]]
 name = "donfig"
 version = "0.8.1.post1"
@@ -35,30 +42,43 @@ wheels = [
 [[package]]
 name = "iozarrpy"
 version = "0.1.0"
-source = { editable = "." }
+source = { editable = "iozarrpy" }
 dependencies = [
     { name = "polars" },
 ]
 
-[package.optional-dependencies]
-test = [
+[package.metadata]
+requires-dist = [{ name = "polars", specifier = ">=0.20.0" }]
+
+[[package]]
+name = "iozarrpy-tests"
+version = "0.1.0"
+source = { virtual = "iozarrpy-tests" }
+dependencies = [
+    { name = "iozarrpy" },
     { name = "numcodecs" },
     { name = "numpy" },
     { name = "pandas" },
+    { name = "polars" },
     { name = "xarray" },
     { name = "zarr" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "numcodecs", marker = "extra == 'test'", specifier = ">=0.13.0" },
-    { name = "numpy", marker = "extra == 'test'", specifier = ">=1.26" },
-    { name = "pandas", marker = "extra == 'test'", specifier = ">=2.2.0" },
+    { name = "iozarrpy", editable = "iozarrpy" },
+    { name = "numcodecs", specifier = ">=0.13.0" },
+    { name = "numpy", specifier = ">=1.26" },
+    { name = "pandas", specifier = ">=2.2.0" },
     { name = "polars", specifier = ">=0.20.0" },
-    { name = "xarray", marker = "extra == 'test'", specifier = ">=2024.10.0" },
-    { name = "zarr", marker = "extra == 'test'", specifier = ">=3.0.0" },
+    { name = "xarray", specifier = ">=2024.10.0" },
+    { name = "zarr", specifier = ">=3.0.0" },
 ]
-provides-extras = ["test"]
+
+[[package]]
+name = "iozarrpy-workspace"
+version = "0.1.0"
+source = { virtual = "." }
 
 [[package]]
 name = "numcodecs"

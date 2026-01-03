@@ -9,7 +9,7 @@ target/
 *.so
 
 # Test output datasets
-tests/output-datasets/
+iozarrpy-tests/tests/output-datasets/
 
 
 # Virtual environments

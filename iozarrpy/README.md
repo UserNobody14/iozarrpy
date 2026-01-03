@@ -46,17 +46,25 @@ print(df)
 
 The Python tests create a tiny Zarr store via a Rust helper (`iozarrpy._core._create_demo_store`) and then scan it.
 
+From the workspace root:
 ```bash
-uv run --with polars python tests/test_scan_zarr.py
+cd iozarrpy-tests
+uv run python -m unittest discover -s tests -p 'test_*.py'
+```
+
+Or use the test script:
+```bash
+./iozarrpy/scripts/run_tests.sh
 ```
 
 ## Code map
 
-- **Rust extension module**: `src/lib.rs` exports `_core`
-- **Zarr store opener (multi-backend URLs)**: `src/zarr_store.rs`
-- **Metadata loader (dims/coords/vars + schema)**: `src/zarr_meta.rs`
-- **Streaming IO source**: `src/zarr_source.rs` (exposed to Python as `ZarrSource`)
-- **Python API**: `src/iozarrpy/__init__.py` (`scan_random`, `scan_zarr`, `LazyZarrFrame`)
-- **Test fixture helper**: `src/test_utils.rs` (`_create_demo_store`)
+- **Rust extension module**: `iozarrpy/src/lib.rs` exports `_core`
+- **Zarr store opener (multi-backend URLs)**: `iozarrpy/src/zarr_store.rs`
+- **Metadata loader (dims/coords/vars + schema)**: `iozarrpy/src/zarr_meta.rs`
+- **Streaming IO source**: `iozarrpy/src/zarr_source.rs` (exposed to Python as `ZarrSource`)
+- **Python API**: `iozarrpy/src/iozarrpy/__init__.py` (`scan_random`, `scan_zarr`, `LazyZarrFrame`)
+- **Test fixture helper**: `iozarrpy/src/test_utils.rs` (`_create_demo_store`)
+- **Tests**: `iozarrpy-tests/tests/` (separate workspace package)
 
 [`zarrs`]: https://docs.rs/zarrs/latest/zarrs/
