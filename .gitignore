@@ -10,6 +10,7 @@ target/
 
 # Test output datasets
 rainbear-tests/tests/output-datasets/
+rainbear-tests/.coverage
 
 
 # Virtual environments
