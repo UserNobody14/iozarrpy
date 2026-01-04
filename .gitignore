@@ -14,3 +14,6 @@ rainbear-tests/tests/output-datasets/
 
 # Virtual environments
 .venv
+
+# Other
+.env

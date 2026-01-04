@@ -1,7 +1,7 @@
 [project]
 name = "rainbear"
 version = "0.1.0"
-description = "Add your description here"
+description = "Build lazy Zarr scans with Polars"
 readme = "README.md"
 authors = [
     { name = "Benjamin Sobel", email = "ben-developer@opayq.com" }
