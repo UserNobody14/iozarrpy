@@ -11,6 +11,6 @@ rainbear = { workspace = true }
 
 [dependency-groups]
 dev = [
-    "just>=0.8.165",
+    "rust-just>=1.46.0",
 ]
 

@@ -7,7 +7,6 @@ mod zarr_source;
 mod zarr_store;
 mod test_utils;
 
-use polars::prelude::*;
 use pyo3::prelude::*;
 
 use crate::zarr_source::ZarrSource;
