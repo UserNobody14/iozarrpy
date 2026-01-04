@@ -12,10 +12,10 @@ from numcodecs import LZ4, Blosc, Zlib, Zstd
 from zarr.codecs import BloscCodec, BloscShuffle
 
 
-def get_hrrr_lon_lat_grids(x, y):
+def get_lon_lat_grids(x, y):
     """
     Compute the lat/lon grid corresponding to a given set of x/y indices
-    centered at the HRRR central latitude/longitude.
+    centered at the central latitude/longitude.
     """
     # Optional dependency: cartopy is heavy and not needed for most tests.
     # If it's not installed, fall back to a simple synthetic lon/lat grid.
@@ -67,9 +67,9 @@ def get_list_of_variables():
     ]
     return list_of_variables
 
-def create_hrrr_grid_dataset():
+def create_grid_dataset():
     """
-    Create a synthetic HRRR dataset with a 'full' grid of lat/lon coordinates
+    Create a synthetic dataset with a 'full' grid of lat/lon coordinates
     """
     # Define grid dimensions
     nx, ny = 400, 400
@@ -79,7 +79,7 @@ def create_hrrr_grid_dataset():
     # Create a mesh grid
     x = np.arange(nx)
     y = np.arange(ny)
-    lon, lat = get_hrrr_lon_lat_grids(x, y)
+    lon, lat = get_lon_lat_grids(x, y)
 
     # Create timestamps
     time_values = [datetime(2024, 1, 1) + timedelta(hours=i * 6) for i in range(nt)]
@@ -124,9 +124,9 @@ def create_hrrr_grid_dataset():
     return ds
 
 
-def create_hrrr_grid_dataset_constant():
+def create_grid_dataset_constant():
     """
-    Create a synthetic HRRR dataset with linear gradients for testing interpolation.
+    Create a synthetic dataset with linear gradients for testing interpolation.
     """
     # Define grid dimensions
     nx, ny = 400, 400
@@ -136,7 +136,7 @@ def create_hrrr_grid_dataset_constant():
     # Create a mesh grid
     x = np.arange(nx)
     y = np.arange(ny)
-    lon, lat = get_hrrr_lon_lat_grids(x, y)
+    lon, lat = get_lon_lat_grids(x, y)
 
     # Create timestamps
     time_values = [datetime(2024, 1, 1) + timedelta(hours=i * 6) for i in range(nt)]
@@ -190,7 +190,7 @@ def create_hrrr_grid_dataset_constant():
     return ds
 
 
-def create_hrrr_orography_dataset(
+def create_orography_dataset(
     *,
     nx: int = 400,
     ny: int = 400,
@@ -208,7 +208,7 @@ def create_hrrr_orography_dataset(
     x = np.arange(nx)
     y = np.arange(ny)
     xx, yy = np.meshgrid(x, y)
-    lon, lat = get_hrrr_lon_lat_grids(x, y)
+    lon, lat = get_lon_lat_grids(x, y)
 
     # Create gaussian hill with peak of 2000m
     center_x = (nx - 1) // 2
@@ -254,10 +254,10 @@ def write_datasets_to_zarr_v2(output_dir):
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
 
-    # Dataset 1: HRRR Grid dataset with random values
-    print("Creating HRRR grid dataset...")
-    ds1 = create_hrrr_grid_dataset()
-    ds1_path = output_path / "hrrr_grid_dataset.zarr"
+    # Dataset 1: Grid dataset with random values
+    print("Creating grid dataset...")
+    ds1 = create_grid_dataset()
+    ds1_path = output_path / "grid_dataset.zarr"
 
     # Delete everything from path
     remove_all_files_in_path(ds1_path)
@@ -339,10 +339,10 @@ def write_datasets_to_zarr_v2(output_dir):
     print("Done!")
 
 
-    # Dataset 2: HRRR Grid dataset with constant gradient (and not consolidated)
-    print("Creating HRRR grid dataset with constant gradient...")
-    ds2 = create_hrrr_grid_dataset_constant()
-    ds2_path = output_path / "hrrr_grid_dataset_constant.zarr"
+    # Dataset 2: Grid dataset with constant gradient (and not consolidated)
+    print("Creating grid dataset with constant gradient...")
+    ds2 = create_grid_dataset_constant()
+    ds2_path = output_path / "grid_dataset_constant.zarr"
 
     # Delete everything from path
     remove_all_files_in_path(ds2_path)
@@ -365,10 +365,10 @@ def write_datasets_to_zarr_v3(output_dir):
     # Create and save each dataset
     print("Creating datasets...")
 
-    # Dataset 1: HRRR Grid dataset with random values
-    print("Creating HRRR grid dataset...")
-    ds1 = create_hrrr_grid_dataset()
-    ds1_path = output_path / "hrrr_grid_dataset.zarr"
+    # Dataset 1: Grid dataset with random values
+    print("Creating grid dataset...")
+    ds1 = create_grid_dataset()
+    ds1_path = output_path / "grid_dataset.zarr"
 
     # Delete everything from path
     remove_all_files_in_path(ds1_path)
@@ -388,10 +388,10 @@ def write_datasets_to_zarr_v3(output_dir):
     ds1.to_zarr(ds1_path, encoding=encoding1, zarr_format=3)
     print("Done!")
 
-    # Dataset 2: HRRR Grid dataset with constant gradient
-    print("Creating HRRR grid dataset with constant gradient...")
-    ds2 = create_hrrr_grid_dataset_constant()
-    ds2_path = output_path / "hrrr_grid_dataset_constant.zarr"
+    # Dataset 2: Grid dataset with constant gradient
+    print("Creating grid dataset with constant gradient...")
+    ds2 = create_grid_dataset_constant()
+    ds2_path = output_path / "grid_dataset_constant.zarr"
 
     # Delete everything from path
     remove_all_files_in_path(ds2_path)
@@ -408,10 +408,10 @@ def write_datasets_to_zarr_v3(output_dir):
     ds2.to_zarr(ds2_path, zarr_format=3, consolidated=False)
     print("Done!")
 
-    # Dataset 3: HRRR Orography dataset
-    print("Creating HRRR orography dataset...")
-    ds3 = create_hrrr_orography_dataset()
-    ds3_path = output_path / "hrrr_orography_dataset.zarr"
+    # Dataset 3: Orography dataset
+    print("Creating orography dataset...")
+    ds3 = create_orography_dataset()
+    ds3_path = output_path / "orography_dataset.zarr"
 
     # Delete everything from path
     remove_all_files_in_path(ds3_path)
@@ -459,10 +459,10 @@ def write_datasets_to_zarr_v3_sharded(output_dir):
 
     print("Creating datasets with Zarr V3 sharding...")
 
-    # Dataset 1: HRRR Grid dataset with sharding
-    print("Creating HRRR grid dataset with sharding...")
-    ds1 = create_hrrr_grid_dataset()
-    ds1_path = output_path / "hrrr_grid_dataset_sharded.zarr"
+    # Dataset 1: Grid dataset with sharding
+    print("Creating grid dataset with sharding...")
+    ds1 = create_grid_dataset()
+    ds1_path = output_path / "grid_dataset_sharded.zarr"
 
     # Delete everything from path
     remove_all_files_in_path(ds1_path)
@@ -488,9 +488,9 @@ def write_datasets_to_zarr_v3_sharded(output_dir):
     print("Done!")
 
     # Dataset 2: Orography dataset with different sharding pattern
-    print("Creating HRRR orography dataset with sharding...")
-    ds2 = create_hrrr_orography_dataset()
-    ds2_path = output_path / "hrrr_orography_dataset_sharded.zarr"
+    print("Creating orography dataset with sharding...")
+    ds2 = create_orography_dataset()
+    ds2_path = output_path / "orography_dataset_sharded.zarr"
 
     # Delete everything from path
     remove_all_files_in_path(ds2_path)

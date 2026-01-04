@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import polars as pl
-import rainbear
 from tests import zarr_generators
+
+import rainbear
 
 
 def test_generated_orography_scan(dataset_path) -> None:
     # Keep this small so it runs fast in CI/dev.
-    ds = zarr_generators.create_hrrr_orography_dataset(nx=32, ny=24, sigma=5.0, seed=123)
+    ds = zarr_generators.create_orography_dataset(nx=32, ny=24, sigma=5.0, seed=123)
 
     path = dataset_path("orography_small.zarr")
     ds.to_zarr(path, zarr_format=3)
@@ -22,7 +23,7 @@ def test_generated_orography_scan(dataset_path) -> None:
 
 
 def test_generated_orography_sel(dataset_path) -> None:
-    ds = zarr_generators.create_hrrr_orography_dataset(nx=20, ny=10, sigma=4.0, seed=7)
+    ds = zarr_generators.create_orography_dataset(nx=20, ny=10, sigma=4.0, seed=7)
 
     path = dataset_path("orography_sel.zarr")
     ds.to_zarr(path, zarr_format=3)
@@ -38,7 +39,7 @@ def test_generated_orography_sel(dataset_path) -> None:
 
 def test_generated_orography_multi_var(dataset_path) -> None:
     # Uses 2D vars (latitude/longitude) + geopotential_height on dims (y, x)
-    ds = zarr_generators.create_hrrr_orography_dataset(nx=12, ny=9, sigma=3.0, seed=99)
+    ds = zarr_generators.create_orography_dataset(nx=12, ny=9, sigma=3.0, seed=99)
 
     path = dataset_path("orography_multi_var.zarr")
     ds.to_zarr(path, zarr_format=3)
@@ -54,7 +55,7 @@ def test_generated_orography_multi_var(dataset_path) -> None:
 
 
 def test_generated_orography_unconsolidated(dataset_path) -> None:
-    ds = zarr_generators.create_hrrr_orography_dataset(nx=16, ny=8, sigma=4.0, seed=5)
+    ds = zarr_generators.create_orography_dataset(nx=16, ny=8, sigma=4.0, seed=5)
 
     path = dataset_path("orography_unconsolidated.zarr")
     ds.to_zarr(path, zarr_format=3, consolidated=False)
@@ -65,7 +66,7 @@ def test_generated_orography_unconsolidated(dataset_path) -> None:
 
 
 def test_generated_orography_projection(dataset_path) -> None:
-    ds = zarr_generators.create_hrrr_orography_dataset(nx=10, ny=6, sigma=3.0, seed=1)
+    ds = zarr_generators.create_orography_dataset(nx=10, ny=6, sigma=3.0, seed=1)
 
     path = dataset_path("orography_projection.zarr")
     ds.to_zarr(path, zarr_format=3)
@@ -74,4 +75,5 @@ def test_generated_orography_projection(dataset_path) -> None:
     lf = rainbear.scan_zarr(path, variables=["geopotential_height"], size=1_000_000)
     df = lf.select("geopotential_height").collect()
     assert df.columns == ["geopotential_height"]
+    assert df.height == 10 * 6
     assert df.height == 10 * 6

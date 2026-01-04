@@ -17,8 +17,9 @@ from datetime import timedelta
 
 import polars as pl
 import pytest
-import rainbear
 from tests.baseline_utils import assert_frames_equal, scan_via_xarray
+
+import rainbear
 
 # ---------------------------------------------------------------------------
 # Test fixtures - generate test datasets once per session
@@ -31,7 +32,7 @@ def orography_path(tmp_path_factory) -> str:
     from zarr.codecs import BloscCodec, BloscShuffle
     
     path = tmp_path_factory.mktemp("data") / "orography.zarr"
-    ds = zarr_generators.create_hrrr_orography_dataset(nx=20, ny=16, sigma=4.0, seed=1)
+    ds = zarr_generators.create_orography_dataset(nx=20, ny=16, sigma=4.0, seed=1)
     blosc = BloscCodec(cname="zstd", clevel=5, shuffle=BloscShuffle.shuffle)
     ds.to_zarr(str(path), zarr_format=3, encoding={
         "geopotential_height": {"chunks": (8, 10), "compressors": [blosc]},
@@ -42,17 +43,17 @@ def orography_path(tmp_path_factory) -> str:
 
 
 @pytest.fixture(scope="session")
-def hrrr_path(tmp_path_factory) -> str:
-    """Create a small HRRR-style 4D dataset for testing."""
+def path(tmp_path_factory) -> str:
+    """Create a small 4D dataset for testing."""
     from datetime import datetime, timedelta
 
     import numpy as np
     import xarray as xr
     from zarr.codecs import BloscCodec, BloscShuffle
     
-    path = tmp_path_factory.mktemp("data") / "hrrr_small.zarr"
+    path = tmp_path_factory.mktemp("data") / "small.zarr"
     
-    # Create a small synthetic dataset (much smaller than the full HRRR)
+    # Create a small synthetic dataset (much smaller than the full Grid)
     nx, ny, nt, nl = 20, 16, 2, 4
     x = np.arange(nx)
     y = np.arange(ny)
@@ -94,12 +95,12 @@ def test_scan_orography_no_filter(orography_path: str) -> None:
     assert_frames_equal(out.select(columns), baseline, sort_by=["y", "x"])
 
 
-def test_scan_hrrr_no_filter(hrrr_path: str) -> None:
+def test_scan_no_filter(path: str) -> None:
     """Test that scanning a 4D dataset without filters matches xarray."""
     columns = ["time", "lead_time", "y", "x", "temperature"]
     
-    out = rainbear.scan_zarr(hrrr_path, variables=["temperature"]).collect()
-    baseline = scan_via_xarray(hrrr_path, columns=columns).collect()
+    out = rainbear.scan_zarr(path, variables=["temperature"]).collect()
+    baseline = scan_via_xarray(path, columns=columns).collect()
     
     assert_frames_equal(out.select(columns), baseline, sort_by=["time", "lead_time", "y", "x"])
 
@@ -192,7 +193,7 @@ def test_filter_on_latitude(orography_path: str) -> None:
 # Filter tests on datetime dimensions
 # ---------------------------------------------------------------------------
 
-def test_filter_on_time_equality(hrrr_path: str) -> None:
+def test_filter_on_time_equality(path: str) -> None:
     """Test filtering on time dimension with equality."""
     from datetime import datetime
     
@@ -201,12 +202,12 @@ def test_filter_on_time_equality(hrrr_path: str) -> None:
     filter_expr = pl.col("time") == target_time
     
     out = (
-        rainbear.scan_zarr(hrrr_path, variables=["temperature"])
+        rainbear.scan_zarr(path, variables=["temperature"])
         .filter(filter_expr)
         .collect()
     )
     baseline = (
-        scan_via_xarray(hrrr_path, columns=columns)
+        scan_via_xarray(path, columns=columns)
         .filter(filter_expr)
         .collect()
     )
@@ -214,19 +215,19 @@ def test_filter_on_time_equality(hrrr_path: str) -> None:
     assert_frames_equal(out.select(columns), baseline, sort_by=["time", "lead_time", "y", "x"])
 
 
-def test_filter_on_lead_time(hrrr_path: str) -> None:
+def test_filter_on_lead_time(path: str) -> None:
     """Test filtering on lead_time (duration) dimension."""
     columns = ["time", "lead_time", "y", "x", "temperature"]
     # Filter for lead_time between 1 and 2 hours
     filter_expr = (pl.col("lead_time") >= timedelta(hours=1)) & (pl.col("lead_time") <= timedelta(hours=2))
     
     out = (
-        rainbear.scan_zarr(hrrr_path, variables=["temperature"])
+        rainbear.scan_zarr(path, variables=["temperature"])
         .filter(filter_expr)
         .collect()
     )
     baseline = (
-        scan_via_xarray(hrrr_path, columns=columns)
+        scan_via_xarray(path, columns=columns)
         .filter(filter_expr)
         .collect()
     )
@@ -234,7 +235,7 @@ def test_filter_on_lead_time(hrrr_path: str) -> None:
     assert_frames_equal(out.select(columns), baseline, sort_by=["time", "lead_time", "y", "x"])
 
 
-def test_combined_time_and_spatial_filter(hrrr_path: str) -> None:
+def test_combined_time_and_spatial_filter(path: str) -> None:
     """Test combining time and spatial filters."""
     from datetime import datetime
     
@@ -248,12 +249,12 @@ def test_combined_time_and_spatial_filter(hrrr_path: str) -> None:
     )
     
     out = (
-        rainbear.scan_zarr(hrrr_path, variables=["temperature"])
+        rainbear.scan_zarr(path, variables=["temperature"])
         .filter(filter_expr)
         .collect()
     )
     baseline = (
-        scan_via_xarray(hrrr_path, columns=columns)
+        scan_via_xarray(path, columns=columns)
         .filter(filter_expr)
         .collect()
     )
@@ -265,23 +266,25 @@ def test_combined_time_and_spatial_filter(hrrr_path: str) -> None:
 # Schema and dtype tests
 # ---------------------------------------------------------------------------
 
-def test_datetime_dtype_matches(hrrr_path: str) -> None:
+def test_datetime_dtype_matches(path: str) -> None:
     """Test that datetime columns have correct dtype."""
-    out = rainbear.scan_zarr(hrrr_path, variables=["temperature"]).collect()
+    out = rainbear.scan_zarr(path, variables=["temperature"]).collect()
     
     assert out.schema["time"] == pl.Datetime("ns")
     assert out.schema["lead_time"] == pl.Duration("ns")
 
 
-def test_schema_matches_xarray(hrrr_path: str) -> None:
+def test_schema_matches_xarray(path: str) -> None:
     """Test that schema matches xarray baseline."""
     columns = ["time", "lead_time", "y", "x", "temperature"]
     
-    out = rainbear.scan_zarr(hrrr_path, variables=["temperature"]).collect()
-    baseline = scan_via_xarray(hrrr_path, columns=columns).collect()
+    out = rainbear.scan_zarr(path, variables=["temperature"]).collect()
+    baseline = scan_via_xarray(path, columns=columns).collect()
     
     # Compare schemas
     for col in columns:
+        assert out.schema[col] == baseline.schema[col], f"Schema mismatch for {col}"
+        assert out.schema[col] == baseline.schema[col], f"Schema mismatch for {col}"
         assert out.schema[col] == baseline.schema[col], f"Schema mismatch for {col}"
         assert out.schema[col] == baseline.schema[col], f"Schema mismatch for {col}"
         assert out.schema[col] == baseline.schema[col], f"Schema mismatch for {col}"

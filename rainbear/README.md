@@ -1,15 +1,15 @@
-# rainbear
+# Rainbear
 
 Python + Rust experiment for **lazy Zarr scanning into Polars**, with an API inspired by xarray’s coordinate-based selection.
 
 This repo currently contains:
-- A working Polars IO plugin pattern (see `scan_random`)
-- A first-pass `scan_zarr(...)` that streams a Zarr store using Rust [`zarrs`] and yields Polars `DataFrame` batches
-- A thin `LazyZarrFrame` wrapper that provides `.sel(...)` + `.collect_async()`
+- A first-pass `scan_zarr(...)` that streams a Zarr store using Rust [`zarrs`] and yields Polars `LazyFrame`s.
+- A test suite that compares rainbear against xarray for various Zarr datasets and filter conditions.
 
 ## Status / caveats
 
-- **Zarr v3**: the Rust backend uses `zarrs` (Zarr v3 + some v2 compatibility).
+- **Zarr v3**: the Rust backend uses `zarrs`.
+Note that zarrs-v2 is not likely to work for this reason.
 - **Tidy table output**: `scan_zarr` currently emits a “tidy” `DataFrame` with one row per element and columns:
   - dimension/coord columns (e.g. `time`, `lat`)
   - variable columns (e.g. `temp`)
@@ -33,10 +33,10 @@ uv run --with polars python -c "import rainbear; print(rainbear.hello_from_bin()
 import polars as pl
 import rainbear
 
-lf = rainbear.scan_zarr("/path/to/data.zarr", size=1_000_000)
+lf = rainbear.scan_zarr("/path/to/data.zarr")
 
-# xarray-ish selection sugar (currently just a thin wrapper around LazyFrame.filter)
-lf = lf.sel((pl.col("lat") >= 32.0) & (pl.col("lat") <= 52.0))
+# Filter the LazyFrame (predicate's are pushed down and used for chunk pruning)
+lf = lf.filter((pl.col("lat") >= 32.0) & (pl.col("lat") <= 52.0))
 
 df = lf.collect()
 print(df)
@@ -44,18 +44,34 @@ print(df)
 
 ## Running the smoke tests
 
-The Python tests create a tiny Zarr store via a Rust helper (`rainbear._core._create_demo_store`) and then scan it.
+The Python tests create some local Zarr stores and then scan them.
 
 From the workspace root:
 ```bash
 cd rainbear-tests
-uv run python -m unittest discover -s tests -p 'test_*.py'
+uv run pytest
 ```
 
-Or use the test script:
-```bash
-./rainbear/scripts/run_tests.sh
-```
+## Roadmap
+
+
+### Near Term
+- [ ] Geospatial support via ewkb and polars-st
+- [ ] Interpolation support
+- [ ] Tests against cloud storage backends
+- [ ] Benchmarks
+- [ ] Documentation
+
+### Longer Term
+- [ ] Improved manner of application to take full advantage of Polars' lazy engine
+- [ ] Caching Support?
+- [ ] Writing to zarr?
+- [ ] Capability to work with datatrees
+- [ ] Allow output to arrow/pandas/etc.
+- [ ] Icechunk support
+- [ ] Zarr V2 support (backwards compatibility)
+
+
 
 ## Code map
 
