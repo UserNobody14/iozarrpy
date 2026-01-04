@@ -14,14 +14,16 @@ test:
 [doc('Build the project')]
 [working-directory: 'rainbear']
 build:
+    just clean
     cargo build --release && uv build
 
-
 [group: 'build']
-[doc('Build the project')]
-build-clean:
+[doc('Clean the project')]
+clean:
     rm -rf target dist build
-    cd rainbear && rm -rf target dist build && cargo build --release && uv build
+    cd rainbear && rm -rf target dist build
+    cd rainbear && cargo clean
+    uv clean
 
 [group: 'publish']
 [doc('Publish the project')]

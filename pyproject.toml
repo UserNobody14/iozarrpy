@@ -2,6 +2,11 @@
 name = "rainbear-workspace"
 version = "0.1.0"
 requires-python = ">=3.13"
+license = { file = "LICENSE" }
+authors = [
+    { name = "Benjamin Sobel", email = "ben-developer@opayq.com" }
+]
+keywords = ["zarr", "polars", "lazy"]
 
 [tool.uv.workspace]
 members = ["rainbear", "rainbear-tests"]

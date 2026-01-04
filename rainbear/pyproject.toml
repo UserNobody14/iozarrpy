@@ -31,3 +31,9 @@ dev = [
     "maturin>=1.10.2",
 ]
 
+build = [
+    "maturin>=1.10.2",
+    "patchelf>=0.17.2.2; sys_platform == 'linux'", 
+    "conan==2.17.1",
+]
+
