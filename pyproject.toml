@@ -1,11 +1,11 @@
 [project]
-name = "iozarrpy-workspace"
+name = "rainbear-workspace"
 version = "0.1.0"
 requires-python = ">=3.13"
 
 [tool.uv.workspace]
-members = ["iozarrpy", "iozarrpy-tests"]
+members = ["rainbear", "rainbear-tests"]
 
 [tool.uv.sources]
-iozarrpy = { workspace = true }
+rainbear = { workspace = true }
 

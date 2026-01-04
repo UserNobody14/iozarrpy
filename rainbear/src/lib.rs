@@ -17,7 +17,7 @@ use crate::zarr_source::ZarrSource;
 
 #[pyfunction]
 fn hello_from_bin() -> String {
-    "Hello from iozarrpy!".to_string()
+    "Hello from rainbear!".to_string()
 }
 
 #[pyclass]

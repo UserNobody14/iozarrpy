@@ -3,16 +3,15 @@
 from __future__ import annotations
 
 import polars as pl
-
-import iozarrpy
-from iozarrpy import _core
+import rainbear
+from rainbear import _core
 
 
 def test_scan_zarr_smoke(dataset_path) -> None:
     path = dataset_path("demo_store.zarr")
     _core._create_demo_store(path)
 
-    lf = iozarrpy.scan_zarr(path, size=1000)
+    lf = rainbear.scan_zarr(path, size=1000)
     df = lf.collect()
 
     assert df.height == 12
@@ -23,7 +22,7 @@ def test_sel_predicate(dataset_path) -> None:
     path = dataset_path("demo_store_sel.zarr")
     _core._create_demo_store(path)
 
-    lf = iozarrpy.scan_zarr(path, size=1000)
+    lf = rainbear.scan_zarr(path, size=1000)
     lf = lf.sel((pl.col("lat") >= 20.0) & (pl.col("lat") <= 30.0))
     df = lf.collect()
 

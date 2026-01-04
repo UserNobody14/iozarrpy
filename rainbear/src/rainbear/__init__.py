@@ -2,8 +2,7 @@ from typing import Any, Iterator
 
 import polars as pl
 from polars.io.plugins import register_io_source
-
-from iozarrpy._core import (RandomSource, ZarrSource, hello_from_bin,
+from rainbear._core import (RandomSource, ZarrSource, hello_from_bin,
                             new_bernoulli, new_uniform)
 
 __all__ = [
@@ -96,6 +95,10 @@ def scan_zarr(
 
     src = ZarrSource(zarr_url, 0, 0, variables)
     return register_io_source(io_source=source_generator, schema=src.schema())
+
+
+def main() -> None:
+    print(hello_from_bin())
 
 
 def main() -> None:

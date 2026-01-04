@@ -1,4 +1,4 @@
-# iozarrpy
+# rainbear
 
 Python + Rust experiment for **lazy Zarr scanning into Polars**, with an API inspired by xarray’s coordinate-based selection.
 
@@ -24,16 +24,16 @@ The project is configured as a `maturin` extension module.
 - Run a quick import check:
 
 ```bash
-uv run --with polars python -c "import iozarrpy; print(iozarrpy.hello_from_bin())"
+uv run --with polars python -c "import rainbear; print(rainbear.hello_from_bin())"
 ```
 
 ## Using `scan_zarr`
 
 ```python
 import polars as pl
-import iozarrpy
+import rainbear
 
-lf = iozarrpy.scan_zarr("/path/to/data.zarr", size=1_000_000)
+lf = rainbear.scan_zarr("/path/to/data.zarr", size=1_000_000)
 
 # xarray-ish selection sugar (currently just a thin wrapper around LazyFrame.filter)
 lf = lf.sel((pl.col("lat") >= 32.0) & (pl.col("lat") <= 52.0))
@@ -44,27 +44,27 @@ print(df)
 
 ## Running the smoke tests
 
-The Python tests create a tiny Zarr store via a Rust helper (`iozarrpy._core._create_demo_store`) and then scan it.
+The Python tests create a tiny Zarr store via a Rust helper (`rainbear._core._create_demo_store`) and then scan it.
 
 From the workspace root:
 ```bash
-cd iozarrpy-tests
+cd rainbear-tests
 uv run python -m unittest discover -s tests -p 'test_*.py'
 ```
 
 Or use the test script:
 ```bash
-./iozarrpy/scripts/run_tests.sh
+./rainbear/scripts/run_tests.sh
 ```
 
 ## Code map
 
-- **Rust extension module**: `iozarrpy/src/lib.rs` exports `_core`
-- **Zarr store opener (multi-backend URLs)**: `iozarrpy/src/zarr_store.rs`
-- **Metadata loader (dims/coords/vars + schema)**: `iozarrpy/src/zarr_meta.rs`
-- **Streaming IO source**: `iozarrpy/src/zarr_source.rs` (exposed to Python as `ZarrSource`)
-- **Python API**: `iozarrpy/src/iozarrpy/__init__.py` (`scan_random`, `scan_zarr`, `LazyZarrFrame`)
-- **Test fixture helper**: `iozarrpy/src/test_utils.rs` (`_create_demo_store`)
-- **Tests**: `iozarrpy-tests/tests/` (separate workspace package)
+- **Rust extension module**: `rainbear/src/lib.rs` exports `_core`
+- **Zarr store opener (multi-backend URLs)**: `rainbear/src/zarr_store.rs`
+- **Metadata loader (dims/coords/vars + schema)**: `rainbear/src/zarr_meta.rs`
+- **Streaming IO source**: `rainbear/src/zarr_source.rs` (exposed to Python as `ZarrSource`)
+- **Python API**: `rainbear/src/rainbear/__init__.py` (`scan_random`, `scan_zarr`, `LazyZarrFrame`)
+- **Test fixture helper**: `rainbear/src/test_utils.rs` (`_create_demo_store`)
+- **Tests**: `rainbear-tests/tests/` (separate workspace package)
 
 [`zarrs`]: https://docs.rs/zarrs/latest/zarrs/

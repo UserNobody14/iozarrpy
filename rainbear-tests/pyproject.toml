@@ -1,11 +1,11 @@
 [project]
-name = "iozarrpy-tests"
+name = "rainbear-tests"
 version = "0.1.0"
-description = "Test suite for iozarrpy"
+description = "Test suite for rainbear"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "iozarrpy",
+    "rainbear",
     "polars>=0.20.0",
     "numpy>=1.26",
     "pandas>=2.2.0",

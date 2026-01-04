@@ -4,9 +4,9 @@ requires-python = ">=3.13"
 
 [manifest]
 members = [
-    "iozarrpy",
-    "iozarrpy-tests",
-    "iozarrpy-workspace",
+    "rainbear",
+    "rainbear-tests",
+    "rainbear-workspace",
 ]
 
 [[package]]
@@ -58,9 +58,9 @@ wheels = [
 ]
 
 [[package]]
-name = "iozarrpy"
+name = "rainbear"
 version = "0.1.0"
-source = { editable = "iozarrpy" }
+source = { editable = "rainbear" }
 dependencies = [
     { name = "polars" },
 ]
@@ -69,11 +69,11 @@ dependencies = [
 requires-dist = [{ name = "polars", specifier = ">=0.20.0" }]
 
 [[package]]
-name = "iozarrpy-tests"
+name = "rainbear-tests"
 version = "0.1.0"
-source = { virtual = "iozarrpy-tests" }
+source = { virtual = "rainbear-tests" }
 dependencies = [
-    { name = "iozarrpy" },
+    { name = "rainbear" },
     { name = "numcodecs" },
     { name = "numpy" },
     { name = "pandas" },
@@ -89,7 +89,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "iozarrpy", editable = "iozarrpy" },
+    { name = "rainbear", editable = "rainbear" },
     { name = "numcodecs", specifier = ">=0.13.0" },
     { name = "numpy", specifier = ">=1.26" },
     { name = "pandas", specifier = ">=2.2.0" },
@@ -102,7 +102,7 @@ requires-dist = [
 dev = [{ name = "pytest", specifier = ">=8.0" }]
 
 [[package]]
-name = "iozarrpy-workspace"
+name = "rainbear-workspace"
 version = "0.1.0"
 source = { virtual = "." }
 

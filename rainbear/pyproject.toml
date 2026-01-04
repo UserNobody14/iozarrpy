@@ -1,5 +1,5 @@
 [project]
-name = "iozarrpy"
+name = "rainbear"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
@@ -10,11 +10,11 @@ requires-python = ">=3.13"
 dependencies = ["polars>=0.20.0"]
 
 [project.scripts]
-iozarrpy = "iozarrpy:main"
+rainbear = "rainbear:main"
 
 [tool.maturin]
-module-name = "iozarrpy._core"
-python-packages = ["iozarrpy"]
+module-name = "rainbear._core"
+python-packages = ["rainbear"]
 python-source = "src"
 
 [tool.uv]

@@ -1328,25 +1328,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "iozarrpy"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "polars",
- "polars-arrow",
- "polars-python",
- "pyo3",
- "pyo3-polars",
- "pyo3-polars-derive",
- "rand 0.8.5",
- "serde_json",
- "tokio",
- "url",
- "zarrs",
- "zarrs_object_store",
-]
-
-[[package]]
 name = "ipnet"
 version = "2.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2970,6 +2951,25 @@ name = "r-efi"
 version = "5.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "69cdb34c158ceb288df11e18b4bd39de994f6657d83847bdffdbd7f346754b0f"
+
+[[package]]
+name = "rainbear"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "polars",
+ "polars-arrow",
+ "polars-python",
+ "pyo3",
+ "pyo3-polars",
+ "pyo3-polars-derive",
+ "rand 0.8.5",
+ "serde_json",
+ "tokio",
+ "url",
+ "zarrs",
+ "zarrs_object_store",
+]
 
 [[package]]
 name = "rand"

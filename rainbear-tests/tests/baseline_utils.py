@@ -1,4 +1,4 @@
-"""Baseline comparison utilities for testing iozarrpy against xarray."""
+"""Baseline comparison utilities for testing rainbear against xarray."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ def scan_via_xarray(
     """
     Load a Zarr dataset via xarray and convert to a Polars LazyFrame.
     
-    This is the "baseline" implementation to compare against iozarrpy.
+    This is the "baseline" implementation to compare against rainbear.
     Returns a LazyFrame so the same filters can be applied to both.
     """
     import xarray as xr
@@ -45,7 +45,7 @@ def assert_frames_equal(
     """Assert two Polars DataFrames are equal, optionally sorting first.
     
     Args:
-        left: First DataFrame (typically iozarrpy output)
+        left: First DataFrame (typically rainbear output)
         right: Second DataFrame (typically xarray baseline)
         sort_by: Columns to sort by before comparison
         drop_nan: If True, drop rows with NaN values (to match xarray's dropna behavior)
