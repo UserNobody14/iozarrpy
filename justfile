@@ -1,3 +1,9 @@
+set dotenv-load
+
+default:
+  @just --list
+
+
 [group: 'tests']
 [doc('Run the test suite')]
 [working-directory: 'rainbear-tests']
@@ -16,3 +22,14 @@ build:
 build-clean:
     rm -rf target dist build
     cd rainbear && rm -rf target dist build && cargo build --release && uv build
+
+[group: 'publish']
+[doc('Publish the project')]
+[working-directory: 'rainbear']
+publish:
+    uv publish
+
+[group: 'tests']
+[doc('Run the smoke test')]
+smoke-test WHEEL_OR_SOURCE:
+    uv run --isolated --no-project --with dist/*.{{ if WHEEL_OR_SOURCE == "wheel" { "whl" } else { "tar.gz" } }} rainbear-tests/tests/smoke_test.py

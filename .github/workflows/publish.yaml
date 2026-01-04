@@ -17,16 +17,18 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v5
+      - name: Setup Just
+        uses: extractions/setup-just@v3
       - name: Install uv
         uses: astral-sh/setup-uv@v7
       - name: Install Python 3.13
         run: uv python install 3.13
       - name: Build
-        run: uv build
+        run: just build-clean
       # Check that basic features work and we didn't miss to include crucial files
       - name: Smoke test (wheel)
-        run: uv run --isolated --no-project --with dist/*.whl rainbear-tests/tests/smoke_test.py
+        run: just smoke-test wheel
       - name: Smoke test (source distribution)
-        run: uv run --isolated --no-project --with dist/*.tar.gz rainbear-tests/tests/smoke_test.py
+        run: just smoke-test source
       - name: Publish
-        run: uv publish
+        run: just publish
