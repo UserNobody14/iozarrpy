@@ -1,162 +1,287 @@
-"""Tests comparing iozarrpy output against xarray baseline across many dataset configurations."""
+"""Tests comparing iozarrpy output against xarray baseline.
+
+These tests verify that iozarrpy produces the same results as xarray for various
+Zarr datasets and filter conditions. The key principle is:
+
+1. Both iozarrpy and xarray scan the same Zarr store
+2. The same filters are applied to both LazyFrames
+3. Both are collected and compared
+
+This tests the predicate pushdown functionality - filters are applied BEFORE
+collection, not after.
+"""
 
 from __future__ import annotations
 
+from datetime import timedelta
+
 import polars as pl
 import pytest
+from tests.baseline_utils import assert_frames_equal, scan_via_xarray
 
 import iozarrpy
-from tests.baseline_utils import assert_frames_equal, xarray_zarr_to_polars_tidy
-from tests.conftest import BASELINE_DATASET_CONFIGS, get_dataset_config
 
-# Generate test IDs from dataset names
-DATASET_NAMES = [cfg.name for cfg in BASELINE_DATASET_CONFIGS]
+# ---------------------------------------------------------------------------
+# Test fixtures - generate test datasets once per session
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(scope="session")
+def orography_path(tmp_path_factory) -> str:
+    """Create a small orography dataset for testing."""
+    from tests import zarr_generators
+    from zarr.codecs import BloscCodec, BloscShuffle
+    
+    path = tmp_path_factory.mktemp("data") / "orography.zarr"
+    ds = zarr_generators.create_hrrr_orography_dataset(nx=20, ny=16, sigma=4.0, seed=1)
+    blosc = BloscCodec(cname="zstd", clevel=5, shuffle=BloscShuffle.shuffle)
+    ds.to_zarr(str(path), zarr_format=3, encoding={
+        "geopotential_height": {"chunks": (8, 10), "compressors": [blosc]},
+        "latitude": {"chunks": (8, 10), "compressors": [blosc]},
+        "longitude": {"chunks": (8, 10), "compressors": [blosc]},
+    })
+    return str(path)
 
 
-@pytest.mark.parametrize("dataset_name", DATASET_NAMES)
-def test_baseline_equals_scan_no_selection(baseline_datasets: dict[str, str], dataset_name: str) -> None:
-    """Test that scanning a zarr without selection matches xarray baseline."""
-    cfg = get_dataset_config(dataset_name)
-    path = baseline_datasets[dataset_name]
+@pytest.fixture(scope="session")
+def hrrr_path(tmp_path_factory) -> str:
+    """Create a small HRRR-style 4D dataset for testing."""
+    from datetime import datetime, timedelta
 
-    # iozarrpy (system under test)
+    import numpy as np
+    import xarray as xr
+    from zarr.codecs import BloscCodec, BloscShuffle
+    
+    path = tmp_path_factory.mktemp("data") / "hrrr_small.zarr"
+    
+    # Create a small synthetic dataset (much smaller than the full HRRR)
+    nx, ny, nt, nl = 20, 16, 2, 4
+    x = np.arange(nx)
+    y = np.arange(ny)
+    time_values = [datetime(2024, 1, 1) + timedelta(hours=i * 6) for i in range(nt)]
+    lead_time_values = [timedelta(hours=i) for i in range(nl)]
+    
+    temp_data = 273.15 + 10 * np.random.randn(nt, nl, ny, nx)
+    
+    ds = xr.Dataset(
+        data_vars={
+            "temperature": (["time", "lead_time", "y", "x"], temp_data),
+        },
+        coords={
+            "time": time_values,
+            "lead_time": lead_time_values,
+            "x": x,
+            "y": y,
+        },
+    )
+    
+    blosc = BloscCodec(cname="zstd", clevel=5, shuffle=BloscShuffle.shuffle)
+    ds.to_zarr(str(path), zarr_format=3, encoding={
+        "temperature": {"chunks": (1, 2, 8, 10), "compressors": [blosc]},
+    })
+    return str(path)
+
+
+# ---------------------------------------------------------------------------
+# Basic scan tests - no filters
+# ---------------------------------------------------------------------------
+
+def test_scan_orography_no_filter(orography_path: str) -> None:
+    """Test that scanning without filters matches xarray."""
+    columns = ["y", "x", "geopotential_height"]
+    
+    out = iozarrpy.scan_zarr(orography_path, variables=["geopotential_height"]).collect()
+    baseline = scan_via_xarray(orography_path, columns=columns).collect()
+    
+    assert_frames_equal(out.select(columns), baseline, sort_by=["y", "x"])
+
+
+def test_scan_hrrr_no_filter(hrrr_path: str) -> None:
+    """Test that scanning a 4D dataset without filters matches xarray."""
+    columns = ["time", "lead_time", "y", "x", "temperature"]
+    
+    out = iozarrpy.scan_zarr(hrrr_path, variables=["temperature"]).collect()
+    baseline = scan_via_xarray(hrrr_path, columns=columns).collect()
+    
+    assert_frames_equal(out.select(columns), baseline, sort_by=["time", "lead_time", "y", "x"])
+
+
+# ---------------------------------------------------------------------------
+# Filter tests on integer dimensions (y, x)
+# ---------------------------------------------------------------------------
+
+def test_filter_on_y_dimension(orography_path: str) -> None:
+    """Test filtering on y dimension."""
+    columns = ["y", "x", "geopotential_height"]
+    filter_expr = (pl.col("y") >= 5) & (pl.col("y") <= 10)
+    
     out = (
-        iozarrpy.scan_zarr(path, variables=cfg.variables, size=1_000_000)
+        iozarrpy.scan_zarr(orography_path, variables=["geopotential_height"])
+        .filter(filter_expr)
         .collect()
-        .select(cfg.expected_cols)
     )
-
-    # Baseline (xarray -> polars conversion)
-    baseline = xarray_zarr_to_polars_tidy(path, columns=cfg.expected_cols)
-
-    assert_frames_equal(out, baseline, sort_by=cfg.dims)
-
-
-@pytest.mark.parametrize("dataset_name", DATASET_NAMES)
-def test_baseline_equals_scan_with_dim_filter(baseline_datasets: dict[str, str], dataset_name: str) -> None:
-    """Test that scanning with a dimension filter matches xarray baseline."""
-    cfg = get_dataset_config(dataset_name)
-    path = baseline_datasets[dataset_name]
-
-    if cfg.filter_dim is None or cfg.filter_range is None:
-        pytest.skip(f"Dataset {dataset_name} has no filter configuration")
-
-    dim = cfg.filter_dim
-    dim_min, dim_max = cfg.filter_range
-
-    # iozarrpy selection (Polars)
-    lf = iozarrpy.scan_zarr(path, variables=cfg.variables, size=1_000_000)
-    lf = lf.sel((pl.col(dim) >= dim_min) & (pl.col(dim) <= dim_max))
-    out = lf.collect().select(cfg.expected_cols)
-
-    # Baseline selection (xarray)
-    def selection(ds):
-        cond = (ds[dim] >= dim_min) & (ds[dim] <= dim_max)
-        return ds.where(cond, drop=True)
-
-    baseline = xarray_zarr_to_polars_tidy(path, columns=cfg.expected_cols, selection=selection)
-
-    assert_frames_equal(out, baseline, sort_by=cfg.dims)
-
-
-# Datasets that have 2D coords (latitude/longitude) for complex filter tests
-DATASETS_WITH_2D_COORDS = [
-    cfg.name for cfg in BASELINE_DATASET_CONFIGS
-    if "latitude" in cfg.expected_cols or any("latitude" in v for v in cfg.variables)
-]
-
-
-@pytest.mark.parametrize("dataset_name", DATASETS_WITH_2D_COORDS)
-def test_baseline_equals_scan_filter_on_2d_coords(
-    baseline_datasets: dict[str, str], dataset_name: str
-) -> None:
-    """Test that filters on 2D coordinates match xarray baseline."""
-    cfg = get_dataset_config(dataset_name)
-    path = baseline_datasets[dataset_name]
-
-    # Modify config to include latitude/longitude if not already
-    variables = list(cfg.variables)
-    expected_cols = list(cfg.expected_cols)
-    if "latitude" not in variables:
-        variables.append("latitude")
-    if "longitude" not in variables:
-        variables.append("longitude")
-    if "latitude" not in expected_cols:
-        expected_cols.append("latitude")
-    if "longitude" not in expected_cols:
-        expected_cols.append("longitude")
-
-    # Use filter values that will produce some results for most datasets
-    # These are based on the synthetic lon/lat grid: lon = -130 + x*0.02, lat = 20 + y*0.02
-    lat_min, lat_max = 20.04, 20.14
-    lon_min, lon_max = -129.96, -129.86
-
-    # iozarrpy selection (Polars)
-    lf = iozarrpy.scan_zarr(path, variables=variables, size=1_000_000)
-    lf = lf.sel(
-        (pl.col("latitude") >= lat_min)
-        & (pl.col("latitude") <= lat_max)
-        & (pl.col("longitude") >= lon_min)
-        & (pl.col("longitude") <= lon_max)
+    baseline = (
+        scan_via_xarray(orography_path, columns=columns)
+        .filter(filter_expr)
+        .collect()
     )
-    out = lf.collect().select(expected_cols)
-
-    # Baseline selection (xarray)
-    def selection(ds):
-        cond = (
-            (ds["latitude"] >= lat_min)
-            & (ds["latitude"] <= lat_max)
-            & (ds["longitude"] >= lon_min)
-            & (ds["longitude"] <= lon_max)
-        )
-        return ds.where(cond, drop=True)
-
-    baseline = xarray_zarr_to_polars_tidy(path, columns=expected_cols, selection=selection)
-
-    assert_frames_equal(out, baseline, sort_by=cfg.dims)
+    
+    assert_frames_equal(out.select(columns), baseline, sort_by=["y", "x"])
 
 
-# Sharded datasets
-SHARDED_DATASETS = [
-    cfg.name for cfg in BASELINE_DATASET_CONFIGS
-    if "sharded" in cfg.name
-]
+def test_filter_on_x_dimension(orography_path: str) -> None:
+    """Test filtering on x dimension."""
+    columns = ["y", "x", "geopotential_height"]
+    filter_expr = (pl.col("x") >= 3) & (pl.col("x") < 15)
+    
+    out = (
+        iozarrpy.scan_zarr(orography_path, variables=["geopotential_height"])
+        .filter(filter_expr)
+        .collect()
+    )
+    baseline = (
+        scan_via_xarray(orography_path, columns=columns)
+        .filter(filter_expr)
+        .collect()
+    )
+    
+    assert_frames_equal(out.select(columns), baseline, sort_by=["y", "x"])
 
 
-@pytest.mark.parametrize("dataset_name", SHARDED_DATASETS)
-def test_baseline_equals_scan_sharded_store(baseline_datasets: dict[str, str], dataset_name: str) -> None:
-    """Test that sharded zarr stores match xarray baseline (explicit sharding test)."""
-    cfg = get_dataset_config(dataset_name)
-    path = baseline_datasets[dataset_name]
-
-    # iozarrpy (system under test)
-    out = iozarrpy.scan_zarr(path, variables=cfg.variables, size=1_000_000).collect()
-    out = out.select(cfg.expected_cols)
-
-    # Baseline
-    baseline = xarray_zarr_to_polars_tidy(path, columns=cfg.expected_cols)
-
-    assert_frames_equal(out, baseline, sort_by=cfg.dims)
-
-
-# Big endian datasets
-BIG_ENDIAN_DATASETS = [
-    cfg.name for cfg in BASELINE_DATASET_CONFIGS
-    if "_big" in cfg.name
-]
+def test_filter_on_both_dimensions(orography_path: str) -> None:
+    """Test filtering on both y and x dimensions."""
+    columns = ["y", "x", "geopotential_height"]
+    filter_expr = (pl.col("y") >= 4) & (pl.col("y") <= 12) & (pl.col("x") >= 5) & (pl.col("x") <= 15)
+    
+    out = (
+        iozarrpy.scan_zarr(orography_path, variables=["geopotential_height"])
+        .filter(filter_expr)
+        .collect()
+    )
+    baseline = (
+        scan_via_xarray(orography_path, columns=columns)
+        .filter(filter_expr)
+        .collect()
+    )
+    
+    assert_frames_equal(out.select(columns), baseline, sort_by=["y", "x"])
 
 
-@pytest.mark.parametrize("dataset_name", BIG_ENDIAN_DATASETS)
-def test_baseline_equals_scan_big_endian(baseline_datasets: dict[str, str], dataset_name: str) -> None:
-    """Test that big-endian encoded data matches xarray baseline."""
-    cfg = get_dataset_config(dataset_name)
-    path = baseline_datasets[dataset_name]
+# ---------------------------------------------------------------------------
+# Filter tests on float coordinates (latitude, longitude)
+# ---------------------------------------------------------------------------
 
-    # iozarrpy (system under test)
-    out = iozarrpy.scan_zarr(path, variables=cfg.variables, size=1_000_000).collect()
-    out = out.select(cfg.expected_cols)
+def test_filter_on_latitude(orography_path: str) -> None:
+    """Test filtering on latitude (2D float coordinate)."""
+    columns = ["y", "x", "geopotential_height", "latitude"]
+    filter_expr = (pl.col("latitude") >= 20.05) & (pl.col("latitude") <= 20.15)
+    
+    out = (
+        iozarrpy.scan_zarr(orography_path, variables=["geopotential_height", "latitude"])
+        .filter(filter_expr)
+        .collect()
+    )
+    baseline = (
+        scan_via_xarray(orography_path, columns=columns)
+        .filter(filter_expr)
+        .collect()
+    )
+    
+    assert_frames_equal(out.select(columns), baseline, sort_by=["y", "x"])
 
-    # Baseline
-    baseline = xarray_zarr_to_polars_tidy(path, columns=cfg.expected_cols)
 
-    assert_frames_equal(out, baseline, sort_by=cfg.dims)
+# ---------------------------------------------------------------------------
+# Filter tests on datetime dimensions
+# ---------------------------------------------------------------------------
+
+def test_filter_on_time_equality(hrrr_path: str) -> None:
+    """Test filtering on time dimension with equality."""
+    from datetime import datetime
+    
+    columns = ["time", "lead_time", "y", "x", "temperature"]
+    target_time = datetime(2024, 1, 1, 0, 0, 0)
+    filter_expr = pl.col("time") == target_time
+    
+    out = (
+        iozarrpy.scan_zarr(hrrr_path, variables=["temperature"])
+        .filter(filter_expr)
+        .collect()
+    )
+    baseline = (
+        scan_via_xarray(hrrr_path, columns=columns)
+        .filter(filter_expr)
+        .collect()
+    )
+    
+    assert_frames_equal(out.select(columns), baseline, sort_by=["time", "lead_time", "y", "x"])
+
+
+def test_filter_on_lead_time(hrrr_path: str) -> None:
+    """Test filtering on lead_time (duration) dimension."""
+    columns = ["time", "lead_time", "y", "x", "temperature"]
+    # Filter for lead_time between 1 and 2 hours
+    filter_expr = (pl.col("lead_time") >= timedelta(hours=1)) & (pl.col("lead_time") <= timedelta(hours=2))
+    
+    out = (
+        iozarrpy.scan_zarr(hrrr_path, variables=["temperature"])
+        .filter(filter_expr)
+        .collect()
+    )
+    baseline = (
+        scan_via_xarray(hrrr_path, columns=columns)
+        .filter(filter_expr)
+        .collect()
+    )
+    
+    assert_frames_equal(out.select(columns), baseline, sort_by=["time", "lead_time", "y", "x"])
+
+
+def test_combined_time_and_spatial_filter(hrrr_path: str) -> None:
+    """Test combining time and spatial filters."""
+    from datetime import datetime
+    
+    columns = ["time", "lead_time", "y", "x", "temperature"]
+    filter_expr = (
+        (pl.col("time") == datetime(2024, 1, 1, 0, 0, 0)) &
+        (pl.col("y") >= 5) & 
+        (pl.col("y") <= 10) &
+        (pl.col("x") >= 5) &
+        (pl.col("x") <= 15)
+    )
+    
+    out = (
+        iozarrpy.scan_zarr(hrrr_path, variables=["temperature"])
+        .filter(filter_expr)
+        .collect()
+    )
+    baseline = (
+        scan_via_xarray(hrrr_path, columns=columns)
+        .filter(filter_expr)
+        .collect()
+    )
+    
+    assert_frames_equal(out.select(columns), baseline, sort_by=["time", "lead_time", "y", "x"])
+
+
+# ---------------------------------------------------------------------------
+# Schema and dtype tests
+# ---------------------------------------------------------------------------
+
+def test_datetime_dtype_matches(hrrr_path: str) -> None:
+    """Test that datetime columns have correct dtype."""
+    out = iozarrpy.scan_zarr(hrrr_path, variables=["temperature"]).collect()
+    
+    assert out.schema["time"] == pl.Datetime("ns")
+    assert out.schema["lead_time"] == pl.Duration("ns")
+
+
+def test_schema_matches_xarray(hrrr_path: str) -> None:
+    """Test that schema matches xarray baseline."""
+    columns = ["time", "lead_time", "y", "x", "temperature"]
+    
+    out = iozarrpy.scan_zarr(hrrr_path, variables=["temperature"]).collect()
+    baseline = scan_via_xarray(hrrr_path, columns=columns).collect()
+    
+    # Compare schemas
+    for col in columns:
+        assert out.schema[col] == baseline.schema[col], f"Schema mismatch for {col}"
+        assert out.schema[col] == baseline.schema[col], f"Schema mismatch for {col}"

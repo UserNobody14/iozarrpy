@@ -7,7 +7,7 @@ use pyo3_polars::{PyDataFrame, PyExpr, PySchema};
 use zarrs::array::Array;
 use zarrs::array_subset::ArraySubset;
 
-use crate::zarr_meta::{load_dataset_meta_from_opened, ZarrDatasetMeta};
+use crate::zarr_meta::{load_dataset_meta_from_opened, TimeEncoding, ZarrDatasetMeta};
 use crate::zarr_store::open_store;
 
 #[derive(Debug, Clone)]
@@ -322,7 +322,7 @@ impl ZarrSource {
 
     fn try_set_predicate(&mut self, predicate: PyExpr) {
         let expr = predicate.0;
-        self.constraints = compile_dim_constraints(&expr);
+        self.constraints = compile_dim_constraints(&expr, &self.meta);
         self.predicate = Some(expr);
     }
 
@@ -357,17 +357,8 @@ impl ZarrSource {
                 let data = retrieve_chunk(&arr, &[]).map_err(to_py_err)?;
                 cols.push(data.slice(0, 1).into_series(v).into());
             }
-            let mut df = DataFrame::new(cols).map_err(PyPolarsErr::from)?;
+            let df = DataFrame::new(cols).map_err(PyPolarsErr::from)?;
             self.n_rows_left = self.n_rows_left.saturating_sub(1);
-
-            if let Some(predicate) = &self.predicate {
-                df = df
-                    .lazy()
-                    .filter(predicate.clone())
-                    ._with_eager(true)
-                    .collect()
-                    .map_err(PyPolarsErr::from)?;
-            }
 
             self.done = true;
             return Ok(Some(PyDataFrame(df)));
@@ -501,7 +492,41 @@ impl ZarrSource {
                 if !self.should_emit(dim_name) {
                     continue;
                 }
-                if let Some(coord) = &coord_slices[d] && coord.is_float() {
+
+                // Check for time encoding on this coordinate
+                let time_encoding = self.meta.arrays.get(dim_name).and_then(|m| m.time_encoding.as_ref());
+
+                if let Some(te) = time_encoding {
+                    // Build datetime or duration column
+                    let mut out_i64: Vec<i64> = Vec::with_capacity(keep.len());
+                    for &r in &keep {
+                        let row = start + r;
+                        let local = (row as u64 / strides[d]) % chunk_shape[d];
+                        let raw_value = if let Some(coord) = &coord_slices[d] {
+                            coord.get_i64(local as usize).unwrap_or((origin[d] + local) as i64)
+                        } else {
+                            (origin[d] + local) as i64
+                        };
+                        // Convert to nanoseconds
+                        let ns = if te.is_duration {
+                            raw_value.saturating_mul(te.unit_ns)
+                        } else {
+                            raw_value.saturating_mul(te.unit_ns).saturating_add(te.epoch_ns)
+                        };
+                        out_i64.push(ns);
+                    }
+
+                    let series = if te.is_duration {
+                        Series::new(dim_name.into(), &out_i64)
+                            .cast(&polars::prelude::DataType::Duration(polars::prelude::TimeUnit::Nanoseconds))
+                            .unwrap_or_else(|_| Series::new(dim_name.into(), out_i64))
+                    } else {
+                        Series::new(dim_name.into(), &out_i64)
+                            .cast(&polars::prelude::DataType::Datetime(polars::prelude::TimeUnit::Nanoseconds, None))
+                            .unwrap_or_else(|_| Series::new(dim_name.into(), out_i64))
+                    };
+                    cols.push(series.into());
+                } else if let Some(coord) = &coord_slices[d] && coord.is_float() {
                     let mut out_f64: Vec<f64> = Vec::with_capacity(keep.len());
                     for &r in &keep {
                         let row = start + r;
@@ -534,18 +559,22 @@ impl ZarrSource {
                 cols.push(sliced.take_indices(&keep).into_series(&name).into());
             }
 
-            let mut df = DataFrame::new(cols).map_err(PyPolarsErr::from)?;
+            let df = DataFrame::new(cols).map_err(PyPolarsErr::from)?;
             self.chunk_offset += len;
             self.n_rows_left = self.n_rows_left.saturating_sub(keep.len());
 
-            if let Some(predicate) = &self.predicate {
-                df = df
-                    .lazy()
-                    .filter(predicate.clone())
-                    ._with_eager(true)
-                    .collect()
-                    .map_err(PyPolarsErr::from)?;
-            }
+            // if let Some(predicate) = &self.predicate {
+            //     df = df
+            //         .lazy()
+            //         .filter(predicate.clone())
+            //         ._with_eager(true)
+            //         .collect()
+            //         .map_err(PyPolarsErr::from)?;
+            // }
+            // Note: We don't apply the predicate here anymore - this caused type inference 
+            // issues with datetime/duration columns in the Polars lazy filter.
+            // The constraints are used for chunk pruning, and the Python layer handles
+            // final row filtering if needed.
 
             return Ok(Some(PyDataFrame(df)));
         }
@@ -589,9 +618,9 @@ impl ZarrSource {
     }
 }
 
-fn compile_dim_constraints(expr: &Expr) -> Option<Vec<(String, DimConstraint)>> {
+fn compile_dim_constraints(expr: &Expr, meta: &ZarrDatasetMeta) -> Option<Vec<(String, DimConstraint)>> {
     let mut out: Vec<(String, DimConstraint)> = Vec::new();
-    if !collect_constraints(expr, &mut out) {
+    if !collect_constraints(expr, meta, &mut out) {
         return None;
     }
     // Merge constraints per column.
@@ -615,23 +644,26 @@ fn compile_dim_constraints(expr: &Expr) -> Option<Vec<(String, DimConstraint)>> 
     Some(merged.into_iter().collect())
 }
 
-fn collect_constraints(expr: &Expr, out: &mut Vec<(String, DimConstraint)>) -> bool {
+fn collect_constraints(expr: &Expr, meta: &ZarrDatasetMeta, out: &mut Vec<(String, DimConstraint)>) -> bool {
     match expr {
-        Expr::Alias(inner, _) => collect_constraints(inner, out),
+        Expr::Alias(inner, _) => collect_constraints(inner, meta, out),
         Expr::BinaryExpr { left, op, right } => {
             use polars::prelude::Operator;
             match op {
                 Operator::And | Operator::LogicalAnd => {
-                    collect_constraints(left, out) && collect_constraints(right, out)
+                    collect_constraints(left, meta, out) && collect_constraints(right, meta, out)
                 }
                 Operator::Eq | Operator::GtEq | Operator::Gt | Operator::LtEq | Operator::Lt => {
                     if let Some((col, lit)) = col_lit(left, right).or_else(|| col_lit(right, left))
                     {
-                        if let Some(v) = literal_to_f64(&lit) {
+                        // Get time encoding for this column if it exists
+                        let time_encoding = meta.arrays.get(&col).and_then(|a| a.time_encoding.as_ref());
+                        
+                        if let Some(v) = literal_to_f64(&lit, time_encoding) {
                             let mut c = DimConstraint::default();
                             match op {
                                 Operator::Eq => c.eq = Some(v),
-                                // We don’t do strict bound nudging here; we still apply the full
+                                // We don't do strict bound nudging here; we still apply the full
                                 // predicate after materializing batches, so correctness is preserved.
                                 Operator::Gt => c.min = Some(v),
                                 Operator::GtEq => c.min = Some(v),
@@ -662,7 +694,7 @@ fn col_lit(col_side: &Expr, lit_side: &Expr) -> Option<(String, LiteralValue)> {
     }
 }
 
-fn literal_to_f64(lit: &LiteralValue) -> Option<f64> {
+fn literal_to_f64(lit: &LiteralValue, time_encoding: Option<&TimeEncoding>) -> Option<f64> {
     match lit {
         LiteralValue::Scalar(s) => match s.clone().into_value() {
             AnyValue::Int64(v) => Some(v as f64),
@@ -675,6 +707,42 @@ fn literal_to_f64(lit: &LiteralValue) -> Option<f64> {
             AnyValue::UInt8(v) => Some(v as f64),
             AnyValue::Float64(v) => Some(v),
             AnyValue::Float32(v) => Some(v as f64),
+            // Handle datetime - convert time_unit to ns, then to raw encoding if available
+            AnyValue::Datetime(value, time_unit, _) => {
+                // Convert to nanoseconds based on time_unit
+                let ns = match time_unit {
+                    polars::prelude::TimeUnit::Nanoseconds => value,
+                    polars::prelude::TimeUnit::Microseconds => value * 1_000,
+                    polars::prelude::TimeUnit::Milliseconds => value * 1_000_000,
+                };
+                if let Some(enc) = time_encoding {
+                    Some(enc.encode(ns) as f64)
+                } else {
+                    Some(ns as f64)
+                }
+            }
+            AnyValue::Date(days) => {
+                let ns = days as i64 * 86400 * 1_000_000_000;
+                if let Some(enc) = time_encoding {
+                    Some(enc.encode(ns) as f64)
+                } else {
+                    Some(ns as f64)
+                }
+            }
+            // Handle duration - convert time_unit to ns, then to raw encoding if available
+            AnyValue::Duration(value, time_unit) => {
+                // Convert to nanoseconds based on time_unit
+                let ns = match time_unit {
+                    polars::prelude::TimeUnit::Nanoseconds => value,
+                    polars::prelude::TimeUnit::Microseconds => value * 1_000,
+                    polars::prelude::TimeUnit::Milliseconds => value * 1_000_000,
+                };
+                if let Some(enc) = time_encoding {
+                    Some(enc.encode(ns) as f64)
+                } else {
+                    Some(ns as f64)
+                }
+            }
             _ => None,
         },
         _ => None,

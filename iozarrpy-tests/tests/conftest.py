@@ -83,8 +83,8 @@ BASELINE_DATASET_CONFIGS: list[DatasetConfig] = [
         variables=["2m_temperature", "total_precipitation"],
         expected_cols=["time", "lead_time", "y", "x", "2m_temperature", "total_precipitation"],
         dims=["time", "lead_time", "y", "x"],
-        filter_dim="lead_time",
-        filter_range=(2, 6),
+        filter_dim="y",
+        filter_range=(50, 150),
     ),
     
     # Constant gradient dataset (unconsolidated)
@@ -138,8 +138,8 @@ BASELINE_DATASET_CONFIGS: list[DatasetConfig] = [
         variables=["wind_lz4_little"],
         expected_cols=["time", "lead_time", "y", "x", "wind_lz4_little"],
         dims=["time", "lead_time", "y", "x"],
-        filter_dim="lead_time",
-        filter_range=(0, 4),
+        filter_dim="x",
+        filter_range=(0, 100),
     ),
     DatasetConfig(
         name="hrrr_wind_lz4_big",
@@ -178,8 +178,8 @@ BASELINE_DATASET_CONFIGS: list[DatasetConfig] = [
         variables=["wind_zstd_big"],
         expected_cols=["time", "lead_time", "y", "x", "wind_zstd_big"],
         dims=["time", "lead_time", "y", "x"],
-        filter_dim="lead_time",
-        filter_range=(5, 9),
+        filter_dim="y",
+        filter_range=(100, 200),
     ),
     
     # =========================================================================
