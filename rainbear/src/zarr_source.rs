@@ -320,10 +320,34 @@ impl ZarrSource {
         PySchema(Arc::new(schema))
     }
 
-    fn try_set_predicate(&mut self, predicate: PyExpr) {
-        let expr = predicate.0;
-        self.constraints = compile_dim_constraints(&expr, &self.meta);
-        self.predicate = Some(expr);
+    fn try_set_predicate(&mut self, predicate: PyExpr) -> PyResult<()> {
+        // The PyExpr has already been extracted/deserialized at this point.
+        // Clone the expression to avoid any lifetime issues.
+        let expr = predicate.0.clone();
+        
+        // Catch any panics during constraint compilation
+        let meta_ref = &self.meta;
+        let constraints = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            compile_dim_constraints(&expr, meta_ref)
+        }));
+        
+        match constraints {
+            Ok(c) => {
+                self.constraints = c;
+                self.predicate = Some(expr);
+                Ok(())
+            }
+            Err(e) => {
+                let msg = if let Some(s) = e.downcast_ref::<&str>() {
+                    s.to_string()
+                } else if let Some(s) = e.downcast_ref::<String>() {
+                    s.clone()
+                } else {
+                    "unknown panic in constraint compilation".to_string()
+                };
+                Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(msg))
+            }
+        }
     }
 
     fn set_with_columns(&mut self, columns: Vec<String>) {

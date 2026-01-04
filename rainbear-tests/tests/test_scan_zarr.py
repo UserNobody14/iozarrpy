@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import polars as pl
+
 import rainbear
 from rainbear import _core
 
@@ -11,7 +12,7 @@ def test_scan_zarr_smoke(dataset_path) -> None:
     path = dataset_path("demo_store.zarr")
     _core._create_demo_store(path)
 
-    lf = rainbear.scan_zarr(path, size=1000)
+    lf = rainbear.scan_zarr(path)
     df = lf.collect()
 
     assert df.height == 12
@@ -22,8 +23,8 @@ def test_sel_predicate(dataset_path) -> None:
     path = dataset_path("demo_store_sel.zarr")
     _core._create_demo_store(path)
 
-    lf = rainbear.scan_zarr(path, size=1000)
-    lf = lf.sel((pl.col("lat") >= 20.0) & (pl.col("lat") <= 30.0))
+    lf = rainbear.scan_zarr(path)
+    lf = lf.filter((pl.col("lat") >= 20.0) & (pl.col("lat") <= 30.0))
     df = lf.collect()
 
     assert df.height == 8

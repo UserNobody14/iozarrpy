@@ -7,7 +7,9 @@ authors = [
     { name = "Benjamin Sobel", email = "ben-developer@opayq.com" }
 ]
 requires-python = ">=3.13"
-dependencies = ["polars>=0.20.0"]
+dependencies = [
+    "polars>=1.25.2",
+]
 
 [project.scripts]
 rainbear = "rainbear:main"

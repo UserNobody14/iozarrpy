@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import polars as pl
-from tests import zarr_generators
 
 import rainbear
+from tests import zarr_generators
 
 
 def test_generated_orography_scan(dataset_path) -> None:
@@ -15,7 +15,7 @@ def test_generated_orography_scan(dataset_path) -> None:
     path = dataset_path("orography_small.zarr")
     ds.to_zarr(path, zarr_format=3)
 
-    lf = rainbear.scan_zarr(path, variables=["geopotential_height"], size=1_000_000)
+    lf = rainbear.scan_zarr(path, variables=["geopotential_height"])
     df = lf.collect()
 
     assert df.columns == ["y", "x", "geopotential_height"]
@@ -28,8 +28,8 @@ def test_generated_orography_sel(dataset_path) -> None:
     path = dataset_path("orography_sel.zarr")
     ds.to_zarr(path, zarr_format=3)
 
-    lf = rainbear.scan_zarr(path, variables=["geopotential_height"], size=1_000_000)
-    lf = lf.sel((pl.col("y") >= 3) & (pl.col("y") <= 6))
+    lf = rainbear.scan_zarr(path, variables=["geopotential_height"])
+    lf = lf.filter((pl.col("y") >= 3) & (pl.col("y") <= 6))
     df = lf.collect()
 
     # y in [3..6] => 4 y-values, x has 20 values
@@ -47,7 +47,6 @@ def test_generated_orography_multi_var(dataset_path) -> None:
     lf = rainbear.scan_zarr(
         path,
         variables=["geopotential_height", "latitude", "longitude"],
-        size=1_000_000,
     )
     df = lf.collect()
     assert df.columns == ["y", "x", "geopotential_height", "latitude", "longitude"]
@@ -60,7 +59,7 @@ def test_generated_orography_unconsolidated(dataset_path) -> None:
     path = dataset_path("orography_unconsolidated.zarr")
     ds.to_zarr(path, zarr_format=3, consolidated=False)
 
-    lf = rainbear.scan_zarr(path, variables=["geopotential_height"], size=1_000_000)
+    lf = rainbear.scan_zarr(path, variables=["geopotential_height"])
     df = lf.collect()
     assert df.height == 16 * 8
 
@@ -72,7 +71,7 @@ def test_generated_orography_projection(dataset_path) -> None:
     ds.to_zarr(path, zarr_format=3)
 
     # Ensure projection pushdown works (only variable column emitted).
-    lf = rainbear.scan_zarr(path, variables=["geopotential_height"], size=1_000_000)
+    lf = rainbear.scan_zarr(path, variables=["geopotential_height"])
     df = lf.select("geopotential_height").collect()
     assert df.columns == ["geopotential_height"]
     assert df.height == 10 * 6

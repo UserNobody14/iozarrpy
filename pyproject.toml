@@ -9,3 +9,8 @@ members = ["rainbear", "rainbear-tests"]
 [tool.uv.sources]
 rainbear = { workspace = true }
 
+[dependency-groups]
+dev = [
+    "just>=0.8.165",
+]
+
