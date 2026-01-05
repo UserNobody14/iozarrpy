@@ -7,7 +7,11 @@ Build lazy Zarr scans with Polars.
 ```bash
 pip install rainbear
 ```
+or with uv
 
+```bash
+uv add rainbear
+```
 ## Usage
 
 ```python

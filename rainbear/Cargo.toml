@@ -6,7 +6,6 @@ publish = false
 description = "Build lazy Zarr scans with Polars"
 authors = ["Benjamin Sobel <ben-developer@opayq.com>"]
 license = "MIT"
-license-file = "LICENSE"
 repository = "https://github.com/UserNobody14/iozarrpy"
 documentation = "https://github.com/UserNobody14/iozarrpy"
 keywords = ["zarr", "polars", "lazy"]
