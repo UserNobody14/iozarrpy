@@ -415,6 +415,16 @@ fn extract_time_encoding<TStorage: ?Sized>(array: &Array<TStorage>) -> Option<Ti
         });
     }
 
+    // If units is a plain time unit (hours, days, etc.) without "since",
+    // treat it as a duration encoding
+    if let Some(unit_ns) = parse_duration_units(units) {
+        return Some(TimeEncoding {
+            epoch_ns: 0,
+            unit_ns,
+            is_duration: true,
+        });
+    }
+
     None
 }
 

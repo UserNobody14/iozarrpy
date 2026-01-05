@@ -1,3 +1,5 @@
+import os
+import sys
 from typing import Iterator
 
 import polars as pl
@@ -35,7 +37,13 @@ def scan_zarr(
         # Set predicate for constraint extraction (chunk pruning).
         # The Rust side uses constraints to skip chunks but doesn't apply
         # the full predicate filter - we do that here in Python.
-        if predicate is not None:
+        if predicate is not None and os.environ.get("RAINBEAR_PREDICATE_PUSHDOWN", "1") == "1":
+            if os.environ.get("RAINBEAR_DEBUG_PREDICATE") == "1":
+                print(
+                    f"[rainbear] predicate pushed down: type={type(predicate)!r} repr={predicate!r}",
+                    file=sys.stderr,
+                    flush=True,
+                )
             try:
                 src.try_set_predicate(predicate)
             except Exception:

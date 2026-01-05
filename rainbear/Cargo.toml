@@ -45,3 +45,11 @@ zarrs = { version = "0.23.0-beta.3", features = ["async"] }
 zarrs_object_store = { version = "0.6.1", features = ["aws", "azure", "gcp", "http", "fs"] }
 serde_json = "1.0.145"
 chrono = { version = "0.4", features = ["clock", "std"] }
+
+# Builds on this machine have intermittently hit compiler crashes (GCC ICE while compiling
+# `zstd-sys` at `-O3`, and rustc SIGSEGVs in optimized builds). We intentionally dial back
+# release optimization and disable LTO for stability.
+[profile.release]
+opt-level = 1
+lto = false
+codegen-units = 1

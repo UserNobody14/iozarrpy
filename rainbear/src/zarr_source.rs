@@ -2,6 +2,7 @@ use std::collections::BTreeSet;
 
 use polars::prelude::*;
 use pyo3::prelude::*;
+use pyo3::types::PyAny;
 use pyo3_polars::error::PyPolarsErr;
 use pyo3_polars::{PyDataFrame, PyExpr, PySchema};
 use zarrs::array::Array;
@@ -9,6 +10,37 @@ use zarrs::array_subset::ArraySubset;
 
 use crate::zarr_meta::{load_dataset_meta_from_opened, TimeEncoding, ZarrDatasetMeta};
 use crate::zarr_store::open_store;
+
+const DEFAULT_BATCH_SIZE: usize = 10_000;
+const DEFAULT_MAX_CHUNK_ELEMS: usize = 50_000_000;
+
+fn max_chunk_elems() -> usize {
+    std::env::var("RAINBEAR_MAX_CHUNK_ELEMS")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|&v| v > 0)
+        .unwrap_or(DEFAULT_MAX_CHUNK_ELEMS)
+}
+
+fn checked_chunk_len(shape: &[u64]) -> PyResult<usize> {
+    let mut acc: usize = 1;
+    for &d in shape {
+        let d_usize: usize = d.try_into().map_err(|_| {
+            PyErr::new::<pyo3::exceptions::PyMemoryError, _>(
+                "chunk shape dimension does not fit in usize",
+            )
+        })?;
+        acc = acc.checked_mul(d_usize).ok_or_else(|| {
+            PyErr::new::<pyo3::exceptions::PyMemoryError, _>("chunk size overflow")
+        })?;
+        if acc > max_chunk_elems() {
+            return Err(PyErr::new::<pyo3::exceptions::PyMemoryError, _>(
+                "refusing to allocate an extremely large chunk; set RAINBEAR_MAX_CHUNK_ELEMS to override",
+            ));
+        }
+    }
+    Ok(acc)
+}
 
 #[derive(Debug, Clone)]
 enum ColumnData {
@@ -151,6 +183,10 @@ fn retrieve_1d_subset(
     start: u64,
     len: u64,
 ) -> Result<ColumnData, String> {
+    // Guard against pathological coord arrays / unchunked giant reads which would OOM-abort.
+    if len as u128 > max_chunk_elems() as u128 {
+        return Err("refusing to allocate extremely large coordinate subset; set RAINBEAR_MAX_CHUNK_ELEMS to override".to_string());
+    }
     let subset = ArraySubset::new_with_ranges(&[start..(start + len)]);
     let id = array.data_type().identifier();
     match id {
@@ -288,8 +324,15 @@ impl ZarrSource {
         let grid_shape = primary.chunk_grid().grid_shape().to_vec();
         let chunk_indices = vec![0; primary.dimensionality()];
 
-        let n_rows_left = n_rows.unwrap_or(usize::MAX);
-        let batch_size = batch_size.unwrap_or(10_000);
+        // Polars may pass 0 to mean "unspecified"; interpret it as the default.
+        let n_rows_left = match n_rows {
+            None | Some(0) => usize::MAX,
+            Some(n) => n,
+        };
+        let batch_size = match batch_size {
+            None | Some(0) => DEFAULT_BATCH_SIZE,
+            Some(n) => n,
+        };
 
         let dims = meta
             .arrays
@@ -320,34 +363,28 @@ impl ZarrSource {
         PySchema(Arc::new(schema))
     }
 
-    fn try_set_predicate(&mut self, predicate: PyExpr) -> PyResult<()> {
-        // The PyExpr has already been extracted/deserialized at this point.
-        // Clone the expression to avoid any lifetime issues.
-        let expr = predicate.0.clone();
-        
-        // Catch any panics during constraint compilation
+    fn try_set_predicate(&mut self, predicate: &Bound<'_, PyAny>) -> PyResult<()> {
+        // IMPORTANT: Taking `PyExpr` directly in the signature can abort the whole
+        // Python process if the Python->Rust Expr conversion panics.
+        //
+        // By accepting `PyAny` and extracting inside a `catch_unwind`, we can turn
+        // those panics into a normal Python exception which the Python wrapper can
+        // safely ignore (disabling pushdown but keeping correctness).
+        let expr = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let pyexpr: PyExpr = predicate.extract()?;
+            Ok::<Expr, PyErr>(pyexpr.0.clone())
+        }))
+        .map_err(|e| panic_to_py_err(e))??;
+
         let meta_ref = &self.meta;
         let constraints = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             compile_dim_constraints(&expr, meta_ref)
-        }));
-        
-        match constraints {
-            Ok(c) => {
-                self.constraints = c;
-                self.predicate = Some(expr);
-                Ok(())
-            }
-            Err(e) => {
-                let msg = if let Some(s) = e.downcast_ref::<&str>() {
-                    s.to_string()
-                } else if let Some(s) = e.downcast_ref::<String>() {
-                    s.clone()
-                } else {
-                    "unknown panic in constraint compilation".to_string()
-                };
-                Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(msg))
-            }
-        }
+        }))
+        .map_err(|e| panic_to_py_err(e))?;
+
+        self.constraints = constraints;
+        self.predicate = Some(expr);
+        Ok(())
     }
 
     fn set_with_columns(&mut self, columns: Vec<String>) {
@@ -392,7 +429,7 @@ impl ZarrSource {
         loop {
             let chunk_shape_nz = primary.chunk_shape(&self.chunk_indices).map_err(to_py_err)?;
             let chunk_shape: Vec<u64> = chunk_shape_nz.iter().map(|x| x.get()).collect();
-            let chunk_len: usize = chunk_shape.iter().product::<u64>() as usize;
+            let chunk_len: usize = checked_chunk_len(&chunk_shape)?;
 
             if self.chunk_offset >= chunk_len {
                 self.chunk_offset = 0;
@@ -497,15 +534,52 @@ impl ZarrSource {
             }
 
             // Load chunk data for each requested var once.
-            let mut var_chunks: Vec<(String, ColumnData)> = Vec::new();
+            // Store the variable metadata along with the data for proper indexing.
+            // For variables with different chunk sizes, we also store the offset within the var chunk.
+            let mut var_chunks: Vec<(String, ColumnData, Vec<String>, Vec<u64>, Vec<u64>)> = Vec::new();
             for v in &self.vars {
                 if !self.should_emit(v) {
                     continue;
                 }
-                let path = &self.meta.arrays[v].path;
+                let var_meta = &self.meta.arrays[v];
+                let path = &var_meta.path;
                 let arr = Array::open(self.store.clone(), path).map_err(to_py_err)?;
-                let data = retrieve_chunk(&arr, &self.chunk_indices).map_err(to_py_err)?;
-                var_chunks.push((v.clone(), data));
+                
+                // For variables with different dimensionality or chunk sizes,
+                // compute the correct chunk indices and offsets.
+                let (var_chunk_indices, var_offsets) = if var_meta.dims.len() == self.dims.len() 
+                    && var_meta.dims == self.dims 
+                {
+                    // Same dims - use primary chunk indices directly
+                    (self.chunk_indices.clone(), vec![0; self.dims.len()])
+                } else {
+                    // Different dims or chunk sizes - compute proper mapping
+                    compute_var_chunk_info(
+                        &self.chunk_indices,
+                        &chunk_shape,
+                        &self.dims,
+                        &var_meta.dims,
+                        &arr,
+                    ).map_err(to_py_err)?
+                };
+                
+                // Get the chunk shape for this variable's chunk
+                let var_chunk_shape: Vec<u64> = if var_chunk_indices.is_empty() {
+                    vec![] // scalar
+                } else {
+                    arr.chunk_shape(&var_chunk_indices)
+                        .map_err(to_py_err)?
+                        .iter()
+                        .map(|x| x.get())
+                        .collect()
+                };
+                
+                // Prevent OOM-abort on absurdly large chunks.
+                if !var_chunk_shape.is_empty() {
+                    let _ = checked_chunk_len(&var_chunk_shape)?;
+                }
+                let data = retrieve_chunk(&arr, &var_chunk_indices).map_err(to_py_err)?;
+                var_chunks.push((v.clone(), data, var_meta.dims.clone(), var_chunk_shape, var_offsets));
             }
 
             // Build output columns.
@@ -578,9 +652,41 @@ impl ZarrSource {
             }
 
             // Variable columns.
-            for (name, data) in var_chunks {
-                let sliced = data.slice(start, len);
-                cols.push(sliced.take_indices(&keep).into_series(&name).into());
+            // For variables with the same dimensionality as the primary, we can slice directly.
+            // For variables with fewer dimensions or different chunk sizes, we need to compute
+            // the correct index by projecting from the primary iteration space.
+            for (name, data, var_dims, var_chunk_shape, var_offsets) in var_chunks {
+                if var_dims.len() == self.dims.len() && var_dims == self.dims && var_offsets.iter().all(|&o| o == 0) {
+                    // Same dimensionality and order with zero offsets - direct slice
+                    let sliced = data.slice(start, len);
+                    cols.push(sliced.take_indices(&keep).into_series(&name).into());
+                } else {
+                    // Different dimensionality or non-zero offsets - need to map indices
+                    // Build a mapping from primary dim index to variable dim index
+                    let dim_mapping: Vec<Option<usize>> = self.dims.iter()
+                        .map(|pd| var_dims.iter().position(|vd| vd == pd))
+                        .collect();
+                    
+                    let var_strides = compute_strides(&var_chunk_shape);
+                    
+                    // For each row, compute the index in the variable's chunk
+                    let indices: Vec<usize> = keep.iter().map(|&r| {
+                        let row = start + r;
+                        let mut var_idx: u64 = 0;
+                        for (primary_d, maybe_var_d) in dim_mapping.iter().enumerate() {
+                            if let Some(var_d) = *maybe_var_d {
+                                // Get local position in primary dimension
+                                let local = (row as u64 / strides[primary_d]) % chunk_shape[primary_d];
+                                // Add the offset within the variable's chunk and contribution to index
+                                let local_with_offset = local + var_offsets[var_d];
+                                var_idx += local_with_offset * var_strides[var_d];
+                            }
+                        }
+                        var_idx as usize
+                    }).collect();
+                    
+                    cols.push(data.take_indices(&indices).into_series(&name).into());
+                }
             }
 
             let df = DataFrame::new(cols).map_err(PyPolarsErr::from)?;
@@ -629,8 +735,72 @@ fn advance_chunk_indices(indices: &mut [u64], grid_shape: &[u64]) -> bool {
     false
 }
 
+/// Compute the variable chunk indices and within-chunk offset for a variable
+/// with potentially different chunk sizes than the primary array.
+/// 
+/// Returns (var_chunk_indices, offsets) where:
+/// - var_chunk_indices: the chunk indices to use when reading the variable's chunk
+/// - offsets: the offset within each dimension of the variable's chunk to start reading
+fn compute_var_chunk_info(
+    primary_chunk_indices: &[u64],
+    primary_chunk_shape: &[u64],
+    primary_dims: &[String],
+    var_dims: &[String],
+    var_array: &Array<dyn zarrs::storage::ReadableWritableListableStorageTraits>,
+) -> Result<(Vec<u64>, Vec<u64>), String> {
+    let _var_grid_shape = var_array.chunk_grid().grid_shape();
+    
+    let mut var_chunk_indices = Vec::with_capacity(var_dims.len());
+    let mut offsets = Vec::with_capacity(var_dims.len());
+    
+    for var_dim in var_dims {
+        // Find this dimension in the primary array
+        if let Some(primary_d) = primary_dims.iter().position(|pd| pd == var_dim) {
+            // Calculate global position for start of primary chunk in this dimension
+            let primary_chunk_idx = primary_chunk_indices[primary_d];
+            let primary_chunk_size = primary_chunk_shape[primary_d];
+            let global_start = primary_chunk_idx * primary_chunk_size;
+            
+            // Find which variable chunk contains this global position
+            // Get the variable's chunk shape for this dimension
+            let var_dim_idx = var_dims.iter().position(|vd| vd == var_dim).unwrap();
+            
+            // We need the chunk shape to compute which chunk index this falls into
+            // Use chunk index 0 to get the regular chunk shape
+            let zero_indices: Vec<u64> = vec![0; var_dims.len()];
+            let var_regular_chunk_shape = var_array
+                .chunk_shape(&zero_indices)
+                .map_err(|e| e.to_string())?;
+            let var_chunk_size = var_regular_chunk_shape[var_dim_idx].get();
+            
+            // Compute the variable chunk index and offset
+            let var_chunk_idx = global_start / var_chunk_size;
+            let offset = global_start % var_chunk_size;
+            
+            var_chunk_indices.push(var_chunk_idx);
+            offsets.push(offset);
+        } else {
+            // This dimension doesn't exist in primary - shouldn't happen for well-formed data
+            return Err(format!("variable dimension {} not found in primary dims", var_dim));
+        }
+    }
+    
+    Ok((var_chunk_indices, offsets))
+}
+
 fn to_py_err<E: std::fmt::Display>(e: E) -> PyErr {
     PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string())
+}
+
+fn panic_to_py_err(e: Box<dyn std::any::Any + Send>) -> PyErr {
+    let msg = if let Some(s) = e.downcast_ref::<&str>() {
+        s.to_string()
+    } else if let Some(s) = e.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "panic while compiling predicate constraints".to_string()
+    };
+    PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(msg)
 }
 
 impl ZarrSource {

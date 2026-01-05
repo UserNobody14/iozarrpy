@@ -1,12 +1,25 @@
+from __future__ import annotations
+
+import os
 from datetime import datetime, timedelta
 
 import polars as pl
+import pytest
 
 import rainbear
 
 
-def test_mem():
-    scz = rainbear.scan_zarr("/home/benjamin/Code/hs/hzarrz/zarrgentest/output-datasets/hrrr_grid_dataset.zarr")
+def test_mem() -> None:
+    """Opt-in memory/regression test on a large external dataset.
+
+    This test is intentionally skipped by default because it depends on a local dataset
+    and can be very memory-intensive.
+    """
+    dataset = os.environ.get("RAINBEAR_MEM_DATASET")
+    if not dataset:
+        pytest.skip("Set RAINBEAR_MEM_DATASET to run this test against a local large Zarr store.")
+
+    scz = rainbear.scan_zarr(dataset)
     scz = scz.filter(
         (pl.col("time") == datetime(2024, 1, 1, 0, 0, 0)) &
         # lead_time now recognized as Duration (units: hours)

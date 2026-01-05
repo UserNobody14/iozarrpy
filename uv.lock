@@ -573,7 +573,7 @@ wheels = [
 [[package]]
 name = "rainbear"
 version = "1.0.0a1"
-source = { editable = "rainbear" }
+source = { virtual = "rainbear" }
 dependencies = [
     { name = "polars" },
 ]
@@ -625,7 +625,7 @@ requires-dist = [
     { name = "numpy", specifier = ">=1.26" },
     { name = "pandas", specifier = ">=2.2.0" },
     { name = "polars", specifier = ">=1.25.2" },
-    { name = "rainbear", editable = "rainbear" },
+    { name = "rainbear", virtual = "rainbear" },
     { name = "xarray", specifier = ">=2024.10.0" },
     { name = "zarr", specifier = ">=3.0.0" },
 ]
