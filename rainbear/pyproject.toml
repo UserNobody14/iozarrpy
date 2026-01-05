@@ -22,11 +22,15 @@ module-name = "rainbear._core"
 python-packages = ["rainbear"]
 python-source = "src"
 bindings = "pyo3"
+include = [
+    { path = "src/rainbear/*.so", format = "sdist"},
+    { path = "src/rainbear/*.pyd", format = "sdist"},
+    { path = "src/rainbear/dependencies/", format = "sdist"},
+    { path = "LICENSE", format = "sdist"},
+]
 
 [tool.uv]
-# this ensures that `uv run` doesn't actually build the package; a `make`
-# command is needed to build
-package = false
+  
 cache-keys = [{ file = "pyproject.toml" }, { file = "src/**/*.rs" }, { file = "Cargo.toml" }, { file = "Cargo.lock" }]
 
 [build-system]

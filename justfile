@@ -21,6 +21,13 @@ build:
 [group: 'build']
 [doc('Build the project (release). This may stress compilers; use only if needed.')]
 [working-directory: 'rainbear']
+build-for-publish:
+    just clean
+    CARGO_BUILD_JOBS=1 CFLAGS=-O1 CXXFLAGS=-O1 uv run --group build maturin build --zig --release
+
+[group: 'build']
+[doc('Build the project (release). This may stress compilers; use only if needed.')]
+[working-directory: 'rainbear']
 build-release:
     just clean
     CARGO_BUILD_JOBS=1 CFLAGS=-O1 CXXFLAGS=-O1 uv run --group build maturin develop --uv --release
@@ -38,7 +45,7 @@ clean:
 [doc('Publish the project')]
 [working-directory: 'rainbear']
 publish:
-    uv publish
+    export UV_PUBLISH_TOKEN=$PYPI_TOKEN && uv publish
 
 [group: 'tests']
 [doc('Run the smoke test')]
