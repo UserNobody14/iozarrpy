@@ -9,8 +9,8 @@ target/
 *.so
 
 # Test output datasets
-rainbear-tests/tests/output-datasets/
-rainbear-tests/.coverage
+tests/output-datasets/
+.coverage
 
 
 # Virtual environments

@@ -1,21 +1,62 @@
 [project]
-name = "rainbear-workspace"
-version = "0.1.0"
-requires-python = ">=3.13"
-license = { file = "LICENSE" }
+name = "rainbear"
+version = "1.1.0a1"
+description = "Build lazy Zarr scans with Polars"
+readme = "README.md"
 authors = [
     { name = "Benjamin Sobel", email = "ben-developer@opayq.com" }
 ]
+requires-python = ">=3.12"
+dependencies = [
+    "polars>=1.25.2",
+]
+license = { file = "LICENSE" }
 keywords = ["zarr", "polars", "lazy"]
 
-[tool.uv.workspace]
-members = ["rainbear", "rainbear-tests"]
 
-[tool.uv.sources]
-rainbear = { workspace = true }
+[project.scripts]
+rainbear = "rainbear:main"
+
+[tool.maturin]
+module-name = "rainbear._core"
+python-packages = ["rainbear"]
+python-source = "src"
+bindings = "pyo3"
+include = [
+    { path = "src/rainbear/*.so", format = "sdist"},
+    { path = "src/rainbear/*.pyd", format = "sdist"},
+    { path = "src/rainbear/dependencies/", format = "sdist"},
+    { path = "LICENSE", format = "sdist"},
+]
+
+[tool.uv]
+  
+cache-keys = [{ file = "pyproject.toml" }, { file = "src/**/*.rs" }, { file = "Cargo.toml" }, { file = "Cargo.lock" }]
+
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
 
 [dependency-groups]
 dev = [
-    "rust-just>=1.46.0",
+    "maturin>=1.10.2",
+    "pytest>=8.0",
+    "pytest-cov>=7.0.0",
+    "numpy>=1.26",
+    "pandas>=2.2.0",
+    "xarray>=2024.10.0",
+    "zarr>=3.0.0",
+    "numcodecs>=0.13.0",
 ]
 
+build = [
+    "maturin>=1.10.2",
+    "patchelf>=0.17.2.2; sys_platform == 'linux'", 
+    "conan==2.17.1",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
+addopts = ["-v", "--tb=short"]
