@@ -5,7 +5,8 @@ from __future__ import annotations
 import polars as pl
 
 import rainbear
-from tests import zarr_generators
+
+from . import zarr_generators
 
 
 def test_generated_orography_scan(dataset_path) -> None:
@@ -74,5 +75,6 @@ def test_generated_orography_projection(dataset_path) -> None:
     lf = rainbear.scan_zarr(path, variables=["geopotential_height"])
     df = lf.select("geopotential_height").collect()
     assert df.columns == ["geopotential_height"]
+    assert df.height == 10 * 6
     assert df.height == 10 * 6
     assert df.height == 10 * 6

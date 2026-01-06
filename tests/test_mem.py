@@ -33,6 +33,7 @@ def test_mem() -> None:
     )
     print("reached here 1")
     df = scz.collect()
+    assert df.height == 66
     print("reached here 2")
     print(df)
     print("reached here 3")

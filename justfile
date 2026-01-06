@@ -32,7 +32,15 @@ build-release:
 [doc('Build manylinux wheels')]
 build-manylinux:
     just clean
-    docker run --rm -v $(pwd):/io ghcr.io/pyo3/maturin build --release
+    # Note: ghcr.io/pyo3/maturin keeps the Rust toolchain under /root/.cargo, so running as a
+    # non-root uid/gid can't execute cargo (permission denied). Instead, build as root and then
+    # chown build artifacts back to the host user to avoid root-owned outputs.
+    docker run --rm \
+      -v "$(pwd)":/io \
+      -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" \
+      --entrypoint sh \
+      ghcr.io/pyo3/maturin \
+      -lc 'set -eux; maturin build --release; chown -R "$HOST_UID:$HOST_GID" /io/target /io/dist /io/build 2>/dev/null || true'
 
 [group: 'build']
 [doc('Clean the project')]
@@ -45,7 +53,7 @@ clean:
 [group: 'publish']
 [doc('Publish the project')]
 publish:
-    export UV_PUBLISH_TOKEN=$PYPI_TOKEN && uv publish
+    export UV_PUBLISH_TOKEN=$PYPI_TOKEN && uv publish target/wheels/*
 
 [group: 'tests']
 [doc('Run the smoke test')]

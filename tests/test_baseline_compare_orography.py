@@ -17,9 +17,10 @@ from datetime import timedelta
 
 import polars as pl
 import pytest
-from tests.baseline_utils import assert_frames_equal, scan_via_xarray
 
 import rainbear
+
+from .baseline_utils import assert_frames_equal, scan_via_xarray
 
 # ---------------------------------------------------------------------------
 # Test fixtures - generate test datasets once per session
@@ -28,8 +29,9 @@ import rainbear
 @pytest.fixture(scope="session")
 def orography_path(tmp_path_factory) -> str:
     """Create a small orography dataset for testing."""
-    from tests import zarr_generators
     from zarr.codecs import BloscCodec, BloscShuffle
+
+    from . import zarr_generators
     
     path = tmp_path_factory.mktemp("data") / "orography.zarr"
     ds = zarr_generators.create_orography_dataset(nx=20, ny=16, sigma=4.0, seed=1)
@@ -283,6 +285,8 @@ def test_schema_matches_xarray(path: str) -> None:
     
     # Compare schemas
     for col in columns:
+        assert out.schema[col] == baseline.schema[col], f"Schema mismatch for {col}"
+        assert out.schema[col] == baseline.schema[col], f"Schema mismatch for {col}"
         assert out.schema[col] == baseline.schema[col], f"Schema mismatch for {col}"
         assert out.schema[col] == baseline.schema[col], f"Schema mismatch for {col}"
         assert out.schema[col] == baseline.schema[col], f"Schema mismatch for {col}"
