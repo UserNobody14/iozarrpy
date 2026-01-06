@@ -6,6 +6,17 @@ import polars as pl
 
 def hello_from_bin() -> str: ...
 def _create_demo_store(path: str) -> None: ...
+def selected_chunks(
+    zarr_url: str,
+    predicate: pl.Expr,
+    variables: list[str] | None = None,
+) -> list[dict[str, Any]]: ...
+
+def _selected_chunks_debug(
+    zarr_url: str,
+    predicate: pl.Expr,
+    variables: list[str] | None = None,
+) -> tuple[list[dict[str, Any]], int]: ...
 
 class ZarrSource:
     def __init__(

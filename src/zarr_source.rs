@@ -8,7 +8,8 @@ use pyo3_polars::{PyDataFrame, PyExpr, PySchema};
 use zarrs::array::Array;
 use zarrs::array_subset::ArraySubset;
 
-use crate::zarr_meta::{load_dataset_meta_from_opened, TimeEncoding, ZarrDatasetMeta};
+use crate::chunk_plan::{compile_expr_to_chunk_plan, ChunkIndexIter, ChunkPlan};
+use crate::zarr_meta::{load_dataset_meta_from_opened, ZarrDatasetMeta};
 use crate::zarr_store::open_store;
 
 const DEFAULT_BATCH_SIZE: usize = 10_000;
@@ -265,21 +266,14 @@ pub struct ZarrSource {
     n_rows_left: usize,
 
     predicate: Option<Expr>,
-    constraints: Option<Vec<(String, DimConstraint)>>,
     with_columns: Option<BTreeSet<String>>,
 
     // Iteration state
-    grid_shape: Vec<u64>,
-    chunk_indices: Vec<u64>,
+    primary_grid_shape: Vec<u64>,
+    chunk_iter: ChunkIndexIter,
+    current_chunk_indices: Option<Vec<u64>>,
     chunk_offset: usize,
     done: bool,
-}
-
-#[derive(Debug, Clone, Copy, Default)]
-struct DimConstraint {
-    eq: Option<f64>,
-    min: Option<f64>,
-    max: Option<f64>,
 }
 
 #[pymethods]
@@ -321,8 +315,14 @@ impl ZarrSource {
             PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string())
         })?;
 
-        let grid_shape = primary.chunk_grid().grid_shape().to_vec();
-        let chunk_indices = vec![0; primary.dimensionality()];
+        let primary_grid_shape = primary.chunk_grid().grid_shape().to_vec();
+        let zero = vec![0u64; primary.dimensionality()];
+        let regular_chunk_shape = primary
+            .chunk_shape(&zero)
+            .map_err(to_py_err)?
+            .iter()
+            .map(|x| x.get())
+            .collect::<Vec<u64>>();
 
         // Polars may pass 0 to mean "unspecified"; interpret it as the default.
         let n_rows_left = match n_rows {
@@ -340,6 +340,9 @@ impl ZarrSource {
             .map(|m| m.dims.clone())
             .filter(|d| !d.is_empty())
             .unwrap_or_else(|| (0..primary.dimensionality()).map(|i| format!("dim_{i}")).collect());
+        let chunk_iter =
+            ChunkPlan::all(dims.clone(), primary_grid_shape.clone(), regular_chunk_shape)
+                .into_index_iter();
 
         Ok(Self {
             meta,
@@ -349,10 +352,10 @@ impl ZarrSource {
             batch_size,
             n_rows_left,
             predicate: None,
-            constraints: None,
             with_columns: None,
-            grid_shape,
-            chunk_indices,
+            primary_grid_shape,
+            chunk_iter,
+            current_chunk_indices: None,
             chunk_offset: 0,
             done: primary.dimensionality() == 0 && false,
         })
@@ -376,13 +379,38 @@ impl ZarrSource {
         }))
         .map_err(|e| panic_to_py_err(e))??;
 
-        let meta_ref = &self.meta;
-        let constraints = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            compile_dim_constraints(&expr, meta_ref)
+        // Compile Expr -> candidate-chunk plan (no full-grid scans).
+        let compiled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            compile_expr_to_chunk_plan(&expr, &self.meta, self.store.clone(), &self.vars[0])
         }))
         .map_err(|e| panic_to_py_err(e))?;
 
-        self.constraints = constraints;
+        match compiled {
+            Ok((plan, _stats)) => {
+                self.primary_grid_shape = plan.grid_shape().to_vec();
+                self.chunk_iter = plan.into_index_iter();
+                self.current_chunk_indices = None;
+                self.chunk_offset = 0;
+            }
+            Err(_) => {
+                // Fall back to scanning all chunks if planning fails.
+                let primary_path = self.meta.arrays[&self.vars[0]].path.clone();
+                let primary = Array::open(self.store.clone(), &primary_path).map_err(to_py_err)?;
+                let grid_shape = primary.chunk_grid().grid_shape().to_vec();
+                let zero = vec![0u64; primary.dimensionality()];
+                let regular_chunk_shape = primary
+                    .chunk_shape(&zero)
+                    .map_err(to_py_err)?
+                    .iter()
+                    .map(|x| x.get())
+                    .collect::<Vec<u64>>();
+                self.primary_grid_shape = grid_shape.clone();
+                self.chunk_iter = ChunkPlan::all(self.dims.clone(), grid_shape, regular_chunk_shape).into_index_iter();
+                self.current_chunk_indices = None;
+                self.chunk_offset = 0;
+            }
+        }
+
         self.predicate = Some(expr);
         Ok(())
     }
@@ -425,48 +453,33 @@ impl ZarrSource {
             return Ok(Some(PyDataFrame(df)));
         }
 
-        // Ensure we are on a chunk that satisfies constraints (chunk pruning).
+        // Advance to the next candidate chunk (planned from the predicate) as needed.
         loop {
-            let chunk_shape_nz = primary.chunk_shape(&self.chunk_indices).map_err(to_py_err)?;
-            let chunk_shape: Vec<u64> = chunk_shape_nz.iter().map(|x| x.get()).collect();
-            let chunk_len: usize = checked_chunk_len(&chunk_shape)?;
-
-            if self.chunk_offset >= chunk_len {
-                self.chunk_offset = 0;
-                if !advance_chunk_indices(&mut self.chunk_indices, &self.grid_shape) {
+            if self.current_chunk_indices.is_none() {
+                if let Some(next_idx) = self.chunk_iter.next() {
+                    self.current_chunk_indices = Some(next_idx);
+                    self.chunk_offset = 0;
+                } else {
                     self.done = true;
                     return Ok(None);
                 }
+            }
+            let idx = self.current_chunk_indices.as_ref().unwrap();
+            let chunk_shape_nz = primary.chunk_shape(idx).map_err(to_py_err)?;
+            let chunk_shape: Vec<u64> = chunk_shape_nz.iter().map(|x| x.get()).collect();
+            let chunk_len: usize = checked_chunk_len(&chunk_shape)?;
+            if self.chunk_offset >= chunk_len {
+                self.current_chunk_indices = None;
+                self.chunk_offset = 0;
                 continue;
             }
-
-            // Evaluate chunk-level constraints at chunk boundaries only.
-            if self.chunk_offset == 0 {
-                if let Some(constraints) = &self.constraints {
-                    let origin = primary
-                        .chunk_grid()
-                        .chunk_origin(&self.chunk_indices)
-                        .map_err(to_py_err)?
-                        .unwrap_or_else(|| vec![0; chunk_shape.len()]);
-
-                    if !chunk_satisfies_constraints(
-                        self,
-                        &origin,
-                        &chunk_shape,
-                        constraints,
-                    )? {
-                        self.chunk_offset = chunk_len; // force advance
-                        continue;
-                    }
-                }
-            }
-
             break;
         }
 
         // We may need to skip “empty” batches after trimming out-of-bounds rows (e.g. sharded edges).
         loop {
-            let chunk_shape_nz = primary.chunk_shape(&self.chunk_indices).map_err(to_py_err)?;
+            let idx = self.current_chunk_indices.as_ref().unwrap();
+            let chunk_shape_nz = primary.chunk_shape(idx).map_err(to_py_err)?;
             let chunk_shape: Vec<u64> = chunk_shape_nz.iter().map(|x| x.get()).collect();
             let chunk_len: usize = chunk_shape.iter().product::<u64>() as usize;
 
@@ -477,7 +490,7 @@ impl ZarrSource {
             // Origin for this chunk for dims/coords.
             let origin = primary
                 .chunk_grid()
-                .chunk_origin(&self.chunk_indices)
+                .chunk_origin(idx)
                 .map_err(to_py_err)?
                 .unwrap_or_else(|| vec![0; chunk_shape.len()]);
 
@@ -509,10 +522,7 @@ impl ZarrSource {
                 }
                 if self.chunk_offset >= chunk_len {
                     self.chunk_offset = 0;
-                    if !advance_chunk_indices(&mut self.chunk_indices, &self.grid_shape) {
-                        self.done = true;
-                        return Ok(None);
-                    }
+                    self.current_chunk_indices = None;
                 }
                 continue;
             }
@@ -547,15 +557,15 @@ impl ZarrSource {
                 
                 // For variables with different dimensionality or chunk sizes,
                 // compute the correct chunk indices and offsets.
-                let (var_chunk_indices, var_offsets) = if var_meta.dims.len() == self.dims.len() 
-                    && var_meta.dims == self.dims 
+                let (var_chunk_indices, var_offsets) = if var_meta.dims.len() == self.dims.len()
+                    && var_meta.dims == self.dims
                 {
                     // Same dims - use primary chunk indices directly
-                    (self.chunk_indices.clone(), vec![0; self.dims.len()])
+                    (idx.clone(), vec![0; self.dims.len()])
                 } else {
                     // Different dims or chunk sizes - compute proper mapping
                     compute_var_chunk_info(
-                        &self.chunk_indices,
+                        idx,
                         &chunk_shape,
                         &self.dims,
                         &var_meta.dims,
@@ -703,7 +713,7 @@ impl ZarrSource {
             // }
             // Note: We don't apply the predicate here anymore - this caused type inference 
             // issues with datetime/duration columns in the Polars lazy filter.
-            // The constraints are used for chunk pruning, and the Python layer handles
+            // The chunk plan is used for chunk pruning, and the Python layer handles
             // final row filtering if needed.
 
             return Ok(Some(PyDataFrame(df)));
@@ -719,20 +729,6 @@ fn compute_strides(chunk_shape: &[u64]) -> Vec<u64> {
         }
     }
     strides
-}
-
-fn advance_chunk_indices(indices: &mut [u64], grid_shape: &[u64]) -> bool {
-    if indices.is_empty() {
-        return false;
-    }
-    for i in (0..indices.len()).rev() {
-        indices[i] += 1;
-        if indices[i] < grid_shape[i] {
-            return true;
-        }
-        indices[i] = 0;
-    }
-    false
 }
 
 /// Compute the variable chunk indices and within-chunk offset for a variable
@@ -798,7 +794,7 @@ fn panic_to_py_err(e: Box<dyn std::any::Any + Send>) -> PyErr {
     } else if let Some(s) = e.downcast_ref::<String>() {
         s.clone()
     } else {
-        "panic while compiling predicate constraints".to_string()
+        "panic while compiling predicate chunk plan".to_string()
     };
     PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(msg)
 }
@@ -812,193 +808,3 @@ impl ZarrSource {
     }
 }
 
-fn compile_dim_constraints(expr: &Expr, meta: &ZarrDatasetMeta) -> Option<Vec<(String, DimConstraint)>> {
-    let mut out: Vec<(String, DimConstraint)> = Vec::new();
-    if !collect_constraints(expr, meta, &mut out) {
-        return None;
-    }
-    // Merge constraints per column.
-    let mut merged: std::collections::BTreeMap<String, DimConstraint> = std::collections::BTreeMap::new();
-    for (col, c) in out {
-        let entry = merged.entry(col).or_default();
-        entry.eq = entry.eq.or(c.eq);
-        entry.min = match (entry.min, c.min) {
-            (Some(a), Some(b)) => Some(a.max(b)),
-            (None, Some(b)) => Some(b),
-            (Some(a), None) => Some(a),
-            (None, None) => None,
-        };
-        entry.max = match (entry.max, c.max) {
-            (Some(a), Some(b)) => Some(a.min(b)),
-            (None, Some(b)) => Some(b),
-            (Some(a), None) => Some(a),
-            (None, None) => None,
-        };
-    }
-    Some(merged.into_iter().collect())
-}
-
-fn collect_constraints(expr: &Expr, meta: &ZarrDatasetMeta, out: &mut Vec<(String, DimConstraint)>) -> bool {
-    match expr {
-        Expr::Alias(inner, _) => collect_constraints(inner, meta, out),
-        Expr::BinaryExpr { left, op, right } => {
-            use polars::prelude::Operator;
-            match op {
-                Operator::And | Operator::LogicalAnd => {
-                    collect_constraints(left, meta, out) && collect_constraints(right, meta, out)
-                }
-                Operator::Eq | Operator::GtEq | Operator::Gt | Operator::LtEq | Operator::Lt => {
-                    if let Some((col, lit)) = col_lit(left, right).or_else(|| col_lit(right, left))
-                    {
-                        // Get time encoding for this column if it exists
-                        let time_encoding = meta.arrays.get(&col).and_then(|a| a.time_encoding.as_ref());
-                        
-                        if let Some(v) = literal_to_f64(&lit, time_encoding) {
-                            let mut c = DimConstraint::default();
-                            match op {
-                                Operator::Eq => c.eq = Some(v),
-                                // We don't do strict bound nudging here; we still apply the full
-                                // predicate after materializing batches, so correctness is preserved.
-                                Operator::Gt => c.min = Some(v),
-                                Operator::GtEq => c.min = Some(v),
-                                Operator::Lt => c.max = Some(v),
-                                Operator::LtEq => c.max = Some(v),
-                                _ => {}
-                            }
-                            out.push((col, c));
-                            true
-                        } else {
-                            false
-                        }
-                    } else {
-                        false
-                    }
-                }
-                _ => false,
-            }
-        }
-        _ => false,
-    }
-}
-
-fn col_lit(col_side: &Expr, lit_side: &Expr) -> Option<(String, LiteralValue)> {
-    match (col_side, lit_side) {
-        (Expr::Column(name), Expr::Literal(lit)) => Some((name.to_string(), lit.clone())),
-        _ => None,
-    }
-}
-
-fn literal_to_f64(lit: &LiteralValue, time_encoding: Option<&TimeEncoding>) -> Option<f64> {
-    match lit {
-        LiteralValue::Scalar(s) => match s.clone().into_value() {
-            AnyValue::Int64(v) => Some(v as f64),
-            AnyValue::Int32(v) => Some(v as f64),
-            AnyValue::Int16(v) => Some(v as f64),
-            AnyValue::Int8(v) => Some(v as f64),
-            AnyValue::UInt64(v) => Some(v as f64),
-            AnyValue::UInt32(v) => Some(v as f64),
-            AnyValue::UInt16(v) => Some(v as f64),
-            AnyValue::UInt8(v) => Some(v as f64),
-            AnyValue::Float64(v) => Some(v),
-            AnyValue::Float32(v) => Some(v as f64),
-            // Handle datetime - convert time_unit to ns, then to raw encoding if available
-            AnyValue::Datetime(value, time_unit, _) => {
-                // Convert to nanoseconds based on time_unit
-                let ns = match time_unit {
-                    polars::prelude::TimeUnit::Nanoseconds => value,
-                    polars::prelude::TimeUnit::Microseconds => value * 1_000,
-                    polars::prelude::TimeUnit::Milliseconds => value * 1_000_000,
-                };
-                if let Some(enc) = time_encoding {
-                    Some(enc.encode(ns) as f64)
-                } else {
-                    Some(ns as f64)
-                }
-            }
-            AnyValue::Date(days) => {
-                let ns = days as i64 * 86400 * 1_000_000_000;
-                if let Some(enc) = time_encoding {
-                    Some(enc.encode(ns) as f64)
-                } else {
-                    Some(ns as f64)
-                }
-            }
-            // Handle duration - convert time_unit to ns, then to raw encoding if available
-            AnyValue::Duration(value, time_unit) => {
-                // Convert to nanoseconds based on time_unit
-                let ns = match time_unit {
-                    polars::prelude::TimeUnit::Nanoseconds => value,
-                    polars::prelude::TimeUnit::Microseconds => value * 1_000,
-                    polars::prelude::TimeUnit::Milliseconds => value * 1_000_000,
-                };
-                if let Some(enc) = time_encoding {
-                    Some(enc.encode(ns) as f64)
-                } else {
-                    Some(ns as f64)
-                }
-            }
-            _ => None,
-        },
-        _ => None,
-    }
-}
-
-fn chunk_satisfies_constraints(
-    src: &ZarrSource,
-    origin: &[u64],
-    chunk_shape: &[u64],
-    constraints: &[(String, DimConstraint)],
-) -> PyResult<bool> {
-    for (col, c) in constraints {
-        let Some(dim_idx) = src.dims.iter().position(|d| d == col) else {
-            // constraint on non-dim column -> cannot prune safely
-            return Ok(true);
-        };
-
-        let (min_v, max_v) = if let Some(coord_meta) = src.meta.arrays.get(col) {
-            // Use coordinate values, if present (numeric only).
-            let coord_arr = Array::open(src.store.clone(), &coord_meta.path).map_err(to_py_err)?;
-            let start = origin[dim_idx];
-            let len = chunk_shape[dim_idx];
-            let data = retrieve_1d_subset(&coord_arr, start, len).map_err(to_py_err)?;
-            let (mn, mx) = min_max_f64(&data).ok_or_else(|| {
-                PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                    "unsupported coord dtype for predicate pushdown",
-                )
-            })?;
-            (mn, mx)
-        } else {
-            let mn = origin[dim_idx] as f64;
-            let mx = (origin[dim_idx] + chunk_shape[dim_idx].saturating_sub(1)) as f64;
-            (mn, mx)
-        };
-
-        if let Some(eq) = c.eq {
-            if eq < min_v || eq > max_v {
-                return Ok(false);
-            }
-        }
-        if let Some(min) = c.min {
-            if max_v < min {
-                return Ok(false);
-            }
-        }
-        if let Some(max) = c.max {
-            if min_v > max {
-                return Ok(false);
-            }
-        }
-    }
-    Ok(true)
-}
-
-fn min_max_f64(data: &ColumnData) -> Option<(f64, f64)> {
-    let mut mn: Option<f64> = None;
-    let mut mx: Option<f64> = None;
-    for i in 0..data.len() {
-        let v = data.get_f64(i)?;
-        mn = Some(mn.map(|x| x.min(v)).unwrap_or(v));
-        mx = Some(mx.map(|x| x.max(v)).unwrap_or(v));
-    }
-    Some((mn?, mx?))
-}

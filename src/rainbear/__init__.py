@@ -5,12 +5,13 @@ from typing import Iterator
 import polars as pl
 from polars.io.plugins import register_io_source
 
-from rainbear._core import ZarrSource, hello_from_bin
+from rainbear._core import ZarrSource, hello_from_bin, selected_chunks
 
 __all__ = [
     "ZarrSource",
     "hello_from_bin",
     "scan_zarr",
+    "selected_chunks",
     "main",
 ]
 
