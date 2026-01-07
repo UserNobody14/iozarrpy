@@ -452,7 +452,7 @@ wheels = [
 
 [[package]]
 name = "rainbear"
-version = "1.1.0a1"
+version = "1.1.0b1"
 source = { editable = "." }
 dependencies = [
     { name = "polars" },
