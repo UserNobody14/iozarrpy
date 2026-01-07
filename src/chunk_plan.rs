@@ -2,7 +2,9 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use polars::prelude::{AnyValue, Expr, LiteralValue, Operator};
+use polars::prelude::{
+    AnyValue, BooleanFunction, Expr, FunctionExpr, LiteralValue, Operator, Scalar,
+};
 use zarrs::array::Array;
 use zarrs::array_subset::ArraySubset;
 
@@ -85,14 +87,19 @@ fn pick_tighter_min(
     match (a, b) {
         (None, None) => None,
         (Some(x), None) | (None, Some(x)) => Some(x),
-        (Some((av, ak)), Some((bv, bk))) => {
-            match av.partial_cmp(&bv) {
-                Some(std::cmp::Ordering::Less) => Some((bv, bk)),
-                Some(std::cmp::Ordering::Greater) => Some((av, ak)),
-                Some(std::cmp::Ordering::Equal) => Some((av, if ak == BoundKind::Exclusive || bk == BoundKind::Exclusive { BoundKind::Exclusive } else { BoundKind::Inclusive })),
-                None => None,
-            }
-        }
+        (Some((av, ak)), Some((bv, bk))) => match av.partial_cmp(&bv) {
+            Some(std::cmp::Ordering::Less) => Some((bv, bk)),
+            Some(std::cmp::Ordering::Greater) => Some((av, ak)),
+            Some(std::cmp::Ordering::Equal) => Some((
+                av,
+                if ak == BoundKind::Exclusive || bk == BoundKind::Exclusive {
+                    BoundKind::Exclusive
+                } else {
+                    BoundKind::Inclusive
+                },
+            )),
+            None => None,
+        },
     }
 }
 
@@ -103,14 +110,19 @@ fn pick_tighter_max(
     match (a, b) {
         (None, None) => None,
         (Some(x), None) | (None, Some(x)) => Some(x),
-        (Some((av, ak)), Some((bv, bk))) => {
-            match av.partial_cmp(&bv) {
-                Some(std::cmp::Ordering::Less) => Some((av, ak)),
-                Some(std::cmp::Ordering::Greater) => Some((bv, bk)),
-                Some(std::cmp::Ordering::Equal) => Some((av, if ak == BoundKind::Exclusive || bk == BoundKind::Exclusive { BoundKind::Exclusive } else { BoundKind::Inclusive })),
-                None => None,
-            }
-        }
+        (Some((av, ak)), Some((bv, bk))) => match av.partial_cmp(&bv) {
+            Some(std::cmp::Ordering::Less) => Some((av, ak)),
+            Some(std::cmp::Ordering::Greater) => Some((bv, bk)),
+            Some(std::cmp::Ordering::Equal) => Some((
+                av,
+                if ak == BoundKind::Exclusive || bk == BoundKind::Exclusive {
+                    BoundKind::Exclusive
+                } else {
+                    BoundKind::Inclusive
+                },
+            )),
+            None => None,
+        },
     }
 }
 
@@ -165,7 +177,11 @@ pub(crate) struct ChunkPlan {
 }
 
 impl ChunkPlan {
-    pub(crate) fn all(dims: Vec<String>, grid_shape: Vec<u64>, regular_chunk_shape: Vec<u64>) -> Self {
+    pub(crate) fn all(
+        dims: Vec<String>,
+        grid_shape: Vec<u64>,
+        regular_chunk_shape: Vec<u64>,
+    ) -> Self {
         Self {
             dims,
             grid_shape,
@@ -174,7 +190,11 @@ impl ChunkPlan {
         }
     }
 
-    pub(crate) fn empty(dims: Vec<String>, grid_shape: Vec<u64>, regular_chunk_shape: Vec<u64>) -> Self {
+    pub(crate) fn empty(
+        dims: Vec<String>,
+        grid_shape: Vec<u64>,
+        regular_chunk_shape: Vec<u64>,
+    ) -> Self {
         Self {
             dims,
             grid_shape,
@@ -236,14 +256,18 @@ impl ChunkIndexIter {
     fn push_node(&mut self, node: ChunkPlanNode, grid_shape: Vec<u64>) {
         match node {
             ChunkPlanNode::Empty => self.stack.push(OwnedIterFrame::Empty),
-            ChunkPlanNode::AllChunks => self.stack.push(OwnedIterFrame::AllChunks(AllChunksIter::new(&grid_shape))),
-            ChunkPlanNode::Rect(ranges) => self.stack.push(OwnedIterFrame::Rect(RectIter::new(&ranges))),
-            ChunkPlanNode::PointSet(points) => self
+            ChunkPlanNode::AllChunks => self
                 .stack
-                .push(OwnedIterFrame::PointSet { points, idx: 0 }),
-            ChunkPlanNode::Union(children) => self
+                .push(OwnedIterFrame::AllChunks(AllChunksIter::new(&grid_shape))),
+            ChunkPlanNode::Rect(ranges) => self
                 .stack
-                .push(OwnedIterFrame::Union(UnionOwnedIter::new(children, grid_shape))),
+                .push(OwnedIterFrame::Rect(RectIter::new(&ranges))),
+            ChunkPlanNode::PointSet(points) => {
+                self.stack.push(OwnedIterFrame::PointSet { points, idx: 0 })
+            }
+            ChunkPlanNode::Union(children) => self.stack.push(OwnedIterFrame::Union(
+                UnionOwnedIter::new(children, grid_shape),
+            )),
         }
     }
 }
@@ -342,10 +366,8 @@ struct RectIter {
 impl RectIter {
     fn new(ranges: &[DimChunkRange]) -> Self {
         let cur = ranges.iter().map(|r| r.start_chunk).collect::<Vec<_>>();
-        let done = ranges.is_empty()
-            || ranges
-                .iter()
-                .any(|r| r.end_chunk_inclusive < r.start_chunk);
+        let done =
+            ranges.is_empty() || ranges.iter().any(|r| r.end_chunk_inclusive < r.start_chunk);
         Self {
             ranges: ranges.to_vec(),
             cur,
@@ -437,7 +459,11 @@ pub(crate) trait CoordIndexResolver {
         range: &ValueRange,
     ) -> Result<Option<IndexRange>, ResolveError>;
 
-    fn index_for_value(&mut self, dim: &str, value: &CoordScalar) -> Result<Option<u64>, ResolveError>;
+    fn index_for_value(
+        &mut self,
+        dim: &str,
+        value: &CoordScalar,
+    ) -> Result<Option<u64>, ResolveError>;
 
     fn coord_read_count(&self) -> u64 {
         0
@@ -468,7 +494,11 @@ impl CoordIndexResolver for IdentityIndexResolver<'_> {
         Ok(None)
     }
 
-    fn index_for_value(&mut self, _dim: &str, _value: &CoordScalar) -> Result<Option<u64>, ResolveError> {
+    fn index_for_value(
+        &mut self,
+        _dim: &str,
+        _value: &CoordScalar,
+    ) -> Result<Option<u64>, ResolveError> {
         Ok(None)
     }
 }
@@ -476,7 +506,8 @@ impl CoordIndexResolver for IdentityIndexResolver<'_> {
 pub(crate) struct MonotonicCoordResolver<'a> {
     meta: &'a ZarrDatasetMeta,
     store: zarrs::storage::ReadableWritableListableStorage,
-    coord_arrays: BTreeMap<String, Array<dyn zarrs::storage::ReadableWritableListableStorageTraits>>,
+    coord_arrays:
+        BTreeMap<String, Array<dyn zarrs::storage::ReadableWritableListableStorageTraits>>,
     read_count: Arc<AtomicU64>,
     monotonic_cache: BTreeMap<String, Option<MonotonicDirection>>,
 }
@@ -508,7 +539,8 @@ impl<'a> MonotonicCoordResolver<'a> {
     fn coord_array(
         &mut self,
         dim: &str,
-    ) -> Result<&Array<dyn zarrs::storage::ReadableWritableListableStorageTraits>, ResolveError> {
+    ) -> Result<&Array<dyn zarrs::storage::ReadableWritableListableStorageTraits>, ResolveError>
+    {
         use std::collections::btree_map::Entry;
 
         let Some(m) = self.meta.arrays.get(dim) else {
@@ -554,7 +586,8 @@ impl<'a> MonotonicCoordResolver<'a> {
             "float32" => {
                 let v = arr
                     .retrieve_array_subset::<Vec<f32>>(&subset)
-                    .map_err(|e| ResolveError::Zarr(e.to_string()))?[0] as f64;
+                    .map_err(|e| ResolveError::Zarr(e.to_string()))?[0]
+                    as f64;
                 Ok(CoordScalar::F64(v))
             }
             "int64" => {
@@ -566,19 +599,22 @@ impl<'a> MonotonicCoordResolver<'a> {
             "int32" => {
                 let raw = arr
                     .retrieve_array_subset::<Vec<i32>>(&subset)
-                    .map_err(|e| ResolveError::Zarr(e.to_string()))?[0] as i64;
+                    .map_err(|e| ResolveError::Zarr(e.to_string()))?[0]
+                    as i64;
                 Ok(apply_time_encoding(raw, te))
             }
             "int16" => {
                 let raw = arr
                     .retrieve_array_subset::<Vec<i16>>(&subset)
-                    .map_err(|e| ResolveError::Zarr(e.to_string()))?[0] as i64;
+                    .map_err(|e| ResolveError::Zarr(e.to_string()))?[0]
+                    as i64;
                 Ok(apply_time_encoding(raw, te))
             }
             "int8" => {
                 let raw = arr
                     .retrieve_array_subset::<Vec<i8>>(&subset)
-                    .map_err(|e| ResolveError::Zarr(e.to_string()))?[0] as i64;
+                    .map_err(|e| ResolveError::Zarr(e.to_string()))?[0]
+                    as i64;
                 Ok(apply_time_encoding(raw, te))
             }
             "uint64" => {
@@ -590,19 +626,22 @@ impl<'a> MonotonicCoordResolver<'a> {
             "uint32" => {
                 let v = arr
                     .retrieve_array_subset::<Vec<u32>>(&subset)
-                    .map_err(|e| ResolveError::Zarr(e.to_string()))?[0] as u64;
+                    .map_err(|e| ResolveError::Zarr(e.to_string()))?[0]
+                    as u64;
                 Ok(CoordScalar::U64(v))
             }
             "uint16" => {
                 let v = arr
                     .retrieve_array_subset::<Vec<u16>>(&subset)
-                    .map_err(|e| ResolveError::Zarr(e.to_string()))?[0] as u64;
+                    .map_err(|e| ResolveError::Zarr(e.to_string()))?[0]
+                    as u64;
                 Ok(CoordScalar::U64(v))
             }
             "uint8" => {
                 let v = arr
                     .retrieve_array_subset::<Vec<u8>>(&subset)
-                    .map_err(|e| ResolveError::Zarr(e.to_string()))?[0] as u64;
+                    .map_err(|e| ResolveError::Zarr(e.to_string()))?[0]
+                    as u64;
                 Ok(CoordScalar::U64(v))
             }
             other => Err(ResolveError::UnsupportedCoordDtype(other.to_string())),
@@ -633,7 +672,9 @@ impl<'a> MonotonicCoordResolver<'a> {
         let first = self.scalar_at(dim, 0)?;
         let last = self.scalar_at(dim, n - 1)?;
         let dir = match first.partial_cmp(&last) {
-            Some(std::cmp::Ordering::Less | std::cmp::Ordering::Equal) => MonotonicDirection::Increasing,
+            Some(std::cmp::Ordering::Less | std::cmp::Ordering::Equal) => {
+                MonotonicDirection::Increasing
+            }
             Some(std::cmp::Ordering::Greater) => MonotonicDirection::Decreasing,
             None => {
                 self.monotonic_cache.insert(dim.to_string(), None);
@@ -662,8 +703,14 @@ impl<'a> MonotonicCoordResolver<'a> {
             if let Some(p) = &prev {
                 let ord = p.partial_cmp(&v);
                 let ok = match (dir, ord) {
-                    (MonotonicDirection::Increasing, Some(std::cmp::Ordering::Less | std::cmp::Ordering::Equal)) => true,
-                    (MonotonicDirection::Decreasing, Some(std::cmp::Ordering::Greater | std::cmp::Ordering::Equal)) => true,
+                    (
+                        MonotonicDirection::Increasing,
+                        Some(std::cmp::Ordering::Less | std::cmp::Ordering::Equal),
+                    ) => true,
+                    (
+                        MonotonicDirection::Decreasing,
+                        Some(std::cmp::Ordering::Greater | std::cmp::Ordering::Equal),
+                    ) => true,
                     _ => false,
                 };
                 if !ok {
@@ -695,9 +742,17 @@ impl<'a> MonotonicCoordResolver<'a> {
             let v = self.scalar_at(dim, mid)?;
             let cmp = v.partial_cmp(target);
             let go_left = match (dir, strict, cmp) {
-                (MonotonicDirection::Increasing, false, Some(std::cmp::Ordering::Greater | std::cmp::Ordering::Equal)) => true,
+                (
+                    MonotonicDirection::Increasing,
+                    false,
+                    Some(std::cmp::Ordering::Greater | std::cmp::Ordering::Equal),
+                ) => true,
                 (MonotonicDirection::Increasing, true, Some(std::cmp::Ordering::Greater)) => true,
-                (MonotonicDirection::Decreasing, false, Some(std::cmp::Ordering::Less | std::cmp::Ordering::Equal)) => true,
+                (
+                    MonotonicDirection::Decreasing,
+                    false,
+                    Some(std::cmp::Ordering::Less | std::cmp::Ordering::Equal),
+                ) => true,
                 (MonotonicDirection::Decreasing, true, Some(std::cmp::Ordering::Less)) => true,
                 _ => false,
             };
@@ -729,9 +784,17 @@ impl<'a> MonotonicCoordResolver<'a> {
             let v = self.scalar_at(dim, mid)?;
             let cmp = v.partial_cmp(target);
             let go_left = match (dir, strict, cmp) {
-                (MonotonicDirection::Increasing, true, Some(std::cmp::Ordering::Greater | std::cmp::Ordering::Equal)) => true, // >= max
+                (
+                    MonotonicDirection::Increasing,
+                    true,
+                    Some(std::cmp::Ordering::Greater | std::cmp::Ordering::Equal),
+                ) => true, // >= max
                 (MonotonicDirection::Increasing, false, Some(std::cmp::Ordering::Greater)) => true, // > max
-                (MonotonicDirection::Decreasing, true, Some(std::cmp::Ordering::Less | std::cmp::Ordering::Equal)) => true, // <= max violates for decreasing? symmetric
+                (
+                    MonotonicDirection::Decreasing,
+                    true,
+                    Some(std::cmp::Ordering::Less | std::cmp::Ordering::Equal),
+                ) => true, // <= max violates for decreasing? symmetric
                 (MonotonicDirection::Decreasing, false, Some(std::cmp::Ordering::Less)) => true,
                 _ => false,
             };
@@ -794,10 +857,17 @@ impl CoordIndexResolver for MonotonicCoordResolver<'_> {
             n
         };
 
-        Ok(Some(IndexRange { start, end_exclusive }))
+        Ok(Some(IndexRange {
+            start,
+            end_exclusive,
+        }))
     }
 
-    fn index_for_value(&mut self, dim: &str, value: &CoordScalar) -> Result<Option<u64>, ResolveError> {
+    fn index_for_value(
+        &mut self,
+        dim: &str,
+        value: &CoordScalar,
+    ) -> Result<Option<u64>, ResolveError> {
         let Some(meta) = self.meta.arrays.get(dim) else {
             return Ok(None);
         };
@@ -866,43 +936,46 @@ fn literal_anyvalue(lit: &LiteralValue) -> Option<AnyValue<'static>> {
     }
 }
 
-fn literal_to_scalar(lit: &LiteralValue, time_encoding: Option<&TimeEncoding>) -> Option<CoordScalar> {
+fn literal_to_scalar(
+    lit: &LiteralValue,
+    time_encoding: Option<&TimeEncoding>,
+) -> Option<CoordScalar> {
     let _ = time_encoding;
     match literal_anyvalue(lit)? {
-            AnyValue::Int64(v) => Some(CoordScalar::I64(v)),
-            AnyValue::Int32(v) => Some(CoordScalar::I64(v as i64)),
-            AnyValue::Int16(v) => Some(CoordScalar::I64(v as i64)),
-            AnyValue::Int8(v) => Some(CoordScalar::I64(v as i64)),
-            AnyValue::UInt64(v) => Some(CoordScalar::U64(v)),
-            AnyValue::UInt32(v) => Some(CoordScalar::U64(v as u64)),
-            AnyValue::UInt16(v) => Some(CoordScalar::U64(v as u64)),
-            AnyValue::UInt8(v) => Some(CoordScalar::U64(v as u64)),
-            AnyValue::Float64(v) => Some(CoordScalar::F64(v)),
-            AnyValue::Float32(v) => Some(CoordScalar::F64(v as f64)),
-            AnyValue::Datetime(value, time_unit, _) => {
-                let ns = match time_unit {
-                    polars::prelude::TimeUnit::Nanoseconds => value,
-                    polars::prelude::TimeUnit::Microseconds => value * 1_000,
-                    polars::prelude::TimeUnit::Milliseconds => value * 1_000_000,
-                };
-                let _ = time_encoding;
-                Some(CoordScalar::DatetimeNs(ns))
-            }
-            AnyValue::Date(days) => {
-                let ns = days as i64 * 86400 * 1_000_000_000;
-                let _ = time_encoding;
-                Some(CoordScalar::DatetimeNs(ns))
-            }
-            AnyValue::Duration(value, time_unit) => {
-                let ns = match time_unit {
-                    polars::prelude::TimeUnit::Nanoseconds => value,
-                    polars::prelude::TimeUnit::Microseconds => value * 1_000,
-                    polars::prelude::TimeUnit::Milliseconds => value * 1_000_000,
-                };
-                let _ = time_encoding;
-                Some(CoordScalar::DurationNs(ns))
-            }
-            _ => None,
+        AnyValue::Int64(v) => Some(CoordScalar::I64(v)),
+        AnyValue::Int32(v) => Some(CoordScalar::I64(v as i64)),
+        AnyValue::Int16(v) => Some(CoordScalar::I64(v as i64)),
+        AnyValue::Int8(v) => Some(CoordScalar::I64(v as i64)),
+        AnyValue::UInt64(v) => Some(CoordScalar::U64(v)),
+        AnyValue::UInt32(v) => Some(CoordScalar::U64(v as u64)),
+        AnyValue::UInt16(v) => Some(CoordScalar::U64(v as u64)),
+        AnyValue::UInt8(v) => Some(CoordScalar::U64(v as u64)),
+        AnyValue::Float64(v) => Some(CoordScalar::F64(v)),
+        AnyValue::Float32(v) => Some(CoordScalar::F64(v as f64)),
+        AnyValue::Datetime(value, time_unit, _) => {
+            let ns = match time_unit {
+                polars::prelude::TimeUnit::Nanoseconds => value,
+                polars::prelude::TimeUnit::Microseconds => value * 1_000,
+                polars::prelude::TimeUnit::Milliseconds => value * 1_000_000,
+            };
+            let _ = time_encoding;
+            Some(CoordScalar::DatetimeNs(ns))
+        }
+        AnyValue::Date(days) => {
+            let ns = days as i64 * 86400 * 1_000_000_000;
+            let _ = time_encoding;
+            Some(CoordScalar::DatetimeNs(ns))
+        }
+        AnyValue::Duration(value, time_unit) => {
+            let ns = match time_unit {
+                polars::prelude::TimeUnit::Nanoseconds => value,
+                polars::prelude::TimeUnit::Microseconds => value * 1_000,
+                polars::prelude::TimeUnit::Milliseconds => value * 1_000_000,
+            };
+            let _ = time_encoding;
+            Some(CoordScalar::DurationNs(ns))
+        }
+        _ => None,
     }
 }
 
@@ -998,6 +1071,7 @@ fn and_nodes(a: ChunkPlanNode, b: ChunkPlanNode) -> ChunkPlanNode {
 fn or_nodes(a: ChunkPlanNode, b: ChunkPlanNode) -> ChunkPlanNode {
     match (a, b) {
         (ChunkPlanNode::Empty, x) | (x, ChunkPlanNode::Empty) => x,
+        (ChunkPlanNode::AllChunks, _) | (_, ChunkPlanNode::AllChunks) => ChunkPlanNode::AllChunks,
         (ChunkPlanNode::Union(mut xs), ChunkPlanNode::Union(ys)) => {
             xs.extend(ys);
             ChunkPlanNode::Union(xs)
@@ -1033,16 +1107,27 @@ pub(crate) fn compile_expr_to_chunk_plan(
         meta.dims.clone()
     };
 
-    let primary = Array::open(store.clone(), &primary_meta.path).map_err(|_| CompileError::Unsupported)?;
+    let primary =
+        Array::open(store.clone(), &primary_meta.path).map_err(|_| CompileError::Unsupported)?;
     let grid_shape = primary.chunk_grid().grid_shape().to_vec();
     let zero = vec![0u64; primary.dimensionality()];
-    let chunk_shape_nz = primary.chunk_shape(&zero).map_err(|_| CompileError::Unsupported)?;
+    let chunk_shape_nz = primary
+        .chunk_shape(&zero)
+        .map_err(|_| CompileError::Unsupported)?;
     let regular_chunk_shape = chunk_shape_nz.iter().map(|nz| nz.get()).collect::<Vec<_>>();
 
     let mut resolver = MonotonicCoordResolver::new(meta, store);
-    let root = compile_node(expr, meta, &dims, &grid_shape, &regular_chunk_shape, &mut resolver)
-        .unwrap_or(ChunkPlanNode::AllChunks);
-    let plan = ChunkPlan::from_root(dims, grid_shape, regular_chunk_shape, root);
+    let root = compile_node(
+        expr,
+        meta,
+        &dims,
+        &grid_shape,
+        &regular_chunk_shape,
+        &mut resolver,
+    )
+    .unwrap_or(ChunkPlanNode::AllChunks);
+    let grid_shape_vec = grid_shape.to_vec();
+    let plan = ChunkPlan::from_root(dims, grid_shape_vec, regular_chunk_shape, root);
     let stats = PlannerStats {
         coord_reads: resolver.coord_read_count(),
     };
@@ -1058,27 +1143,99 @@ fn compile_node(
     resolver: &mut dyn CoordIndexResolver,
 ) -> Result<ChunkPlanNode, CompileError> {
     match expr {
-        Expr::Alias(inner, _) => compile_node(inner, meta, dims, grid_shape, regular_chunk_shape, resolver),
+        Expr::Alias(inner, _) => {
+            compile_node(inner, meta, dims, grid_shape, regular_chunk_shape, resolver)
+        }
+        Expr::KeepName(inner) => {
+            compile_node(inner, meta, dims, grid_shape, regular_chunk_shape, resolver)
+        }
+        Expr::RenameAlias { expr, .. } => {
+            compile_node(expr, meta, dims, grid_shape, regular_chunk_shape, resolver)
+        }
+        Expr::Cast { expr, .. } => {
+            compile_node(expr, meta, dims, grid_shape, regular_chunk_shape, resolver)
+        }
+        Expr::Sort { expr, .. } => {
+            compile_node(expr, meta, dims, grid_shape, regular_chunk_shape, resolver)
+        }
+        Expr::SortBy { expr, .. } => {
+            compile_node(expr, meta, dims, grid_shape, regular_chunk_shape, resolver)
+        }
+        Expr::Explode { input, .. } => {
+            compile_node(input, meta, dims, grid_shape, regular_chunk_shape, resolver)
+        }
+        Expr::Slice { input, .. } => {
+            compile_node(input, meta, dims, grid_shape, regular_chunk_shape, resolver)
+        }
+        // For window expressions, just compile the function expression only for now.
+        // TODO: handle partition_by and order_by if needed.
+        Expr::Over { function, .. } => compile_node(
+            function,
+            meta,
+            dims,
+            grid_shape,
+            regular_chunk_shape,
+            resolver,
+        ),
+        // Expr::Rolling {
+        //     function,
+        //     index_column,
+        //     period,
+        //     offset,
+        //     closed_window,
+        // } => compile_node(
+        //     function,
+        //     meta,
+        //     dims,
+        //     grid_shape,
+        //     regular_chunk_shape,
+        //     resolver,
+        // ),
+        // Expr::Window { function, .. } => compile_node(function, meta, dims, grid_shape, regular_chunk_shape, resolver),
+        // If a filter expression is used where we expect a predicate, focus on the predicate.
+        Expr::Filter { by, .. } => {
+            compile_node(by, meta, dims, grid_shape, regular_chunk_shape, resolver)
+        }
         Expr::BinaryExpr { left, op, right } => {
             match op {
                 Operator::And | Operator::LogicalAnd => {
-                    let a = compile_node(left, meta, dims, grid_shape, regular_chunk_shape, resolver)?;
-                    let b = compile_node(right, meta, dims, grid_shape, regular_chunk_shape, resolver)?;
+                    // If one side is unsupported, keep whatever constraints we can from the other.
+                    let a =
+                        compile_node(left, meta, dims, grid_shape, regular_chunk_shape, resolver)
+                            .unwrap_or(ChunkPlanNode::AllChunks);
+                    let b =
+                        compile_node(right, meta, dims, grid_shape, regular_chunk_shape, resolver)
+                            .unwrap_or(ChunkPlanNode::AllChunks);
                     Ok(and_nodes(a, b))
                 }
                 Operator::Or | Operator::LogicalOr => {
-                    let a = compile_node(left, meta, dims, grid_shape, regular_chunk_shape, resolver)?;
-                    let b = compile_node(right, meta, dims, grid_shape, regular_chunk_shape, resolver)?;
+                    // For OR, if either side is unsupported we conservatively plan all chunks.
+                    let a =
+                        compile_node(left, meta, dims, grid_shape, regular_chunk_shape, resolver)
+                            .unwrap_or(ChunkPlanNode::AllChunks);
+                    let b =
+                        compile_node(right, meta, dims, grid_shape, regular_chunk_shape, resolver)
+                            .unwrap_or(ChunkPlanNode::AllChunks);
                     Ok(or_nodes(a, b))
                 }
                 Operator::Eq | Operator::GtEq | Operator::Gt | Operator::LtEq | Operator::Lt => {
-                    if let Some((col, lit)) = col_lit(left, right).or_else(|| col_lit(right, left)) {
+                    if let Some((col, lit)) = col_lit(left, right).or_else(|| col_lit(right, left))
+                    {
                         let op_eff = if matches!(left.as_ref(), Expr::Literal(_)) {
                             reverse_operator(*op)
                         } else {
                             *op
                         };
-                        compile_cmp(&col, op_eff, &lit, meta, dims, grid_shape, regular_chunk_shape, resolver)
+                        compile_cmp(
+                            &col,
+                            op_eff,
+                            &lit,
+                            meta,
+                            dims,
+                            grid_shape,
+                            regular_chunk_shape,
+                            resolver,
+                        )
                     } else {
                         Err(CompileError::Unsupported)
                     }
@@ -1086,7 +1243,233 @@ fn compile_node(
                 _ => Err(CompileError::Unsupported),
             }
         }
-        _ => Err(CompileError::Unsupported),
+        Expr::Literal(lit) => {
+            // Only boolean-ish literals can be predicates.
+            match literal_anyvalue(lit) {
+                Some(AnyValue::Boolean(true)) => Ok(ChunkPlanNode::AllChunks),
+                Some(AnyValue::Boolean(false)) => Ok(ChunkPlanNode::Empty),
+                // In Polars filtering, null predicate behaves like "keep nothing".
+                Some(AnyValue::Null) => Ok(ChunkPlanNode::Empty),
+                _ => Err(CompileError::Unsupported),
+            }
+        }
+        Expr::Function { input, function } => {
+            match function {
+                FunctionExpr::Boolean(bf) => compile_boolean_function(
+                    bf,
+                    input,
+                    meta,
+                    dims,
+                    grid_shape,
+                    regular_chunk_shape,
+                    resolver,
+                ),
+                // Most functions transform values in ways that we can't safely map to chunk-level constraints.
+                _ => Err(CompileError::Unsupported),
+            }
+        }
+
+        // Variants without a meaningful chunk-planning representation.
+        Expr::Element
+        | Expr::Column(_)
+        | Expr::Selector(_)
+        | Expr::DataTypeFunction(_)
+        | Expr::Gather { .. }
+        | Expr::Agg(_)
+        | Expr::Ternary { .. }
+        | Expr::Len
+        | Expr::AnonymousFunction { .. }
+        | Expr::Eval { .. }
+        | Expr::SubPlan(_, _)
+        | Expr::Field(_) => Err(CompileError::Unsupported),
+    }
+}
+
+fn compile_boolean_function(
+    bf: &BooleanFunction,
+    input: &[Expr],
+    meta: &ZarrDatasetMeta,
+    dims: &[String],
+    grid_shape: &[u64],
+    regular_chunk_shape: &[u64],
+    resolver: &mut dyn CoordIndexResolver,
+) -> Result<ChunkPlanNode, CompileError> {
+    match bf {
+        BooleanFunction::Not => {
+            let [arg] = input else {
+                return Err(CompileError::Unsupported);
+            };
+            // Try constant fold first.
+            if let Expr::Literal(lit) = strip_wrappers(arg) {
+                return match literal_anyvalue(lit) {
+                    Some(AnyValue::Boolean(true)) => Ok(ChunkPlanNode::Empty),
+                    Some(AnyValue::Boolean(false)) => Ok(ChunkPlanNode::AllChunks),
+                    Some(AnyValue::Null) => Ok(ChunkPlanNode::Empty),
+                    _ => Ok(ChunkPlanNode::AllChunks),
+                };
+            }
+
+            // If the inner predicate is known to match nothing, NOT(...) matches everything.
+            // Otherwise we can't represent complements with current plan nodes.
+            match compile_node(arg, meta, dims, grid_shape, regular_chunk_shape, resolver)
+                .unwrap_or(ChunkPlanNode::AllChunks)
+            {
+                ChunkPlanNode::Empty => Ok(ChunkPlanNode::AllChunks),
+                _ => Ok(ChunkPlanNode::AllChunks),
+            }
+        }
+        BooleanFunction::IsNull | BooleanFunction::IsNotNull => {
+            let [arg] = input else {
+                return Err(CompileError::Unsupported);
+            };
+
+            // Constant fold when possible; otherwise don't constrain.
+            if let Expr::Literal(lit) = strip_wrappers(arg) {
+                let is_null = matches!(literal_anyvalue(lit), Some(AnyValue::Null));
+                let keep = match bf {
+                    BooleanFunction::IsNull => is_null,
+                    BooleanFunction::IsNotNull => !is_null,
+                    _ => unreachable!(),
+                };
+                return Ok(if keep {
+                    ChunkPlanNode::AllChunks
+                } else {
+                    ChunkPlanNode::Empty
+                });
+            }
+            Ok(ChunkPlanNode::AllChunks)
+        }
+        _ => {
+            // Future-proof handling for optional Polars boolean features without hard-referencing
+            // cfg-gated variants (e.g. `is_in`, `is_between`).
+            let name = bf.to_string();
+            match name.as_str() {
+                "is_between" => {
+                    compile_is_between(input, meta, dims, grid_shape, regular_chunk_shape, resolver)
+                }
+                "is_in" => {
+                    compile_is_in(input, meta, dims, grid_shape, regular_chunk_shape, resolver)
+                }
+                _ => Ok(ChunkPlanNode::AllChunks),
+            }
+        }
+    }
+}
+
+fn expr_to_col_name(e: &Expr) -> Option<&str> {
+    match strip_wrappers(e) {
+        Expr::Column(name) => Some(name.as_str()),
+        _ => None,
+    }
+}
+
+fn compile_is_between(
+    input: &[Expr],
+    meta: &ZarrDatasetMeta,
+    dims: &[String],
+    grid_shape: &[u64],
+    regular_chunk_shape: &[u64],
+    resolver: &mut dyn CoordIndexResolver,
+) -> Result<ChunkPlanNode, CompileError> {
+    let [expr, low, high] = input else {
+        return Err(CompileError::Unsupported);
+    };
+    let Some(col) = expr_to_col_name(expr) else {
+        return Ok(ChunkPlanNode::AllChunks);
+    };
+    let Expr::Literal(low_lit) = strip_wrappers(low) else {
+        return Ok(ChunkPlanNode::AllChunks);
+    };
+    let Expr::Literal(high_lit) = strip_wrappers(high) else {
+        return Ok(ChunkPlanNode::AllChunks);
+    };
+
+    // Conservatively assume a closed interval (inclusive bounds) to avoid false negatives.
+    let a = compile_cmp(
+        col,
+        Operator::GtEq,
+        low_lit,
+        meta,
+        dims,
+        grid_shape,
+        regular_chunk_shape,
+        resolver,
+    )
+    .unwrap_or(ChunkPlanNode::AllChunks);
+    let b = compile_cmp(
+        col,
+        Operator::LtEq,
+        high_lit,
+        meta,
+        dims,
+        grid_shape,
+        regular_chunk_shape,
+        resolver,
+    )
+    .unwrap_or(ChunkPlanNode::AllChunks);
+    Ok(and_nodes(a, b))
+}
+
+fn compile_is_in(
+    input: &[Expr],
+    meta: &ZarrDatasetMeta,
+    dims: &[String],
+    grid_shape: &[u64],
+    regular_chunk_shape: &[u64],
+    resolver: &mut dyn CoordIndexResolver,
+) -> Result<ChunkPlanNode, CompileError> {
+    let [expr, list] = input else {
+        return Err(CompileError::Unsupported);
+    };
+    let Some(col) = expr_to_col_name(expr) else {
+        return Ok(ChunkPlanNode::AllChunks);
+    };
+
+    let Expr::Literal(list_lit) = strip_wrappers(list) else {
+        return Ok(ChunkPlanNode::AllChunks);
+    };
+
+    match list_lit {
+        LiteralValue::Series(s) => {
+            let series = &**s;
+            // Prevent pathological unions for huge lists.
+            if series.len() > 4096 {
+                return Ok(ChunkPlanNode::AllChunks);
+            }
+
+            let mut out: Option<ChunkPlanNode> = None;
+            for av in series.iter() {
+                let av = av.into_static();
+                if matches!(av, AnyValue::Null) {
+                    // Null membership semantics depend on `nulls_equal`; we avoid constraining.
+                    return Ok(ChunkPlanNode::AllChunks);
+                }
+
+                let lit = LiteralValue::Scalar(Scalar::new(series.dtype().clone(), av));
+                let node = compile_cmp(
+                    col,
+                    Operator::Eq,
+                    &lit,
+                    meta,
+                    dims,
+                    grid_shape,
+                    regular_chunk_shape,
+                    resolver,
+                )
+                .unwrap_or(ChunkPlanNode::AllChunks);
+
+                // If any element falls back to AllChunks, the whole IN predicate becomes unconstrainable.
+                if matches!(node, ChunkPlanNode::AllChunks) {
+                    return Ok(ChunkPlanNode::AllChunks);
+                }
+                out = Some(match out.take() {
+                    None => node,
+                    Some(acc) => or_nodes(acc, node),
+                });
+            }
+            Ok(out.unwrap_or(ChunkPlanNode::Empty))
+        }
+        _ => Ok(ChunkPlanNode::AllChunks),
     }
 }
 
@@ -1100,7 +1483,10 @@ fn compile_cmp(
     regular_chunk_shape: &[u64],
     resolver: &mut dyn CoordIndexResolver,
 ) -> Result<ChunkPlanNode, CompileError> {
-    let dim_idx = dims.iter().position(|d| d == col).ok_or(CompileError::Unsupported)?;
+    let dim_idx = dims
+        .iter()
+        .position(|d| d == col)
+        .ok_or(CompileError::Unsupported)?;
 
     let time_encoding = meta.arrays.get(col).and_then(|a| a.time_encoding.as_ref());
     let Some(scalar) = literal_to_scalar(lit, time_encoding) else {
@@ -1139,5 +1525,3 @@ fn compile_cmp(
     rect[dim_idx] = dim_range;
     Ok(ChunkPlanNode::Rect(rect))
 }
-
-
