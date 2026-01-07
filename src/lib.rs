@@ -25,7 +25,7 @@ fn hello_from_bin() -> String {
 
 #[pyfunction]
 #[pyo3(signature = (zarr_url, predicate, variables=None))]
-fn selected_chunks(py: Python<'_>, zarr_url: String, predicate: &Bound<'_, PyAny>, variables: Option<Vec<String>>) -> PyResult<Vec<PyObject>> {
+fn selected_chunks(py: Python<'_>, zarr_url: String, predicate: &Bound<'_, PyAny>, variables: Option<Vec<String>>) -> PyResult<Vec<Py<PyAny>>> {
     let opened = open_store(&zarr_url).map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e))?;
     let meta = load_dataset_meta_from_opened(&opened)
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e))?;
@@ -61,7 +61,7 @@ fn selected_chunks(py: Python<'_>, zarr_url: String, predicate: &Bound<'_, PyAny
             (ChunkPlan::all(dims, grid_shape, regular_chunk_shape), crate::chunk_plan::PlannerStats { coord_reads: 0 })
         });
 
-    let mut out: Vec<PyObject> = Vec::new();
+    let mut out: Vec<Py<PyAny>> = Vec::new();
     for idx in plan.into_index_iter() {
         let chunk_shape_nz = primary
             .chunk_shape(&idx)
@@ -84,7 +84,7 @@ fn selected_chunks(py: Python<'_>, zarr_url: String, predicate: &Bound<'_, PyAny
 
 #[pyfunction]
 #[pyo3(signature = (zarr_url, predicate, variables=None))]
-fn _selected_chunks_debug(py: Python<'_>, zarr_url: String, predicate: &Bound<'_, PyAny>, variables: Option<Vec<String>>) -> PyResult<(Vec<PyObject>, u64)> {
+fn _selected_chunks_debug(py: Python<'_>, zarr_url: String, predicate: &Bound<'_, PyAny>, variables: Option<Vec<String>>) -> PyResult<(Vec<Py<PyAny>>, u64)> {
     let opened = open_store(&zarr_url).map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e))?;
     let meta = load_dataset_meta_from_opened(&opened)
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e))?;
@@ -109,18 +109,16 @@ fn _selected_chunks_debug(py: Python<'_>, zarr_url: String, predicate: &Bound<'_
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
 
     let (plan, stats) = compile_expr_to_chunk_plan(&expr, &meta, opened.store.clone(), primary_var)
-        .unwrap_or_else(|_| {
-            let grid_shape = primary.chunk_grid().grid_shape().to_vec();
-            let zero = vec![0u64; primary.dimensionality()];
-            let regular_chunk_shape = primary
-                .chunk_shape(&zero)
-                .map(|v| v.iter().map(|x| x.get()).collect::<Vec<u64>>())
-                .unwrap_or_else(|_| vec![1; primary.dimensionality()]);
-            let dims = primary_meta.dims.clone();
-            (ChunkPlan::all(dims, grid_shape, regular_chunk_shape), crate::chunk_plan::PlannerStats { coord_reads: 0 })
-        });
+        .map_err(|e| match e {
+            crate::chunk_plan::CompileError::Unsupported(e) => {
+                return PyErr::new::<pyo3::exceptions::PyValueError, _>(e);
+            }
+            crate::chunk_plan::CompileError::MissingPrimaryDims(e) => {
+                return PyErr::new::<pyo3::exceptions::PyValueError, _>(e);
+            }
+        })?;
 
-    let mut out: Vec<PyObject> = Vec::new();
+    let mut out: Vec<Py<PyAny>> = Vec::new();
     for idx in plan.into_index_iter() {
         let chunk_shape_nz = primary
             .chunk_shape(&idx)

@@ -3,7 +3,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use polars::prelude::{
-    AnyValue, BooleanFunction, Expr, FunctionExpr, LiteralValue, Operator, Scalar,
+    AnyValue, ArrayFunction, BooleanFunction, Expr, FunctionExpr, LiteralValue, Operator, Scalar,
+    Selector,
 };
 use zarrs::array::Array;
 use zarrs::array_subset::ArraySubset;
@@ -166,6 +167,12 @@ pub(crate) enum ChunkPlanNode {
     Rect(Vec<DimChunkRange>),
     Union(Vec<ChunkPlanNode>),
     PointSet(Vec<Vec<u64>>),
+}
+
+impl ChunkPlanNode {
+    pub(crate) fn is_empty(&self) -> bool {
+        matches!(self, ChunkPlanNode::Empty)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -440,8 +447,8 @@ impl Iterator for UnionOwnedIter {
 
 #[derive(Debug)]
 pub(crate) enum CompileError {
-    Unsupported,
-    MissingPrimaryDims,
+    Unsupported(String),
+    MissingPrimaryDims(String),
 }
 
 #[derive(Debug)]
@@ -689,13 +696,14 @@ impl<'a> MonotonicCoordResolver<'a> {
             .get(0)
             .map(|nz| nz.get())
             .unwrap_or(1);
-        let sample_idxs = [
+        let mut sample_idxs = [
             0u64,
             (reg_chunk.saturating_sub(1)).min(n - 1),
             (reg_chunk).min(n - 1),
             (n / 2).min(n - 1),
             n - 1,
         ];
+        sample_idxs.sort_unstable();
 
         let mut prev: Option<CoordScalar> = None;
         for &i in &sample_idxs {
@@ -1099,7 +1107,10 @@ pub(crate) fn compile_expr_to_chunk_plan(
     primary_var: &str,
 ) -> Result<(ChunkPlan, PlannerStats), CompileError> {
     let Some(primary_meta) = meta.arrays.get(primary_var) else {
-        return Err(CompileError::MissingPrimaryDims);
+        return Err(CompileError::MissingPrimaryDims(format!(
+            "primary variable '{}' not found",
+            primary_var
+        )));
     };
     let dims = if !primary_meta.dims.is_empty() {
         primary_meta.dims.clone()
@@ -1107,13 +1118,13 @@ pub(crate) fn compile_expr_to_chunk_plan(
         meta.dims.clone()
     };
 
-    let primary =
-        Array::open(store.clone(), &primary_meta.path).map_err(|_| CompileError::Unsupported)?;
+    let primary = Array::open(store.clone(), &primary_meta.path)
+        .map_err(|e| CompileError::Unsupported(format!("failed to open primary array: {:?}", e)))?;
     let grid_shape = primary.chunk_grid().grid_shape().to_vec();
     let zero = vec![0u64; primary.dimensionality()];
     let chunk_shape_nz = primary
         .chunk_shape(&zero)
-        .map_err(|_| CompileError::Unsupported)?;
+        .map_err(|e| CompileError::Unsupported(e.to_string()))?;
     let regular_chunk_shape = chunk_shape_nz.iter().map(|nz| nz.get()).collect::<Vec<_>>();
 
     let mut resolver = MonotonicCoordResolver::new(meta, store);
@@ -1124,8 +1135,7 @@ pub(crate) fn compile_expr_to_chunk_plan(
         &grid_shape,
         &regular_chunk_shape,
         &mut resolver,
-    )
-    .unwrap_or(ChunkPlanNode::AllChunks);
+    )?;
     let grid_shape_vec = grid_shape.to_vec();
     let plan = ChunkPlan::from_root(dims, grid_shape_vec, regular_chunk_shape, root);
     let stats = PlannerStats {
@@ -1135,55 +1145,91 @@ pub(crate) fn compile_expr_to_chunk_plan(
 }
 
 fn compile_node(
-    expr: &Expr,
+    // Either a borrowed or owned expression.
+    expr: impl std::borrow::Borrow<Expr>,
     meta: &ZarrDatasetMeta,
     dims: &[String],
     grid_shape: &[u64],
     regular_chunk_shape: &[u64],
     resolver: &mut dyn CoordIndexResolver,
 ) -> Result<ChunkPlanNode, CompileError> {
+    let expr: &Expr = std::borrow::Borrow::borrow(&expr);
     match expr {
-        Expr::Alias(inner, _) => {
-            compile_node(inner, meta, dims, grid_shape, regular_chunk_shape, resolver)
-        }
-        Expr::KeepName(inner) => {
-            compile_node(inner, meta, dims, grid_shape, regular_chunk_shape, resolver)
-        }
-        Expr::RenameAlias { expr, .. } => {
-            compile_node(expr, meta, dims, grid_shape, regular_chunk_shape, resolver)
-        }
-        Expr::Cast { expr, .. } => {
-            compile_node(expr, meta, dims, grid_shape, regular_chunk_shape, resolver)
-        }
-        Expr::Sort { expr, .. } => {
-            compile_node(expr, meta, dims, grid_shape, regular_chunk_shape, resolver)
-        }
-        Expr::SortBy { expr, .. } => {
-            compile_node(expr, meta, dims, grid_shape, regular_chunk_shape, resolver)
-        }
-        Expr::Explode { input, .. } => {
-            compile_node(input, meta, dims, grid_shape, regular_chunk_shape, resolver)
-        }
-        Expr::Slice { input, .. } => {
-            compile_node(input, meta, dims, grid_shape, regular_chunk_shape, resolver)
-        }
-        // For window expressions, just compile the function expression only for now.
-        // TODO: handle partition_by and order_by if needed.
-        Expr::Over { function, .. } => compile_node(
-            function,
+        Expr::Alias(inner, _) => compile_node(
+            inner.as_ref(),
             meta,
             dims,
             grid_shape,
             regular_chunk_shape,
             resolver,
         ),
-        // Expr::Rolling {
-        //     function,
-        //     index_column,
-        //     period,
-        //     offset,
-        //     closed_window,
-        // } => compile_node(
+        Expr::KeepName(inner) => compile_node(
+            inner.as_ref(),
+            meta,
+            dims,
+            grid_shape,
+            regular_chunk_shape,
+            resolver,
+        ),
+        Expr::RenameAlias { expr, .. } => compile_node(
+            expr.as_ref(),
+            meta,
+            dims,
+            grid_shape,
+            regular_chunk_shape,
+            resolver,
+        ),
+        Expr::Cast { expr, .. } => compile_node(
+            expr.as_ref(),
+            meta,
+            dims,
+            grid_shape,
+            regular_chunk_shape,
+            resolver,
+        ),
+        Expr::Sort { expr, .. } => compile_node(
+            expr.as_ref(),
+            meta,
+            dims,
+            grid_shape,
+            regular_chunk_shape,
+            resolver,
+        ),
+        Expr::SortBy { expr, .. } => compile_node(
+            expr.as_ref(),
+            meta,
+            dims,
+            grid_shape,
+            regular_chunk_shape,
+            resolver,
+        ),
+        Expr::Explode { input, .. } => compile_node(
+            input.as_ref(),
+            meta,
+            dims,
+            grid_shape,
+            regular_chunk_shape,
+            resolver,
+        ),
+        Expr::Slice { input, .. } => compile_node(
+            input.as_ref(),
+            meta,
+            dims,
+            grid_shape,
+            regular_chunk_shape,
+            resolver,
+        ),
+        // For window expressions, just compile the function expression only for now.
+        // TODO: handle partition_by and order_by if needed.
+        Expr::Over { function, .. } => compile_node(
+            function.as_ref(),
+            meta,
+            dims,
+            grid_shape,
+            regular_chunk_shape,
+            resolver,
+        ),
+        // Expr::Rolling { function, .. } => compile_node(
         //     function,
         //     meta,
         //     dims,
@@ -1193,29 +1239,53 @@ fn compile_node(
         // ),
         // Expr::Window { function, .. } => compile_node(function, meta, dims, grid_shape, regular_chunk_shape, resolver),
         // If a filter expression is used where we expect a predicate, focus on the predicate.
-        Expr::Filter { by, .. } => {
-            compile_node(by, meta, dims, grid_shape, regular_chunk_shape, resolver)
-        }
+        Expr::Filter { by, .. } => compile_node(
+            by.as_ref(),
+            meta,
+            dims,
+            grid_shape,
+            regular_chunk_shape,
+            resolver,
+        ),
         Expr::BinaryExpr { left, op, right } => {
             match op {
                 Operator::And | Operator::LogicalAnd => {
                     // If one side is unsupported, keep whatever constraints we can from the other.
-                    let a =
-                        compile_node(left, meta, dims, grid_shape, regular_chunk_shape, resolver)
-                            .unwrap_or(ChunkPlanNode::AllChunks);
-                    let b =
-                        compile_node(right, meta, dims, grid_shape, regular_chunk_shape, resolver)
-                            .unwrap_or(ChunkPlanNode::AllChunks);
+                    let a = compile_node(
+                        left.as_ref(),
+                        meta,
+                        dims,
+                        grid_shape,
+                        regular_chunk_shape,
+                        resolver,
+                    )?;
+                    let b = compile_node(
+                        right.as_ref(),
+                        meta,
+                        dims,
+                        grid_shape,
+                        regular_chunk_shape,
+                        resolver,
+                    )?;
                     Ok(and_nodes(a, b))
                 }
                 Operator::Or | Operator::LogicalOr => {
-                    // For OR, if either side is unsupported we conservatively plan all chunks.
-                    let a =
-                        compile_node(left, meta, dims, grid_shape, regular_chunk_shape, resolver)
-                            .unwrap_or(ChunkPlanNode::AllChunks);
-                    let b =
-                        compile_node(right, meta, dims, grid_shape, regular_chunk_shape, resolver)
-                            .unwrap_or(ChunkPlanNode::AllChunks);
+                    let a = compile_node(
+                        left.as_ref(),
+                        meta,
+                        dims,
+                        grid_shape,
+                        regular_chunk_shape,
+                        resolver,
+                    )?;
+                    let b = compile_node(
+                        right.as_ref(),
+                        meta,
+                        dims,
+                        grid_shape,
+                        regular_chunk_shape,
+                        resolver,
+                    )?;
                     Ok(or_nodes(a, b))
                 }
                 Operator::Eq | Operator::GtEq | Operator::Gt | Operator::LtEq | Operator::Lt => {
@@ -1237,10 +1307,16 @@ fn compile_node(
                             resolver,
                         )
                     } else {
-                        Err(CompileError::Unsupported)
+                        Err(CompileError::Unsupported(format!(
+                            "unsupported comparison operator: {}",
+                            op
+                        )))
                     }
                 }
-                _ => Err(CompileError::Unsupported),
+                _ => Err(CompileError::Unsupported(format!(
+                    "unsupported binary operator: {}",
+                    op
+                ))),
             }
         }
         Expr::Literal(lit) => {
@@ -1250,8 +1326,55 @@ fn compile_node(
                 Some(AnyValue::Boolean(false)) => Ok(ChunkPlanNode::Empty),
                 // In Polars filtering, null predicate behaves like "keep nothing".
                 Some(AnyValue::Null) => Ok(ChunkPlanNode::Empty),
-                _ => Err(CompileError::Unsupported),
+                _ => Err(CompileError::Unsupported(format!(
+                    "unsupported literal: {:?}",
+                    lit
+                ))),
             }
+        }
+        Expr::Ternary {
+            predicate,
+            truthy,
+            falsy,
+        } => {
+            let predicate_node = compile_node(
+                predicate.as_ref(),
+                meta,
+                dims,
+                grid_shape,
+                regular_chunk_shape,
+                resolver,
+            )?;
+            if predicate_node.is_empty() {
+                return Ok(ChunkPlanNode::Empty);
+            }
+            let truthy_node = compile_node(
+                truthy.as_ref(),
+                meta,
+                dims,
+                grid_shape,
+                regular_chunk_shape,
+                resolver,
+            )?;
+            if truthy_node.is_empty() {
+                return Ok(ChunkPlanNode::Empty);
+            }
+            let falsy_node = compile_node(
+                falsy.as_ref(),
+                meta,
+                dims,
+                grid_shape,
+                regular_chunk_shape,
+                resolver,
+            )?;
+            if falsy_node.is_empty() {
+                return Ok(ChunkPlanNode::Empty);
+            }
+            Ok(ChunkPlanNode::Union(vec![
+                truthy_node,
+                falsy_node,
+                predicate_node,
+            ]))
         }
         Expr::Function { input, function } => {
             match function {
@@ -1264,24 +1387,139 @@ fn compile_node(
                     regular_chunk_shape,
                     resolver,
                 ),
+                FunctionExpr::NullCount => Ok(ChunkPlanNode::AllChunks),
                 // Most functions transform values in ways that we can't safely map to chunk-level constraints.
-                _ => Err(CompileError::Unsupported),
+                _ => Err(CompileError::Unsupported(format!(
+                    "unsupported function: {:?}",
+                    function
+                ))),
+            }
+        }
+
+        Expr::Selector(selector) => {
+            use polars::prelude::Selector;
+            match selector {
+                Selector::Union(left, right) => {
+                    // Compile the left and right selectors into a ChunkPlanNode
+                    let left_node = compile_node(
+                        left.as_ref().clone().as_expr(),
+                        meta,
+                        dims,
+                        grid_shape,
+                        regular_chunk_shape,
+                        resolver,
+                    )?;
+                    let right_node = compile_node(
+                        right.as_ref().clone().as_expr(),
+                        meta,
+                        dims,
+                        grid_shape,
+                        regular_chunk_shape,
+                        resolver,
+                    )?;
+                    Ok(or_nodes(left_node, right_node))
+                }
+                Selector::Difference(left, right) => {
+                    let left_node = compile_node(
+                        left.as_ref().clone().as_expr(),
+                        meta,
+                        dims,
+                        grid_shape,
+                        regular_chunk_shape,
+                        resolver,
+                    )?;
+                    let right_node = compile_node(
+                        right.as_ref().clone().as_expr(),
+                        meta,
+                        dims,
+                        grid_shape,
+                        regular_chunk_shape,
+                        resolver,
+                    )?;
+                    Ok(and_nodes(left_node, right_node))
+                }
+                Selector::ExclusiveOr(left, right) => {
+                    let left_node = compile_node(
+                        left.as_ref().clone().as_expr(),
+                        meta,
+                        dims,
+                        grid_shape,
+                        regular_chunk_shape,
+                        resolver,
+                    )?;
+                    let right_node = compile_node(
+                        right.as_ref().clone().as_expr(),
+                        meta,
+                        dims,
+                        grid_shape,
+                        regular_chunk_shape,
+                        resolver,
+                    )?;
+                    Ok(or_nodes(left_node, right_node))
+                }
+                Selector::Intersect(left, right) => {
+                    let left_node = compile_node(
+                        left.as_ref().clone().as_expr(),
+                        meta,
+                        dims,
+                        grid_shape,
+                        regular_chunk_shape,
+                        resolver,
+                    )?;
+                    let right_node = compile_node(
+                        right.as_ref().clone().as_expr(),
+                        meta,
+                        dims,
+                        grid_shape,
+                        regular_chunk_shape,
+                        resolver,
+                    )?;
+                    Ok(and_nodes(left_node, right_node))
+                }
+                Selector::ByName { names, strict } => {
+                    let names = names.iter().map(|name| name.as_str()).collect::<Vec<&str>>();
+                    Ok(ChunkPlanNode::AllChunks)
+                }
+                Selector::ByIndex { indices, strict } => {
+                    let indices = indices.iter().map(|index| *index as u64).collect::<Vec<u64>>();
+                    Ok(ChunkPlanNode::AllChunks)
+                }
+                Selector::Matches(name) => {
+                    let Some(col) = expr_to_col_name(expr) else {
+                        return Ok(ChunkPlanNode::AllChunks);
+                    };
+                    Ok(ChunkPlanNode::AllChunks)
+                }
+                Selector::ByDType(dtype) => {
+                    Ok(ChunkPlanNode::AllChunks)
+                }
+                Selector::Wildcard => {
+                    Ok(ChunkPlanNode::AllChunks)
+                }
+                Selector::Empty => {
+                    Ok(ChunkPlanNode::Empty)
+                }
+                _ => Err(CompileError::Unsupported(format!(
+                    "unsupported selector: {:?}",
+                    selector
+                ))),
             }
         }
 
         // Variants without a meaningful chunk-planning representation.
         Expr::Element
         | Expr::Column(_)
-        | Expr::Selector(_)
         | Expr::DataTypeFunction(_)
         | Expr::Gather { .. }
         | Expr::Agg(_)
-        | Expr::Ternary { .. }
         | Expr::Len
         | Expr::AnonymousFunction { .. }
         | Expr::Eval { .. }
         | Expr::SubPlan(_, _)
-        | Expr::Field(_) => Err(CompileError::Unsupported),
+        | Expr::Field(_) => Err(CompileError::Unsupported(format!(
+            "unsupported expression: {:?}",
+            expr
+        ))),
     }
 }
 
@@ -1297,7 +1535,10 @@ fn compile_boolean_function(
     match bf {
         BooleanFunction::Not => {
             let [arg] = input else {
-                return Err(CompileError::Unsupported);
+                return Err(CompileError::Unsupported(format!(
+                    "unsupported boolean function: {:?}",
+                    bf
+                )));
             };
             // Try constant fold first.
             if let Expr::Literal(lit) = strip_wrappers(arg) {
@@ -1320,7 +1561,10 @@ fn compile_boolean_function(
         }
         BooleanFunction::IsNull | BooleanFunction::IsNotNull => {
             let [arg] = input else {
-                return Err(CompileError::Unsupported);
+                return Err(CompileError::Unsupported(format!(
+                    "unsupported boolean function: {:?}",
+                    bf
+                )));
             };
 
             // Constant fold when possible; otherwise don't constrain.
@@ -1372,7 +1616,10 @@ fn compile_is_between(
     resolver: &mut dyn CoordIndexResolver,
 ) -> Result<ChunkPlanNode, CompileError> {
     let [expr, low, high] = input else {
-        return Err(CompileError::Unsupported);
+        return Err(CompileError::Unsupported(format!(
+            "unsupported is_between expression: {:?}",
+            input
+        )));
     };
     let Some(col) = expr_to_col_name(expr) else {
         return Ok(ChunkPlanNode::AllChunks);
@@ -1419,7 +1666,10 @@ fn compile_is_in(
     resolver: &mut dyn CoordIndexResolver,
 ) -> Result<ChunkPlanNode, CompileError> {
     let [expr, list] = input else {
-        return Err(CompileError::Unsupported);
+        return Err(CompileError::Unsupported(format!(
+            "unsupported is_in expression: {:?}",
+            input
+        )));
     };
     let Some(col) = expr_to_col_name(expr) else {
         return Ok(ChunkPlanNode::AllChunks);
@@ -1486,11 +1736,17 @@ fn compile_cmp(
     let dim_idx = dims
         .iter()
         .position(|d| d == col)
-        .ok_or(CompileError::Unsupported)?;
+        .ok_or(CompileError::Unsupported(format!(
+            "column '{}' not found in dimensions",
+            col
+        )))?;
 
     let time_encoding = meta.arrays.get(col).and_then(|a| a.time_encoding.as_ref());
     let Some(scalar) = literal_to_scalar(lit, time_encoding) else {
-        return Err(CompileError::Unsupported);
+        return Err(CompileError::Unsupported(format!(
+            "unsupported literal: {:?}",
+            lit
+        )));
     };
 
     let mut vr = ValueRange::default();
@@ -1500,14 +1756,26 @@ fn compile_cmp(
         Operator::GtEq => vr.min = Some((scalar, BoundKind::Inclusive)),
         Operator::Lt => vr.max = Some((scalar, BoundKind::Exclusive)),
         Operator::LtEq => vr.max = Some((scalar, BoundKind::Inclusive)),
-        _ => return Err(CompileError::Unsupported),
+        _ => {
+            return Err(CompileError::Unsupported(format!(
+                "unsupported operator: {:?}",
+                op
+            )));
+        }
     }
 
     let Some(idx_range) = resolver
         .index_range_for_value_range(col, &vr)
-        .map_err(|_| CompileError::Unsupported)?
+        .map_err(|e| {
+            CompileError::Unsupported(format!(
+                "failed to get index range for value range: {:?}",
+                e
+            ))
+        })?
     else {
-        return Err(CompileError::Unsupported);
+        return Err(CompileError::Unsupported(
+            "failed to get index range for value range".to_owned(),
+        ));
     };
 
     if idx_range.is_empty() {
