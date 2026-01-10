@@ -67,7 +67,7 @@ pyo3-polars = { git = "https://github.com/pola-rs/polars.git", tag = "py-1.36.1"
     "lazy",
     "dtype-full",
 ] }
-tokio = { version = "1.45.1", features = ["rt-multi-thread"] }
+tokio = { version = "1.45.1", features = ["rt-multi-thread", "macros", "sync"] }
 url = "2.5.4"
 zarrs = { version = "0.23.0-beta.3", features = ["async"] }
 zarrs_object_store = { version = "0.6.1", features = [
@@ -79,6 +79,8 @@ zarrs_object_store = { version = "0.6.1", features = [
 ] }
 serde_json = "1.0.145"
 chrono = { version = "0.4", features = ["clock", "std"] }
+futures = "0.3.31"
+pyo3-async-runtimes = { version = "0.26.0", features = ["tokio-runtime"] }
 
 # Builds on this machine have intermittently hit compiler crashes (GCC ICE while compiling
 # `zstd-sys` at `-O3`, and rustc SIGSEGVs in optimized builds). We intentionally dial back

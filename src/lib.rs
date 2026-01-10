@@ -7,6 +7,7 @@ mod zarr_source;
 mod zarr_store;
 mod test_utils;
 mod chunk_plan;
+mod zarr_scan_async;
 
 use pyo3::prelude::*;
 use pyo3::types::PyAny;
@@ -17,6 +18,7 @@ use crate::zarr_source::ZarrSource;
 use crate::zarr_store::open_store;
 use crate::zarr_meta::load_dataset_meta_from_opened;
 use crate::chunk_plan::{compile_expr_to_chunk_plan, ChunkPlan};
+use crate::zarr_scan_async::scan_zarr_async;
 
 #[pyfunction]
 fn hello_from_bin() -> String {
@@ -157,6 +159,7 @@ fn _core(m: &Bound<PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(selected_chunks, m)?)?;
     m.add_function(wrap_pyfunction!(_selected_chunks_debug, m)?)?;
     m.add_function(wrap_pyfunction!(_debug_expr_ast, m)?)?;
+    m.add_function(wrap_pyfunction!(scan_zarr_async, m)?)?;
 
     m.add_class::<ZarrSource>()?;
 

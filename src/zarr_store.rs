@@ -5,6 +5,7 @@ use tokio::runtime::Runtime;
 use url::Url;
 use zarrs::storage::storage_adapter::async_to_sync::AsyncToSyncBlockOn;
 use zarrs::storage::storage_adapter::async_to_sync::AsyncToSyncStorageAdapter;
+use zarrs::storage::storage_adapter::sync_to_async::{SyncToAsyncSpawnBlocking, SyncToAsyncStorageAdapter};
 use zarrs::storage::{AsyncReadableWritableListableStorage, ReadableWritableListableStorage};
 use zarrs_object_store::object_store;
 use zarrs_object_store::AsyncObjectStore;
@@ -19,6 +20,12 @@ impl AsyncToSyncBlockOn for TokioBlockOn {
 
 pub struct OpenedStore {
     pub store: ReadableWritableListableStorage,
+    /// Root node path to pass to zarrs open functions (always starts with `/`).
+    pub root: String,
+}
+
+pub struct AsyncOpenedStore {
+    pub store: AsyncReadableWritableListableStorage,
     /// Root node path to pass to zarrs open functions (always starts with `/`).
     pub root: String,
 }
@@ -74,6 +81,63 @@ fn open_filesystem_store(path: &str) -> Result<OpenedStore, String> {
     let store = zarrs::filesystem::FilesystemStore::new(&store_path).map_err(|e| e.to_string())?;
     Ok(OpenedStore {
         store: Arc::new(store),
+        root: "/".to_string(),
+    })
+}
+
+struct TokioSpawnBlocking;
+
+impl SyncToAsyncSpawnBlocking for TokioSpawnBlocking {
+    fn spawn_blocking<F, R>(&self, f: F) -> impl core::future::Future<Output = R> + Send
+    where
+        F: FnOnce() -> R + Send + 'static,
+        R: Send + 'static,
+    {
+        async move { tokio::task::spawn_blocking(f).await.expect("spawn_blocking failed") }
+    }
+}
+
+/// Async-first store opener.
+///
+/// For remote/object-store URLs this is fully async.
+/// For local filesystem paths, this wraps the sync filesystem store with a spawn_blocking adapter.
+pub fn open_store_async(zarr_url: &str) -> Result<AsyncOpenedStore, String> {
+    // Fast path: treat as local path if it doesn't look like a URL.
+    if !zarr_url.contains("://") {
+        return open_filesystem_store_async(zarr_url);
+    }
+
+    let url = Url::parse(zarr_url).map_err(|e| e.to_string())?;
+
+    // Special-case `file://` so that plain paths and file URLs behave the same.
+    if url.scheme() == "file" {
+        let path = url
+            .to_file_path()
+            .map_err(|_| "invalid file:// URL".to_string())?;
+        let path = path.to_string_lossy().to_string();
+        return open_filesystem_store_async(&path);
+    }
+
+    let (store, prefix) = object_store::parse_url(&url).map_err(|e| e.to_string())?;
+    let async_store: AsyncReadableWritableListableStorage = Arc::new(AsyncObjectStore::new(store));
+
+    let root = if prefix.as_ref().is_empty() {
+        "/".to_string()
+    } else {
+        format!("/{}", prefix.as_ref())
+    };
+
+    Ok(AsyncOpenedStore { store: async_store, root })
+}
+
+fn open_filesystem_store_async(path: &str) -> Result<AsyncOpenedStore, String> {
+    let store_path: PathBuf = path.into();
+    let store =
+        zarrs::filesystem::FilesystemStore::new(&store_path).map_err(|e| e.to_string())?;
+    let async_store: AsyncReadableWritableListableStorage =
+        Arc::new(SyncToAsyncStorageAdapter::new(Arc::new(store), TokioSpawnBlocking));
+    Ok(AsyncOpenedStore {
+        store: async_store,
         root: "/".to_string(),
     })
 }
