@@ -274,17 +274,21 @@ pub struct ZarrSource {
     current_chunk_indices: Option<Vec<u64>>,
     chunk_offset: usize,
     done: bool,
+
+    // Optional cap on number of chunks we will read (for debugging / safety).
+    chunks_left: Option<usize>,
 }
 
 #[pymethods]
 impl ZarrSource {
     #[new]
-    #[pyo3(signature = (zarr_url, batch_size, n_rows, variables=None))]
+    #[pyo3(signature = (zarr_url, batch_size, n_rows, variables=None, max_chunks_to_read=None))]
     fn new(
         zarr_url: String,
         batch_size: Option<usize>,
         n_rows: Option<usize>,
         variables: Option<Vec<String>>,
+        max_chunks_to_read: Option<usize>,
     ) -> PyResult<Self> {
         let opened = open_store(&zarr_url).map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
         let meta = load_dataset_meta_from_opened(&opened)
@@ -358,7 +362,20 @@ impl ZarrSource {
             current_chunk_indices: None,
             chunk_offset: 0,
             done: primary.dimensionality() == 0 && false,
+            chunks_left: max_chunks_to_read,
         })
+    }
+
+    fn consume_chunk_budget(&mut self) -> PyResult<()> {
+        if let Some(left) = self.chunks_left {
+            if left == 0 {
+                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                    "max_chunks_to_read limit hit",
+                ));
+            }
+            self.chunks_left = Some(left - 1);
+        }
+        Ok(())
     }
 
     fn schema(&self) -> PySchema {
@@ -435,6 +452,7 @@ impl ZarrSource {
             if self.n_rows_left == 0 {
                 return Ok(None);
             }
+            self.consume_chunk_budget()?;
 
             let mut cols: Vec<Column> = Vec::new();
             for v in &self.vars {
@@ -457,6 +475,7 @@ impl ZarrSource {
         loop {
             if self.current_chunk_indices.is_none() {
                 if let Some(next_idx) = self.chunk_iter.next() {
+                    self.consume_chunk_budget()?;
                     self.current_chunk_indices = Some(next_idx);
                     self.chunk_offset = 0;
                 } else {
@@ -535,8 +554,12 @@ impl ZarrSource {
                         Array::open(self.store.clone(), &coord_meta.path).map_err(to_py_err)?;
                     let dim_start = origin[d];
                     let dim_len = chunk_shape[d];
-                    let coord =
-                        retrieve_1d_subset(&coord_arr, dim_start, dim_len).map_err(to_py_err)?;
+                    let coord = retrieve_1d_subset(&coord_arr, dim_start, dim_len).map_err(|e| {
+                        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                            "error reading coord dim={dim_name} path={} start={dim_start} len={dim_len}: {e}",
+                            coord_meta.path
+                        ))
+                    })?;
                     coord_slices.push(Some(coord));
                 } else {
                     coord_slices.push(None);
@@ -588,7 +611,11 @@ impl ZarrSource {
                 if !var_chunk_shape.is_empty() {
                     let _ = checked_chunk_len(&var_chunk_shape)?;
                 }
-                let data = retrieve_chunk(&arr, &var_chunk_indices).map_err(to_py_err)?;
+                let data = retrieve_chunk(&arr, &var_chunk_indices).map_err(|e| {
+                    PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                        "error reading var={v} path={path} chunk_indices={var_chunk_indices:?} chunk_shape={var_chunk_shape:?} offsets={var_offsets:?}: {e}"
+                    ))
+                })?;
                 var_chunks.push((v.clone(), data, var_meta.dims.clone(), var_chunk_shape, var_offsets));
             }
 

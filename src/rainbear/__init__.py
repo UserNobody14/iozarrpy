@@ -20,6 +20,7 @@ def scan_zarr(
     zarr_url: str,
     *,
     variables: list[str] | None = None,
+    max_chunks_to_read: int | None = None,
 ) -> pl.LazyFrame:
     """Scan a Zarr store and return a LazyFrame.
     
@@ -32,7 +33,7 @@ def scan_zarr(
         n_rows: int | None,
         batch_size: int | None,
     ) -> Iterator[pl.DataFrame]:
-        src = ZarrSource(zarr_url, batch_size, n_rows, variables)
+        src = ZarrSource(zarr_url, batch_size, n_rows, variables, max_chunks_to_read)
         if with_columns is not None:
             src.set_with_columns(with_columns)
 
@@ -57,7 +58,7 @@ def scan_zarr(
                 out = out.filter(predicate)
             yield out
 
-    src = ZarrSource(zarr_url, 0, 0, variables)
+    src = ZarrSource(zarr_url, 0, 0, variables, max_chunks_to_read)
     return register_io_source(io_source=source_generator, schema=src.schema())
 
 

@@ -26,6 +26,7 @@ def scan_zarr(
     zarr_url: str,
     *,
     variables: list[str] | None = None,
+    max_chunks_to_read: int | None = None,
 ) -> pl.LazyFrame: ...
 
 def main() -> None: ...

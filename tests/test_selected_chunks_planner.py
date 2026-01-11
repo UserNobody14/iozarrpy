@@ -54,3 +54,15 @@ def test_planner_coord_reads_are_sublinear(tmp_path: Path) -> None:
     assert coord_reads < 500
 
 
+def test_selected_chunks_index_only_dims(tmp_path: Path) -> None:
+    # Store with dims (y, x) but *without* 1D coord arrays for y/x.
+    zarr_path = str(tmp_path / "index_only_dims.zarr")
+    _core._create_index_only_store(zarr_path)
+
+    expr = (pl.col("y") == 0) & (pl.col("x") >= 0)
+    chunks = rainbear.selected_chunks(zarr_path, expr, variables=["var"])  # type: ignore[attr-defined]
+
+    idxs = sorted({tuple(c["indices"]) for c in chunks})
+    # y==0 constrains to y-chunk 0; x unconstrained across 2 chunks.
+    assert idxs == [(0, 0), (0, 1)]
+

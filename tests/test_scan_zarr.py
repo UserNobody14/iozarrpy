@@ -29,3 +29,15 @@ def test_sel_predicate(dataset_path) -> None:
 
     assert df.height == 8
     assert df["lat"].is_in([20.0, 30.0]).all()
+
+
+def test_max_chunks_to_read(dataset_path) -> None:
+    path = dataset_path("demo_store_max_chunks.zarr")
+    _core._create_demo_store(path)
+
+    # Demo store temp has 2 chunks (time chunked as [2, 2]), so limiting to 1 chunk must fail.
+    lf = rainbear.scan_zarr(path, max_chunks_to_read=1)
+    import pytest
+
+    with pytest.raises(pl.exceptions.ComputeError, match="max_chunks_to_read"):
+        lf.collect()
