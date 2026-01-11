@@ -5,7 +5,7 @@
 def test_smoke():
     print("Smoke test started")
     import rainbear._core
-    assert rainbear._core.hello_from_bin() == "Hello from rainbear!"
+    assert rainbear._core.print_extension_info() == "Rainbear extension module loaded successfully"
     print("Smoke test passed")
 
 if __name__ == "__main__":
