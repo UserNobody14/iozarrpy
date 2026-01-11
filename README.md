@@ -24,7 +24,7 @@ The project is configured as a `maturin` extension module.
 - Run a quick import check:
 
 ```bash
-uv run --with polars python -c "import rainbear; print(rainbear.hello_from_bin())"
+uv run --with polars python -c "import rainbear; print(rainbear.print_extension_info())"
 ```
 
 ## Using `scan_zarr`

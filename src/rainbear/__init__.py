@@ -5,11 +5,16 @@ from typing import Iterator
 import polars as pl
 from polars.io.plugins import register_io_source
 
-from rainbear._core import ZarrSource, hello_from_bin, scan_zarr_async, selected_chunks
+from rainbear._core import (
+    ZarrSource,
+    print_extension_info,
+    scan_zarr_async,
+    selected_chunks,
+)
 
 __all__ = [
     "ZarrSource",
-    "hello_from_bin",
+    "print_extension_info",
     "scan_zarr",
     "scan_zarr_async",
     "selected_chunks",
@@ -63,5 +68,5 @@ def scan_zarr(
 
 
 def main() -> None:
-    print(hello_from_bin())
+    print(print_extension_info())
 

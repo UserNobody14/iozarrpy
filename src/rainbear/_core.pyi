@@ -4,7 +4,7 @@ from typing import Any
 
 import polars as pl
 
-def hello_from_bin() -> str: ...
+def print_extension_info() -> str: ...
 def selected_chunks(
     zarr_url: str,
     predicate: pl.Expr,

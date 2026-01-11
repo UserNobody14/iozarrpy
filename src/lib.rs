@@ -20,8 +20,8 @@ use crate::chunk_plan::{compile_expr_to_chunk_plan, ChunkPlan};
 use crate::zarr_scan_async::scan_zarr_async;
 
 #[pyfunction]
-fn hello_from_bin() -> String {
-    "Hello from rainbear!".to_string()
+fn print_extension_info() -> String {
+    "Rainbear extension module loaded successfully".to_string()
 }
 
 #[pyfunction]
@@ -153,7 +153,7 @@ fn _debug_expr_ast(predicate: &Bound<'_, PyAny>) -> PyResult<String> {
 
 #[pymodule]
 fn _core(m: &Bound<PyModule>) -> PyResult<()> {
-    m.add_function(wrap_pyfunction!(hello_from_bin, m)?)?;
+    m.add_function(wrap_pyfunction!(print_extension_info, m)?)?;
     m.add_function(wrap_pyfunction!(selected_chunks, m)?)?;
     m.add_function(wrap_pyfunction!(_selected_chunks_debug, m)?)?;
     m.add_function(wrap_pyfunction!(_debug_expr_ast, m)?)?;
