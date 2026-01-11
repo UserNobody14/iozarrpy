@@ -1,7 +1,8 @@
 use super::compile_node::compile_node;
 use super::compile_is_between::compile_is_between;
 use super::compile_is_in::compile_is_in;
-use super::errors::{CompileError, CoordIndexResolver};
+use super::compile_ctx::CompileCtx;
+use super::errors::CompileError;
 use super::literals::{literal_anyvalue, strip_wrappers};
 use super::prelude::*;
 use super::selection::DatasetSelection;
@@ -9,11 +10,7 @@ use super::selection::DatasetSelection;
 pub(super) fn compile_boolean_function(
     bf: &BooleanFunction,
     input: &[Expr],
-    meta: &ZarrDatasetMeta,
-    dims: &[String],
-    dim_lengths: &[u64],
-    vars: &[String],
-    resolver: &mut dyn CoordIndexResolver,
+    ctx: &mut CompileCtx<'_>,
 ) -> Result<DatasetSelection, CompileError> {
     match bf {
         BooleanFunction::Not => {
@@ -27,21 +24,21 @@ pub(super) fn compile_boolean_function(
             if let Expr::Literal(lit) = strip_wrappers(arg) {
                 return match literal_anyvalue(lit) {
                     Some(AnyValue::Boolean(true)) => Ok(DatasetSelection::empty()),
-                    Some(AnyValue::Boolean(false)) => Ok(DatasetSelection::all_for_vars(vars.to_vec())),
+                    Some(AnyValue::Boolean(false)) => Ok(ctx.all()),
                     Some(AnyValue::Null) => Ok(DatasetSelection::empty()),
-                    _ => Ok(DatasetSelection::all_for_vars(vars.to_vec())),
+                    _ => Ok(ctx.all()),
                 };
             }
 
             // If the inner predicate is known to match nothing, NOT(...) matches everything.
             // Otherwise we can't represent complements with current plan nodes.
             let inner =
-                compile_node(arg, meta, dims, dim_lengths, vars, resolver)
-                    .unwrap_or_else(|_| DatasetSelection::all_for_vars(vars.to_vec()));
+                compile_node(arg, ctx)
+                    .unwrap_or_else(|_| ctx.all());
             if inner.0.is_empty() {
-                Ok(DatasetSelection::all_for_vars(vars.to_vec()))
+                Ok(ctx.all())
             } else {
-                Ok(DatasetSelection::all_for_vars(vars.to_vec()))
+                Ok(ctx.all())
             }
         }
         BooleanFunction::IsNull | BooleanFunction::IsNotNull => {
@@ -61,26 +58,26 @@ pub(super) fn compile_boolean_function(
                     _ => unreachable!(),
                 };
                 return Ok(if keep {
-                    DatasetSelection::all_for_vars(vars.to_vec())
+                    ctx.all()
                 } else {
                     DatasetSelection::empty()
                 });
             }
-            Ok(DatasetSelection::all_for_vars(vars.to_vec()))
+            Ok(ctx.all())
         }
         BooleanFunction::IsBetween { .. } => {
-            compile_is_between(input, meta, dims, dim_lengths, vars, resolver)
+            compile_is_between(input, ctx)
         }
-        BooleanFunction::IsIn { .. } => compile_is_in(input, meta, dims, dim_lengths, vars, resolver),
+        BooleanFunction::IsIn { .. } => compile_is_in(input, ctx),
         BooleanFunction::AnyHorizontal => {
             // OR across all input expressions.
             let mut acc = DatasetSelection::empty();
             for e in input {
-                let sel = compile_node(e, meta, dims, dim_lengths, vars, resolver)
-                    .unwrap_or_else(|_| DatasetSelection::all_for_vars(vars.to_vec()));
+                let sel = compile_node(e, ctx)
+                    .unwrap_or_else(|_| ctx.all());
                 // If any side is unconstrainable, OR becomes unconstrainable.
-                if sel == DatasetSelection::all_for_vars(vars.to_vec()) {
-                    return Ok(DatasetSelection::all_for_vars(vars.to_vec()));
+                if sel == ctx.all() {
+                    return Ok(ctx.all());
                 }
                 acc = acc.union(&sel);
             }
@@ -88,10 +85,10 @@ pub(super) fn compile_boolean_function(
         }
         BooleanFunction::AllHorizontal => {
             // AND across all input expressions.
-            let mut acc = DatasetSelection::all_for_vars(vars.to_vec());
+            let mut acc = ctx.all();
             for e in input {
-                let sel = compile_node(e, meta, dims, dim_lengths, vars, resolver)
-                    .unwrap_or_else(|_| DatasetSelection::all_for_vars(vars.to_vec()));
+                let sel = compile_node(e, ctx)
+                    .unwrap_or_else(|_| ctx.all());
                 acc = acc.intersect(&sel);
                 if acc.0.is_empty() {
                     break;
@@ -100,7 +97,7 @@ pub(super) fn compile_boolean_function(
             Ok(acc)
         }
         _ => {
-            Ok(DatasetSelection::all_for_vars(vars.to_vec()))
+            Ok(ctx.all())
         }
     }
 }

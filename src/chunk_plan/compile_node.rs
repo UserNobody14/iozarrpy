@@ -2,97 +2,57 @@ use super::compile_boolean::compile_boolean_function;
 use super::compile_cmp::{
     compile_cmp_to_dataset_selection, compile_value_range_to_dataset_selection, try_expr_to_value_range,
 };
+use super::compile_ctx::CompileCtx;
 use super::errors::CompileError;
 use super::literals::{col_lit, literal_anyvalue, reverse_operator};
 use super::prelude::*;
 use super::selection::DatasetSelection;
 use super::selector::compile_selector;
-use super::errors::CoordIndexResolver;
 
 pub(super) fn compile_node(
     // Either a borrowed or owned expression.
     expr: impl std::borrow::Borrow<Expr>,
-    meta: &ZarrDatasetMeta,
-    dims: &[String],
-    dim_lengths: &[u64],
-    vars: &[String],
-    resolver: &mut dyn CoordIndexResolver,
+    ctx: &mut CompileCtx<'_>,
 ) -> Result<DatasetSelection, CompileError> {
     let expr: &Expr = std::borrow::Borrow::borrow(&expr);
     match expr {
         Expr::Alias(inner, _) => compile_node(
             inner.as_ref(),
-            meta,
-            dims,
-            dim_lengths,
-            vars,
-            resolver,
+            ctx,
         ),
         Expr::KeepName(inner) => compile_node(
             inner.as_ref(),
-            meta,
-            dims,
-            dim_lengths,
-            vars,
-            resolver,
+            ctx,
         ),
         Expr::RenameAlias { expr, .. } => compile_node(
             expr.as_ref(),
-            meta,
-            dims,
-            dim_lengths,
-            vars,
-            resolver,
+            ctx,
         ),
         Expr::Cast { expr, .. } => compile_node(
             expr.as_ref(),
-            meta,
-            dims,
-            dim_lengths,
-            vars,
-            resolver,
+            ctx,
         ),
         Expr::Sort { expr, .. } => compile_node(
             expr.as_ref(),
-            meta,
-            dims,
-            dim_lengths,
-            vars,
-            resolver,
+            ctx,
         ),
         Expr::SortBy { expr, .. } => compile_node(
             expr.as_ref(),
-            meta,
-            dims,
-            dim_lengths,
-            vars,
-            resolver,
+            ctx,
         ),
         Expr::Explode { input, .. } => compile_node(
             input.as_ref(),
-            meta,
-            dims,
-            dim_lengths,
-            vars,
-            resolver,
+            ctx,
         ),
         Expr::Slice { input, .. } => compile_node(
             input.as_ref(),
-            meta,
-            dims,
-            dim_lengths,
-            vars,
-            resolver,
+            ctx,
         ),
         // For window expressions, just compile the function expression only for now.
         // TODO: handle partition_by and order_by if needed.
         Expr::Over { function, .. } => compile_node(
             function.as_ref(),
-            meta,
-            dims,
-            dim_lengths,
-            vars,
-            resolver,
+            ctx,
         ),
         // Expr::Rolling { function, .. } => compile_node(
         //     function,
@@ -104,21 +64,13 @@ pub(super) fn compile_node(
         // ),
         Expr::Rolling { function, .. } => compile_node(
             function.as_ref(),
-            meta,
-            dims,
-            dim_lengths,
-            vars,
-            resolver,
+            ctx,
         ),
         // Expr::Window { function, .. } => compile_node(function, meta, dims, grid_shape, regular_chunk_shape, resolver),
         // If a filter expression is used where we expect a predicate, focus on the predicate.
         Expr::Filter { by, .. } => compile_node(
             by.as_ref(),
-            meta,
-            dims,
-            dim_lengths,
-            vars,
-            resolver,
+            ctx,
         ),
         Expr::BinaryExpr { left, op, right } => {
             match op {
@@ -128,19 +80,11 @@ pub(super) fn compile_node(
                         if matches!(function, FunctionExpr::Boolean(BooleanFunction::Not)) && input.len() == 1 {
                             let a = compile_node(
                                 left.as_ref(),
-                                meta,
-                                dims,
-                                dim_lengths,
-                                vars,
-                                resolver,
+                                ctx,
                             )?;
                             let b = compile_node(
                                 input[0].clone(),
-                                meta,
-                                dims,
-                                dim_lengths,
-                                vars,
-                                resolver,
+                                ctx,
                             )?;
                             return Ok(a.difference(&b));
                         }
@@ -149,19 +93,11 @@ pub(super) fn compile_node(
                         if matches!(function, FunctionExpr::Boolean(BooleanFunction::Not)) && input.len() == 1 {
                             let a = compile_node(
                                 right.as_ref(),
-                                meta,
-                                dims,
-                                dim_lengths,
-                                vars,
-                                resolver,
+                                ctx,
                             )?;
                             let b = compile_node(
                                 input[0].clone(),
-                                meta,
-                                dims,
-                                dim_lengths,
-                                vars,
-                                resolver,
+                                ctx,
                             )?;
                             return Ok(a.difference(&b));
                         }
@@ -170,13 +106,13 @@ pub(super) fn compile_node(
                     // Fast path: merge compatible comparisons on the same column into a single
                     // ValueRange. This reduces resolver reads and enables tighter planning.
                     if let (Some((col_a, vr_a)), Some((col_b, vr_b))) = (
-                        try_expr_to_value_range(left.as_ref(), meta),
-                        try_expr_to_value_range(right.as_ref(), meta),
+                        try_expr_to_value_range(left.as_ref(), ctx.meta),
+                        try_expr_to_value_range(right.as_ref(), ctx.meta),
                     ) {
                         if col_a == col_b {
                             let vr = vr_a.intersect(&vr_b);
                             return compile_value_range_to_dataset_selection(
-                                &col_a, &vr, meta, dims, dim_lengths, vars, resolver,
+                                &col_a, &vr, ctx,
                             );
                         }
                     }
@@ -184,57 +120,33 @@ pub(super) fn compile_node(
                     // If one side is unsupported, keep whatever constraints we can from the other.
                     let a = compile_node(
                         left.as_ref(),
-                        meta,
-                        dims,
-                        dim_lengths,
-                        vars,
-                        resolver,
+                        ctx,
                     )?;
                     let b = compile_node(
                         right.as_ref(),
-                        meta,
-                        dims,
-                        dim_lengths,
-                        vars,
-                        resolver,
+                        ctx,
                     )?;
                     Ok(a.intersect(&b))
                 }
                 Operator::Or | Operator::LogicalOr => {
                     let a = compile_node(
                         left.as_ref(),
-                        meta,
-                        dims,
-                        dim_lengths,
-                        vars,
-                        resolver,
+                        ctx,
                     )?;
                     let b = compile_node(
                         right.as_ref(),
-                        meta,
-                        dims,
-                        dim_lengths,
-                        vars,
-                        resolver,
+                        ctx,
                     )?;
                     Ok(a.union(&b))
                 }
                 Operator::Xor => {
                     let a = compile_node(
                         left.as_ref(),
-                        meta,
-                        dims,
-                        dim_lengths,
-                        vars,
-                        resolver,
+                        ctx,
                     )?;
                     let b = compile_node(
                         right.as_ref(),
-                        meta,
-                        dims,
-                        dim_lengths,
-                        vars,
-                        resolver,
+                        ctx,
                     )?;
                     Ok(a.difference(&b).union(&b.difference(&a)))
                 }
@@ -247,7 +159,7 @@ pub(super) fn compile_node(
                             *op
                         };
                         compile_cmp_to_dataset_selection(
-                            &col, op_eff, &lit, meta, dims, dim_lengths, vars, resolver,
+                            &col, op_eff, &lit, ctx,
                         )
                     } else {
                         Err(CompileError::Unsupported(format!(
@@ -265,7 +177,7 @@ pub(super) fn compile_node(
         Expr::Literal(lit) => {
             // Only boolean-ish literals can be predicates.
             match literal_anyvalue(lit) {
-                Some(AnyValue::Boolean(true)) => Ok(DatasetSelection::all_for_vars(vars.to_vec())),
+                Some(AnyValue::Boolean(true)) => Ok(ctx.all()),
                 Some(AnyValue::Boolean(false)) => Ok(DatasetSelection::empty()),
                 // In Polars filtering, null predicate behaves like "keep nothing".
                 Some(AnyValue::Null) => Ok(DatasetSelection::empty()),
@@ -293,20 +205,16 @@ pub(super) fn compile_node(
                         // when(predicate).then(true).otherwise(false) == predicate
                         return compile_node(
                             predicate.as_ref(),
-                            meta,
-                            dims,
-                            dim_lengths,
-                            vars,
-                            resolver,
+                            ctx,
                         );
                     }
                     if !t && f {
                         // when(predicate).then(false).otherwise(true) == !predicate, which we
                         // can't represent precisely: return conservative All.
-                        return Ok(DatasetSelection::all_for_vars(vars.to_vec()));
+                        return Ok(ctx.all());
                     }
                     if t && f {
-                        return Ok(DatasetSelection::all_for_vars(vars.to_vec()));
+                        return Ok(ctx.all());
                     }
                     if !t && !f {
                         return Ok(DatasetSelection::empty());
@@ -316,27 +224,15 @@ pub(super) fn compile_node(
 
             let predicate_node = compile_node(
                 predicate.as_ref(),
-                meta,
-                dims,
-                dim_lengths,
-                vars,
-                resolver,
+                ctx,
             )?;
             let truthy_node = compile_node(
                 truthy.as_ref(),
-                meta,
-                dims,
-                dim_lengths,
-                vars,
-                resolver,
+                ctx,
             )?;
             let falsy_node = compile_node(
                 falsy.as_ref(),
-                meta,
-                dims,
-                dim_lengths,
-                vars,
-                resolver,
+                ctx,
             )?;
             Ok(truthy_node.union(&falsy_node).union(&predicate_node))
         }
@@ -345,13 +241,9 @@ pub(super) fn compile_node(
                 FunctionExpr::Boolean(bf) => compile_boolean_function(
                     bf,
                     input,
-                    meta,
-                    dims,
-                    dim_lengths,
-                    vars,
-                    resolver,
+                    ctx,
                 ),
-                FunctionExpr::NullCount => Ok(DatasetSelection::all_for_vars(vars.to_vec())),
+                FunctionExpr::NullCount => Ok(ctx.all()),
                 // Most functions transform values in ways that we can't safely map to chunk-level constraints.
                 _ => Err(CompileError::Unsupported(format!(
                     "unsupported function: {:?}",
@@ -360,7 +252,7 @@ pub(super) fn compile_node(
             }
         }
         Expr::Selector(selector) => {
-            compile_selector(selector, meta, dims, dim_lengths, vars, resolver)
+            compile_selector(selector, ctx)
         }
 
         // Variants without a meaningful chunk-planning representation.

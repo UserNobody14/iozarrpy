@@ -1,71 +1,44 @@
 use super::compile_node::compile_node;
-use super::errors::{CompileError, CoordIndexResolver};
+use super::compile_ctx::CompileCtx;
+use super::errors::CompileError;
 use super::prelude::*;
 use super::selection::DatasetSelection;
 
 pub(super) fn compile_selector(
     selector: &Selector,
-    meta: &ZarrDatasetMeta,
-    dims: &[String],
-    dim_lengths: &[u64],
-    vars: &[String],
-    resolver: &mut dyn CoordIndexResolver,
+    ctx: &mut CompileCtx<'_>,
 ) -> Result<DatasetSelection, CompileError> {
     match selector {
         Selector::Union(left, right) => {
             let left_node = compile_node(
                 left.as_ref().clone().as_expr(),
-                meta,
-                dims,
-                dim_lengths,
-                vars,
-                resolver,
+                ctx,
             )?;
             let right_node = compile_node(
                 right.as_ref().clone().as_expr(),
-                meta,
-                dims,
-                dim_lengths,
-                vars,
-                resolver,
+                ctx,
             )?;
             Ok(left_node.union(&right_node))
         }
         Selector::Difference(left, right) => {
             let left_node = compile_node(
                 left.as_ref().clone().as_expr(),
-                meta,
-                dims,
-                dim_lengths,
-                vars,
-                resolver,
+                ctx,
             )?;
             let right_node = compile_node(
                 right.as_ref().clone().as_expr(),
-                meta,
-                dims,
-                dim_lengths,
-                vars,
-                resolver,
+                ctx,
             )?;
             Ok(left_node.difference(&right_node))
         }
         Selector::ExclusiveOr(left, right) => {
             let left_node = compile_node(
                 left.as_ref().clone().as_expr(),
-                meta,
-                dims,
-                dim_lengths,
-                vars,
-                resolver,
+                ctx,
             )?;
             let right_node = compile_node(
                 right.as_ref().clone().as_expr(),
-                meta,
-                dims,
-                dim_lengths,
-                vars,
-                resolver,
+                ctx,
             )?;
             Ok(left_node
                 .difference(&right_node)
@@ -74,19 +47,11 @@ pub(super) fn compile_selector(
         Selector::Intersect(left, right) => {
             let left_node = compile_node(
                 left.as_ref().clone().as_expr(),
-                meta,
-                dims,
-                dim_lengths,
-                vars,
-                resolver,
+                ctx,
             )?;
             let right_node = compile_node(
                 right.as_ref().clone().as_expr(),
-                meta,
-                dims,
-                dim_lengths,
-                vars,
-                resolver,
+                ctx,
             )?;
             Ok(left_node.intersect(&right_node))
         }
@@ -98,7 +63,7 @@ pub(super) fn compile_selector(
         Selector::ByIndex { .. }
         | Selector::Matches(_)
         | Selector::ByDType(_)
-        | Selector::Wildcard => Ok(DatasetSelection::all_for_vars(vars.to_vec())),
+        | Selector::Wildcard => Ok(ctx.all()),
     }
 }
 
@@ -108,6 +73,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
+    use crate::chunk_plan::errors::CoordIndexResolver;
     use crate::meta::ZarrDatasetMeta;
 
     struct DummyResolver;
@@ -142,7 +108,14 @@ mod tests {
         );
         let sel = Selector::ByName { names, strict: true };
 
-        let out = compile_selector(&sel, &meta, &dims, &dim_lengths, &vars, &mut resolver).unwrap();
+        let mut ctx = CompileCtx {
+            meta: &meta,
+            dims: &dims,
+            dim_lengths: &dim_lengths,
+            vars: &vars,
+            resolver: &mut resolver,
+        };
+        let out = compile_selector(&sel, &mut ctx).unwrap();
         assert!(out.0.contains_key("a"));
         assert!(out.0.contains_key("c"));
         assert!(!out.0.contains_key("b"));

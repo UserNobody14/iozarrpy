@@ -1,4 +1,5 @@
 use super::compile_node::compile_node;
+use super::compile_ctx::CompileCtx;
 use super::errors::CompileError;
 use super::errors::CoordIndexResolver;
 use super::monotonic_scalar::MonotonicCoordResolver;
@@ -52,7 +53,14 @@ pub(crate) fn compile_expr_to_dataset_selection(
 
     let vars = default_vars_for_dataset_selection(meta);
     let mut resolver = MonotonicCoordResolver::new(meta, store);
-    let selection = compile_node(expr, meta, &dims, &dim_lengths, &vars, &mut resolver)?;
+    let mut ctx = CompileCtx {
+        meta,
+        dims: &dims,
+        dim_lengths: &dim_lengths,
+        vars: &vars,
+        resolver: &mut resolver,
+    };
+    let selection = compile_node(expr, &mut ctx)?;
     let stats = PlannerStats {
         coord_reads: resolver.coord_read_count(),
     };

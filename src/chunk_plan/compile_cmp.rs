@@ -1,4 +1,5 @@
-use super::errors::{CompileError, CoordIndexResolver};
+use super::errors::CompileError;
+use super::compile_ctx::CompileCtx;
 use super::index_ranges::index_range_for_index_dim;
 use super::literals::{literal_to_scalar, reverse_operator, strip_wrappers};
 use super::prelude::*;
@@ -8,17 +9,14 @@ use super::types::{BoundKind, ValueRange};
 pub(super) fn compile_value_range_to_dataset_selection(
     col: &str,
     vr: &ValueRange,
-    meta: &ZarrDatasetMeta,
-    dims: &[String],
-    dim_lengths: &[u64],
-    vars: &[String],
-    resolver: &mut dyn CoordIndexResolver,
+    ctx: &mut CompileCtx<'_>,
 ) -> Result<DatasetSelection, CompileError> {
     if vr.empty {
         return Ok(DatasetSelection::empty());
     }
 
-    let dim_idx = dims
+    let dim_idx = ctx
+        .dims
         .iter()
         .position(|d| d == col)
         .ok_or(CompileError::Unsupported(format!(
@@ -26,13 +24,14 @@ pub(super) fn compile_value_range_to_dataset_selection(
             col
         )))?;
 
-    let idx_range = match resolver.index_range_for_value_range(col, vr) {
+    let idx_range = match ctx.resolver.index_range_for_value_range(col, vr) {
         Ok(Some(r)) => r,
         Ok(None) => {
             // If there's no 1D coordinate array for this dimension, treat it as a pure index dim.
             // This is common for grid dims like (y, x) where the user predicates on integer indices.
-            if meta.arrays.get(col).is_none() {
-                let dim_len = dim_lengths
+            if ctx.meta.arrays.get(col).is_none() {
+                let dim_len = ctx
+                    .dim_lengths
                     .get(dim_idx)
                     .copied()
                     .ok_or_else(|| CompileError::Unsupported("dimension length unavailable".to_owned()))?;
@@ -42,7 +41,7 @@ pub(super) fn compile_value_range_to_dataset_selection(
             } else {
                 // We have a coord array, but it may be non-monotonic / non-1D. Don't constrain.
                 return Ok(DatasetSelection::for_vars_with_selection(
-                    vars.to_vec(),
+                    ctx.vars.to_vec(),
                     DataArraySelection::all(),
                 ));
             }
@@ -61,7 +60,7 @@ pub(super) fn compile_value_range_to_dataset_selection(
     let rect = HyperRectangleSelection::all().with_dim(col.to_string(), RangeList::from_index_range(idx_range));
     let sel = DataArraySelection(vec![rect]);
     Ok(DatasetSelection::for_vars_with_selection(
-        vars.to_vec(),
+        ctx.vars.to_vec(),
         sel,
     ))
 }
@@ -70,13 +69,9 @@ pub(super) fn compile_cmp_to_dataset_selection(
     col: &str,
     op: Operator,
     lit: &LiteralValue,
-    meta: &ZarrDatasetMeta,
-    dims: &[String],
-    dim_lengths: &[u64],
-    vars: &[String],
-    resolver: &mut dyn CoordIndexResolver,
+    ctx: &mut CompileCtx<'_>,
 ) -> Result<DatasetSelection, CompileError> {
-    let time_encoding = meta.arrays.get(col).and_then(|a| a.time_encoding.as_ref());
+    let time_encoding = ctx.meta.arrays.get(col).and_then(|a| a.time_encoding.as_ref());
     let Some(scalar) = literal_to_scalar(lit, time_encoding) else {
         return Err(CompileError::Unsupported(format!(
             "unsupported literal: {:?}",
@@ -102,11 +97,7 @@ pub(super) fn compile_cmp_to_dataset_selection(
     compile_value_range_to_dataset_selection(
         col,
         &vr,
-        meta,
-        dims,
-        dim_lengths,
-        vars,
-        resolver,
+        ctx,
     )
 }
 

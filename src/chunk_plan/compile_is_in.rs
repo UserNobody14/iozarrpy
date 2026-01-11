@@ -1,5 +1,6 @@
 use super::compile_cmp::compile_cmp_to_dataset_selection;
-use super::errors::{CompileError, CoordIndexResolver};
+use super::compile_ctx::CompileCtx;
+use super::errors::CompileError;
 use super::expr_utils::expr_to_col_name;
 use super::literals::strip_wrappers;
 use super::prelude::*;
@@ -7,11 +8,7 @@ use super::selection::DatasetSelection;
 
 pub(super) fn compile_is_in(
     input: &[Expr],
-    meta: &ZarrDatasetMeta,
-    dims: &[String],
-    dim_lengths: &[u64],
-    vars: &[String],
-    resolver: &mut dyn CoordIndexResolver,
+    ctx: &mut CompileCtx<'_>,
 ) -> Result<DatasetSelection, CompileError> {
     if input.len() < 2 {
         return Err(CompileError::Unsupported(format!(
@@ -22,11 +19,11 @@ pub(super) fn compile_is_in(
     let expr = &input[0];
     let list = &input[1];
     let Some(col) = expr_to_col_name(expr) else {
-        return Ok(DatasetSelection::all_for_vars(vars.to_vec()));
+        return Ok(ctx.all());
     };
 
     let Expr::Literal(list_lit) = strip_wrappers(list) else {
-        return Ok(DatasetSelection::all_for_vars(vars.to_vec()));
+        return Ok(ctx.all());
     };
 
     let (dtype, values): (polars::prelude::DataType, Vec<AnyValue<'static>>) =
@@ -34,7 +31,7 @@ pub(super) fn compile_is_in(
             LiteralValue::Series(s) => {
                 let series = &**s;
                 if series.len() > 4096 {
-                    return Ok(DatasetSelection::all_for_vars(vars.to_vec()));
+                    return Ok(ctx.all());
                 }
                 (
                     series.dtype().clone(),
@@ -46,7 +43,7 @@ pub(super) fn compile_is_in(
                 match av {
                     AnyValue::List(series) => {
                         if series.len() > 4096 {
-                            return Ok(DatasetSelection::all_for_vars(vars.to_vec()));
+                            return Ok(ctx.all());
                         }
                         (
                             series.dtype().clone(),
@@ -55,24 +52,24 @@ pub(super) fn compile_is_in(
                     }
                     AnyValue::Array(series, _size) => {
                         if series.len() > 4096 {
-                            return Ok(DatasetSelection::all_for_vars(vars.to_vec()));
+                            return Ok(ctx.all());
                         }
                         (
                             series.dtype().clone(),
                             series.iter().map(|av| av.into_static()).collect(),
                         )
                     }
-                    _ => return Ok(DatasetSelection::all_for_vars(vars.to_vec())),
+                    _ => return Ok(ctx.all()),
                 }
             }
-            _ => return Ok(DatasetSelection::all_for_vars(vars.to_vec())),
+            _ => return Ok(ctx.all()),
         };
 
     let mut out: Option<DatasetSelection> = None;
     for av in values {
         if matches!(av, AnyValue::Null) {
             // Null membership semantics depend on `nulls_equal`; we avoid constraining.
-            return Ok(DatasetSelection::all_for_vars(vars.to_vec()));
+            return Ok(ctx.all());
         }
 
         let lit = LiteralValue::Scalar(Scalar::new(dtype.clone(), av));
@@ -80,16 +77,12 @@ pub(super) fn compile_is_in(
             col,
             Operator::Eq,
             &lit,
-            meta,
-            dims,
-            dim_lengths,
-            vars,
-            resolver,
+            ctx,
         )
-        .unwrap_or_else(|_| DatasetSelection::all_for_vars(vars.to_vec()));
+        .unwrap_or_else(|_| ctx.all());
 
-        if node == DatasetSelection::all_for_vars(vars.to_vec()) {
-            return Ok(DatasetSelection::all_for_vars(vars.to_vec()));
+        if node == ctx.all() {
+            return Ok(ctx.all());
         }
         out = Some(match out.take() {
             None => node,
