@@ -4,10 +4,7 @@ use std::sync::Arc;
 use futures::stream::{FuturesUnordered, StreamExt};
 use polars::prelude::*;
 use pyo3::prelude::*;
-use pyo3::types::PyAny;
-use pyo3_async_runtimes::tokio::future_into_py;
 use pyo3_polars::error::PyPolarsErr;
-use pyo3_polars::{PyDataFrame, PyExpr};
 use zarrs::array::Array;
 // (moved to `reader::retrieve_*`)
 

@@ -1,10 +1,7 @@
 use super::compile_boolean::compile_boolean_function;
 use super::compile_cmp::compile_cmp;
-use super::compile_is_between::compile_is_between;
-use super::compile_is_in::compile_is_in;
 use super::errors::CompileError;
-use super::expr_utils::expr_to_col_name;
-use super::literals::{col_lit, literal_anyvalue, or_nodes, and_nodes, reverse_operator, strip_wrappers};
+use super::literals::{col_lit, literal_anyvalue, or_nodes, and_nodes, reverse_operator};
 use super::plan::ChunkPlanNode;
 use super::prelude::*;
 use super::selector::compile_selector;

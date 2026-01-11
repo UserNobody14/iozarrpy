@@ -21,4 +21,4 @@ mod index_ranges;
 
 pub(crate) use compile_entry::{compile_expr_to_chunk_plan, PlannerStats};
 pub(crate) use errors::CompileError;
-pub(crate) use plan::{ChunkIndexIter, ChunkPlan, ChunkPlanNode};
+pub(crate) use plan::{ChunkIndexIter, ChunkPlan};

@@ -1,6 +1,6 @@
 use super::prelude::*;
 use super::plan::ChunkPlanNode;
-use super::types::{BoundKind, CoordScalar, DimChunkRange, IndexRange, ValueRange};
+use super::types::{CoordScalar, DimChunkRange, IndexRange};
 
 pub(super) fn apply_time_encoding(raw: i64, te: Option<&TimeEncoding>) -> CoordScalar {
     if let Some(enc) = te {
