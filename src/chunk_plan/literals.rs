@@ -241,9 +241,6 @@ pub(super) fn and_nodes(a: ChunkPlanNode, b: ChunkPlanNode) -> ChunkPlanNode {
             }
             ChunkPlanNode::Rect(out)
         }
-        // Anything else: fall back to a conservative union of both (still a superset).
-        // This avoids accidentally dropping candidates.
-        (x, y) => ChunkPlanNode::Union(vec![x, y]),
     }
 }
 

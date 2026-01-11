@@ -4,8 +4,7 @@ use pyo3_polars::PyExpr;
 use zarrs::array::Array;
 
 use crate::chunk_plan::{compile_expr_to_chunk_plan, ChunkPlan};
-use crate::meta::load_dataset_meta_from_opened;
-use crate::store::open_store;
+use crate::meta::open_and_load_dataset_meta;
 
 #[pyfunction]
 #[pyo3(signature = (zarr_url, predicate, variables=None))]
@@ -15,9 +14,7 @@ pub(crate) fn selected_chunks(
     predicate: &Bound<'_, PyAny>,
     variables: Option<Vec<String>>,
 ) -> PyResult<Vec<Py<PyAny>>> {
-    let opened =
-        open_store(&zarr_url).map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e))?;
-    let meta = load_dataset_meta_from_opened(&opened)
+    let (opened, meta) = open_and_load_dataset_meta(&zarr_url)
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e))?;
 
     let vars = variables.unwrap_or_else(|| meta.data_vars.clone());
@@ -47,14 +44,8 @@ pub(crate) fn selected_chunks(
         compile_expr_to_chunk_plan(&expr, &meta, opened.store.clone(), primary_var)
             .unwrap_or_else(|_| {
                 let grid_shape = primary.chunk_grid().grid_shape().to_vec();
-                let zero = vec![0u64; primary.dimensionality()];
-                let regular_chunk_shape = primary
-                    .chunk_shape(&zero)
-                    .map(|v| v.iter().map(|x| x.get()).collect::<Vec<u64>>())
-                    .unwrap_or_else(|_| vec![1; primary.dimensionality()]);
-                let dims = primary_meta.dims.clone();
                 (
-                    ChunkPlan::all(dims, grid_shape, regular_chunk_shape),
+                    ChunkPlan::all(grid_shape),
                     crate::chunk_plan::PlannerStats { coord_reads: 0 },
                 )
             });
@@ -71,10 +62,15 @@ pub(crate) fn selected_chunks(
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?
             .unwrap_or_else(|| vec![0; shape.len()]);
 
+        let chunk = crate::chunk_plan::ChunkId {
+            indices: idx,
+            origin,
+            shape,
+        };
         let d = pyo3::types::PyDict::new(py);
-        d.set_item("indices", idx)?;
-        d.set_item("origin", origin)?;
-        d.set_item("shape", shape)?;
+        d.set_item("indices", &chunk.indices)?;
+        d.set_item("origin", &chunk.origin)?;
+        d.set_item("shape", &chunk.shape)?;
         out.push(d.into());
     }
     Ok(out)
@@ -88,9 +84,7 @@ pub(crate) fn _selected_chunks_debug(
     predicate: &Bound<'_, PyAny>,
     variables: Option<Vec<String>>,
 ) -> PyResult<(Vec<Py<PyAny>>, u64)> {
-    let opened =
-        open_store(&zarr_url).map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e))?;
-    let meta = load_dataset_meta_from_opened(&opened)
+    let (opened, meta) = open_and_load_dataset_meta(&zarr_url)
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e))?;
 
     let vars = variables.unwrap_or_else(|| meta.data_vars.clone());
@@ -138,10 +132,15 @@ pub(crate) fn _selected_chunks_debug(
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?
             .unwrap_or_else(|| vec![0; shape.len()]);
 
+        let chunk = crate::chunk_plan::ChunkId {
+            indices: idx,
+            origin,
+            shape,
+        };
         let d = pyo3::types::PyDict::new(py);
-        d.set_item("indices", idx)?;
-        d.set_item("origin", origin)?;
-        d.set_item("shape", shape)?;
+        d.set_item("indices", &chunk.indices)?;
+        d.set_item("origin", &chunk.origin)?;
+        d.set_item("shape", &chunk.shape)?;
         out.push(d.into());
     }
 

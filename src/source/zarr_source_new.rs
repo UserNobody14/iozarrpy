@@ -6,8 +6,7 @@ impl ZarrSource {
         variables: Option<Vec<String>>,
         max_chunks_to_read: Option<usize>,
     ) -> PyResult<Self> {
-        let opened = open_store(&zarr_url).map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
-        let meta = load_dataset_meta_from_opened(&opened)
+        let (opened, meta) = crate::meta::open_and_load_dataset_meta(&zarr_url)
             .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
 
         let store = opened.store.clone();
@@ -36,13 +35,6 @@ impl ZarrSource {
         })?;
 
         let primary_grid_shape = primary.chunk_grid().grid_shape().to_vec();
-        let zero = vec![0u64; primary.dimensionality()];
-        let regular_chunk_shape = primary
-            .chunk_shape(&zero)
-            .map_err(to_py_err)?
-            .iter()
-            .map(|x| x.get())
-            .collect::<Vec<u64>>();
 
         // Polars may pass 0 to mean "unspecified"; interpret it as the default.
         let n_rows_left = match n_rows {
@@ -60,9 +52,7 @@ impl ZarrSource {
             .map(|m| m.dims.clone())
             .filter(|d| !d.is_empty())
             .unwrap_or_else(|| (0..primary.dimensionality()).map(|i| format!("dim_{i}")).collect());
-        let chunk_iter =
-            ChunkPlan::all(dims.clone(), primary_grid_shape.clone(), regular_chunk_shape)
-                .into_index_iter();
+        let chunk_iter = ChunkPlan::all(primary_grid_shape.clone()).into_index_iter();
 
         Ok(Self {
             meta,

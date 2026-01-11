@@ -6,7 +6,6 @@ pub(crate) enum ChunkPlanNode {
     AllChunks,
     Rect(Vec<DimChunkRange>),
     Union(Vec<ChunkPlanNode>),
-    PointSet(Vec<Vec<u64>>),
 }
 
 impl ChunkPlanNode {
@@ -17,63 +16,27 @@ impl ChunkPlanNode {
 
 #[derive(Debug, Clone)]
 pub(crate) struct ChunkPlan {
-    dims: Vec<String>,
     grid_shape: Vec<u64>,
-    regular_chunk_shape: Vec<u64>,
     root: ChunkPlanNode,
 }
 
 impl ChunkPlan {
-    pub(crate) fn all(
-        dims: Vec<String>,
-        grid_shape: Vec<u64>,
-        regular_chunk_shape: Vec<u64>,
-    ) -> Self {
+    pub(crate) fn all(grid_shape: Vec<u64>) -> Self {
         Self {
-            dims,
             grid_shape,
-            regular_chunk_shape,
             root: ChunkPlanNode::AllChunks,
         }
     }
 
-    pub(crate) fn empty(
-        dims: Vec<String>,
-        grid_shape: Vec<u64>,
-        regular_chunk_shape: Vec<u64>,
-    ) -> Self {
+    pub(crate) fn from_root(grid_shape: Vec<u64>, root: ChunkPlanNode) -> Self {
         Self {
-            dims,
             grid_shape,
-            regular_chunk_shape,
-            root: ChunkPlanNode::Empty,
-        }
-    }
-
-    pub(crate) fn from_root(
-        dims: Vec<String>,
-        grid_shape: Vec<u64>,
-        regular_chunk_shape: Vec<u64>,
-        root: ChunkPlanNode,
-    ) -> Self {
-        Self {
-            dims,
-            grid_shape,
-            regular_chunk_shape,
             root,
         }
     }
 
-    pub(crate) fn dims(&self) -> &[String] {
-        &self.dims
-    }
-
     pub(crate) fn grid_shape(&self) -> &[u64] {
         &self.grid_shape
-    }
-
-    pub(crate) fn regular_chunk_shape(&self) -> &[u64] {
-        &self.regular_chunk_shape
     }
 
     pub(crate) fn into_index_iter(self) -> ChunkIndexIter {
@@ -89,7 +52,6 @@ enum OwnedIterFrame {
     Empty,
     AllChunks(AllChunksIter),
     Rect(RectIter),
-    PointSet { points: Vec<Vec<u64>>, idx: usize },
     Union(UnionOwnedIter),
 }
 
@@ -109,9 +71,6 @@ impl ChunkIndexIter {
             ChunkPlanNode::Rect(ranges) => self
                 .stack
                 .push(OwnedIterFrame::Rect(RectIter::new(&ranges))),
-            ChunkPlanNode::PointSet(points) => {
-                self.stack.push(OwnedIterFrame::PointSet { points, idx: 0 })
-            }
             ChunkPlanNode::Union(children) => self.stack.push(OwnedIterFrame::Union(
                 UnionOwnedIter::new(children, grid_shape),
             )),
@@ -136,16 +95,6 @@ impl Iterator for ChunkIndexIter {
                 OwnedIterFrame::Rect(mut it) => {
                     if let Some(v) = it.next() {
                         self.stack.push(OwnedIterFrame::Rect(it));
-                        return Some(v);
-                    }
-                }
-                OwnedIterFrame::PointSet { points, idx } => {
-                    if idx < points.len() {
-                        let v = points[idx].clone();
-                        self.stack.push(OwnedIterFrame::PointSet {
-                            points,
-                            idx: idx + 1,
-                        });
                         return Some(v);
                     }
                 }

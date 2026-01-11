@@ -49,14 +49,24 @@ pub(crate) struct ValueRange {
     pub(crate) min: Option<(CoordScalar, BoundKind)>,
     pub(crate) max: Option<(CoordScalar, BoundKind)>,
     pub(crate) eq: Option<CoordScalar>,
+    pub(crate) empty: bool,
 }
 
 impl ValueRange {
     pub(crate) fn intersect(&self, other: &ValueRange) -> ValueRange {
+        if self.empty || other.empty {
+            return ValueRange {
+                empty: true,
+                ..Default::default()
+            };
+        }
         let mut out = ValueRange::default();
         out.eq = match (&self.eq, &other.eq) {
             (Some(a), Some(b)) if a == b => Some(a.clone()),
-            (Some(_), Some(_)) => None, // contradictory; will become empty downstream
+            (Some(_), Some(_)) => {
+                out.empty = true;
+                return out;
+            }
             (Some(a), None) => Some(a.clone()),
             (None, Some(b)) => Some(b.clone()),
             (None, None) => None,
@@ -64,6 +74,35 @@ impl ValueRange {
 
         out.min = pick_tighter_min(self.min.clone(), other.min.clone());
         out.max = pick_tighter_max(self.max.clone(), other.max.clone());
+
+        // If we have an equality constraint, ensure it's compatible with min/max.
+        if let Some(eq) = &out.eq {
+            if let Some((min_v, min_k)) = &out.min {
+                let ord = eq.partial_cmp(min_v);
+                let ok = match (ord, min_k) {
+                    (Some(std::cmp::Ordering::Greater), _) => true,
+                    (Some(std::cmp::Ordering::Equal), BoundKind::Inclusive) => true,
+                    _ => false,
+                };
+                if !ok {
+                    out.empty = true;
+                    return out;
+                }
+            }
+            if let Some((max_v, max_k)) = &out.max {
+                let ord = eq.partial_cmp(max_v);
+                let ok = match (ord, max_k) {
+                    (Some(std::cmp::Ordering::Less), _) => true,
+                    (Some(std::cmp::Ordering::Equal), BoundKind::Inclusive) => true,
+                    _ => false,
+                };
+                if !ok {
+                    out.empty = true;
+                    return out;
+                }
+            }
+        }
+
         out
     }
 }

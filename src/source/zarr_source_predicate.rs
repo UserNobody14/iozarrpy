@@ -30,15 +30,8 @@ impl ZarrSource {
                 let primary_path = self.meta.arrays[&self.vars[0]].path.clone();
                 let primary = Array::open(self.store.clone(), &primary_path).map_err(to_py_err)?;
                 let grid_shape = primary.chunk_grid().grid_shape().to_vec();
-                let zero = vec![0u64; primary.dimensionality()];
-                let regular_chunk_shape = primary
-                    .chunk_shape(&zero)
-                    .map_err(to_py_err)?
-                    .iter()
-                    .map(|x| x.get())
-                    .collect::<Vec<u64>>();
                 self.primary_grid_shape = grid_shape.clone();
-                self.chunk_iter = ChunkPlan::all(self.dims.clone(), grid_shape, regular_chunk_shape).into_index_iter();
+                self.chunk_iter = ChunkPlan::all(grid_shape).into_index_iter();
                 self.current_chunk_indices = None;
                 self.chunk_offset = 0;
             }

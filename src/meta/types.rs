@@ -22,34 +22,21 @@ impl TimeEncoding {
             self.epoch_ns + raw * self.unit_ns
         }
     }
-
-    #[inline]
-    pub fn encode(&self, ns: i64) -> i64 {
-        if self.is_duration {
-            ns / self.unit_ns
-        } else {
-            (ns - self.epoch_ns) / self.unit_ns
-        }
-    }
 }
 
 #[derive(Debug, Clone)]
 pub struct ZarrArrayMeta {
-    pub name: String,
     pub path: String,
     pub shape: Vec<u64>,
     pub dims: Vec<String>,
-    pub zarr_dtype: String,
     pub polars_dtype: PlDataType,
     pub time_encoding: Option<TimeEncoding>,
 }
 
 #[derive(Debug, Clone)]
 pub struct ZarrDatasetMeta {
-    pub root: String,
     pub arrays: BTreeMap<String, ZarrArrayMeta>,
     pub dims: Vec<String>,
-    pub coords: Vec<String>,
     pub data_vars: Vec<String>,
 }
 

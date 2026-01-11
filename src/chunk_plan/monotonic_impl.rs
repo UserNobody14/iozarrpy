@@ -1,7 +1,7 @@
 use super::errors::{CoordIndexResolver, ResolveError};
 use super::monotonic_scalar::MonotonicCoordResolver;
 use super::prelude::*;
-use super::types::{BoundKind, CoordScalar, IndexRange, ValueRange};
+use super::types::{BoundKind, IndexRange, ValueRange};
 
 impl CoordIndexResolver for MonotonicCoordResolver<'_> {
     fn index_range_for_value_range(
@@ -56,30 +56,6 @@ impl CoordIndexResolver for MonotonicCoordResolver<'_> {
             start,
             end_exclusive,
         }))
-    }
-
-    fn index_for_value(
-        &mut self,
-        dim: &str,
-        value: &CoordScalar,
-    ) -> Result<Option<u64>, ResolveError> {
-        let Some(meta) = self.meta.arrays.get(dim) else {
-            return Ok(None);
-        };
-        if meta.shape.len() != 1 {
-            return Ok(None);
-        }
-        let n = meta.shape[0];
-        let Some(dir) = self.ensure_monotonic(dim)? else {
-            return Ok(None);
-        };
-        let start = self.lower_bound(dim, value, false, dir, n)?;
-        let end = self.upper_bound(dim, value, false, dir, n)?;
-        if start < end {
-            Ok(Some(start))
-        } else {
-            Ok(None)
-        }
     }
 
     fn coord_read_count(&self) -> u64 {

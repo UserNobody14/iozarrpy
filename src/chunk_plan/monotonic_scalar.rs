@@ -32,10 +32,6 @@ impl<'a> MonotonicCoordResolver<'a> {
         }
     }
 
-    pub(crate) fn read_count_handle(&self) -> Arc<AtomicU64> {
-        self.read_count.clone()
-    }
-
     fn coord_array(
         &mut self,
         dim: &str,

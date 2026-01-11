@@ -1,5 +1,5 @@
 use super::compile_boolean::compile_boolean_function;
-use super::compile_cmp::compile_cmp;
+use super::compile_cmp::{compile_cmp, compile_value_range, try_expr_to_value_range};
 use super::errors::CompileError;
 use super::literals::{col_lit, literal_anyvalue, or_nodes, and_nodes, reverse_operator};
 use super::plan::ChunkPlanNode;
@@ -113,6 +113,26 @@ pub(super) fn compile_node(
         Expr::BinaryExpr { left, op, right } => {
             match op {
                 Operator::And | Operator::LogicalAnd => {
+                    // Fast path: merge compatible comparisons on the same column into a single
+                    // ValueRange. This reduces resolver reads and enables tighter planning.
+                    if let (Some((col_a, vr_a)), Some((col_b, vr_b))) = (
+                        try_expr_to_value_range(left.as_ref(), meta),
+                        try_expr_to_value_range(right.as_ref(), meta),
+                    ) {
+                        if col_a == col_b {
+                            let vr = vr_a.intersect(&vr_b);
+                            return compile_value_range(
+                                &col_a,
+                                &vr,
+                                meta,
+                                dims,
+                                grid_shape,
+                                regular_chunk_shape,
+                                resolver,
+                            );
+                        }
+                    }
+
                     // If one side is unsupported, keep whatever constraints we can from the other.
                     let a = compile_node(
                         left.as_ref(),

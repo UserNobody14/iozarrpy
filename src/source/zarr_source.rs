@@ -13,14 +13,9 @@ use crate::reader::{
     checked_chunk_len, compute_strides, compute_var_chunk_info, retrieve_1d_subset, retrieve_chunk,
     ColumnData,
 };
-use crate::meta::{load_dataset_meta_from_opened, ZarrDatasetMeta};
-use crate::store::open_store;
+use crate::meta::ZarrDatasetMeta;
 
 const DEFAULT_BATCH_SIZE: usize = 10_000;
-
-fn to_string_err<E: std::fmt::Display>(e: E) -> String {
-    e.to_string()
-}
 
 #[pyclass]
 pub struct ZarrSource {

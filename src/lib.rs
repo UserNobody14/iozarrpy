@@ -1,7 +1,6 @@
 use pyo3::prelude::*;
 
 mod chunk_plan;
-mod error;
 mod meta;
 mod py;
 mod reader;

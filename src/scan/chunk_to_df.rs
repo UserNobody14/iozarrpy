@@ -54,16 +54,26 @@ async fn chunk_to_df(
         };
         let dim_start = origin[d];
         let dim_len = chunk_shape[d];
+        let dim_len_usize: usize = dim_len
+            .try_into()
+            .map_err(|_| PyErr::new::<pyo3::exceptions::PyValueError, _>("dim len overflow"))?;
         let arr = Arc::clone(arr);
         let dim_name = dim_name.clone();
         coord_reads.push(async move {
             let coord = retrieve_1d_subset_async(&arr, dim_start, dim_len).await;
-            (dim_name, coord)
+            (dim_name, dim_len_usize, coord)
         });
     }
     let mut coord_slices: std::collections::BTreeMap<String, ColumnData> = Default::default();
-    while let Some((name, res)) = coord_reads.next().await {
-        coord_slices.insert(name, res.map_err(to_py_err)?);
+    while let Some((name, expected_len, res)) = coord_reads.next().await {
+        let coord = res.map_err(to_py_err)?;
+        if coord.len() != expected_len {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "coord '{name}' length mismatch: expected {expected_len}, got {}",
+                coord.len()
+            )));
+        }
+        coord_slices.insert(name, coord);
     }
 
     // Var chunk reads in parallel.

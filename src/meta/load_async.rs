@@ -9,9 +9,12 @@ use crate::meta::time_encoding::extract_time_encoding;
 use crate::meta::types::{ZarrArrayMeta, ZarrDatasetMeta};
 use crate::store::{open_store_async, AsyncOpenedStore};
 
-pub async fn load_dataset_meta_async(zarr_url: &str) -> Result<ZarrDatasetMeta, String> {
+pub async fn open_and_load_dataset_meta_async(
+    zarr_url: &str,
+) -> Result<(AsyncOpenedStore, ZarrDatasetMeta), String> {
     let opened = open_store_async(zarr_url)?;
-    load_dataset_meta_from_opened_async(&opened).await
+    let meta = load_dataset_meta_from_opened_async(&opened).await?;
+    Ok((opened, meta))
 }
 
 pub async fn load_dataset_meta_from_opened_async(
@@ -64,8 +67,8 @@ pub async fn load_dataset_meta_from_opened_async(
             coord_candidates.insert(leaf.clone(), (shape.clone(), dt));
         }
 
-        let zarr_dtype = array.data_type().identifier().to_string();
-        let polars_dtype = zarr_dtype_to_polars(&zarr_dtype, time_encoding.as_ref());
+        let polars_dtype =
+            zarr_dtype_to_polars(array.data_type().identifier(), time_encoding.as_ref());
 
         let name = match seen_names.get_mut(&leaf) {
             None => {
@@ -81,11 +84,9 @@ pub async fn load_dataset_meta_from_opened_async(
         arrays.insert(
             name.clone(),
             ZarrArrayMeta {
-                name,
                 path: path_str,
                 shape,
                 dims,
-                zarr_dtype,
                 polars_dtype,
                 time_encoding,
             },
@@ -110,13 +111,7 @@ pub async fn load_dataset_meta_from_opened_async(
         .cloned()
         .collect();
 
-    Ok(ZarrDatasetMeta {
-        root,
-        arrays,
-        dims,
-        coords,
-        data_vars,
-    })
+    Ok(ZarrDatasetMeta { arrays, dims, data_vars })
 }
 
 fn to_string_err<E: std::fmt::Display>(e: E) -> String {

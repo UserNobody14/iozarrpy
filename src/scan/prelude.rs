@@ -13,8 +13,8 @@ use crate::reader::{
     checked_chunk_len, compute_strides, compute_var_chunk_info_async, retrieve_1d_subset_async,
     retrieve_chunk_async, ColumnData,
 };
-use crate::meta::{load_dataset_meta_from_opened_async, ZarrDatasetMeta};
-use crate::store::{open_store, open_store_async};
+use crate::meta::{open_and_load_dataset_meta_async, ZarrDatasetMeta};
+use crate::store::open_store;
 
 const DEFAULT_MAX_CONCURRENCY: usize = 16;
 
@@ -25,4 +25,3 @@ fn to_string_err<E: std::fmt::Display>(e: E) -> String {
 fn to_py_err<E: std::fmt::Display>(e: E) -> PyErr {
     PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string())
 }
-

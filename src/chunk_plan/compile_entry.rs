@@ -46,7 +46,7 @@ pub(crate) fn compile_expr_to_chunk_plan(
         &mut resolver,
     )?;
     let grid_shape_vec = grid_shape.to_vec();
-    let plan = ChunkPlan::from_root(dims, grid_shape_vec, regular_chunk_shape, root);
+    let plan = ChunkPlan::from_root(grid_shape_vec, root);
     let stats = PlannerStats {
         coord_reads: resolver.coord_read_count(),
     };

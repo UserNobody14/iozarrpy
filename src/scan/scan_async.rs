@@ -6,10 +6,8 @@ pub(crate) async fn scan_zarr_df_async(
     with_columns: Option<BTreeSet<String>>,
 ) -> Result<DataFrame, PyErr> {
     // Async open + async meta traversal.
-    let opened_async = open_store_async(&zarr_url).map_err(to_py_err)?;
-    let meta = load_dataset_meta_from_opened_async(&opened_async)
-        .await
-        .map_err(to_py_err)?;
+    let (opened_async, meta) =
+        open_and_load_dataset_meta_async(&zarr_url).await.map_err(to_py_err)?;
 
     let vars = variables.unwrap_or_else(|| meta.data_vars.clone());
     if vars.is_empty() {
@@ -40,7 +38,6 @@ pub(crate) async fn scan_zarr_df_async(
     let meta_plan = meta.clone();
     let expr_plan = expr.clone();
     let primary_var_plan = primary_var.to_string();
-    let dims_for_fallback = dims.clone();
     let (plan, _stats) = tokio::task::spawn_blocking(move || -> Result<(ChunkPlan, crate::chunk_plan::PlannerStats), PyErr> {
         let opened_sync = open_store(&zarr_url_plan).map_err(to_py_err)?;
         match compile_expr_to_chunk_plan(
@@ -58,15 +55,8 @@ pub(crate) async fn scan_zarr_df_async(
                 )
                 .map_err(to_py_err)?;
                 let grid_shape = arr.chunk_grid().grid_shape().to_vec();
-                let zero = vec![0u64; arr.dimensionality()];
-                let regular_chunk_shape = arr
-                    .chunk_shape(&zero)
-                    .map_err(to_py_err)?
-                    .iter()
-                    .map(|x| x.get())
-                    .collect::<Vec<u64>>();
                 Ok((
-                    ChunkPlan::all(dims_for_fallback.clone(), grid_shape, regular_chunk_shape),
+                    ChunkPlan::all(grid_shape),
                     crate::chunk_plan::PlannerStats { coord_reads: 0 },
                 ))
             }
