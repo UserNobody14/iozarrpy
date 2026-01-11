@@ -1,0 +1,55 @@
+impl ZarrSource {
+    fn try_set_predicate_impl(&mut self, predicate: &Bound<'_, PyAny>) -> PyResult<()> {
+        // IMPORTANT: Taking `PyExpr` directly in the signature can abort the whole
+        // Python process if the Python->Rust Expr conversion panics.
+        //
+        // By accepting `PyAny` and extracting inside a `catch_unwind`, we can turn
+        // those panics into a normal Python exception which the Python wrapper can
+        // safely ignore (disabling pushdown but keeping correctness).
+        let expr = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let pyexpr: PyExpr = predicate.extract()?;
+            Ok::<Expr, PyErr>(pyexpr.0.clone())
+        }))
+        .map_err(|e| panic_to_py_err(e))??;
+
+        // Compile Expr -> candidate-chunk plan (no full-grid scans).
+        let compiled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            compile_expr_to_chunk_plan(&expr, &self.meta, self.store.clone(), &self.vars[0])
+        }))
+        .map_err(|e| panic_to_py_err(e))?;
+
+        match compiled {
+            Ok((plan, _stats)) => {
+                self.primary_grid_shape = plan.grid_shape().to_vec();
+                self.chunk_iter = plan.into_index_iter();
+                self.current_chunk_indices = None;
+                self.chunk_offset = 0;
+            }
+            Err(_) => {
+                // Fall back to scanning all chunks if planning fails.
+                let primary_path = self.meta.arrays[&self.vars[0]].path.clone();
+                let primary = Array::open(self.store.clone(), &primary_path).map_err(to_py_err)?;
+                let grid_shape = primary.chunk_grid().grid_shape().to_vec();
+                let zero = vec![0u64; primary.dimensionality()];
+                let regular_chunk_shape = primary
+                    .chunk_shape(&zero)
+                    .map_err(to_py_err)?
+                    .iter()
+                    .map(|x| x.get())
+                    .collect::<Vec<u64>>();
+                self.primary_grid_shape = grid_shape.clone();
+                self.chunk_iter = ChunkPlan::all(self.dims.clone(), grid_shape, regular_chunk_shape).into_index_iter();
+                self.current_chunk_indices = None;
+                self.chunk_offset = 0;
+            }
+        }
+
+        self.predicate = Some(expr);
+        Ok(())
+    }
+
+    fn set_with_columns_impl(&mut self, columns: Vec<String>) {
+        self.with_columns = Some(columns.into_iter().collect());
+    }
+
+}
