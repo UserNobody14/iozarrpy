@@ -17,8 +17,20 @@ mod compile_is_between;
 mod compile_is_in;
 mod compile_cmp;
 mod index_ranges;
+mod selection;
+mod selection_to_chunks;
 
-pub(crate) use compile_entry::{compile_expr_to_chunk_plan, PlannerStats};
+#[allow(unused_imports)]
+pub(crate) use compile_entry::{
+    compile_expr_to_chunk_plan, compile_expr_to_dataset_selection, PlannerStats,
+};
 pub(crate) use errors::CompileError;
 pub(crate) use plan::{ChunkIndexIter, ChunkPlan};
 pub(crate) use types::ChunkId;
+#[allow(unused_imports)]
+pub(crate) use selection::{
+    DataArraySelection, DatasetSelection, HyperRectangleSelection, RangeList, ScalarRange,
+};
+#[allow(unused_imports)]
+pub(crate) use selection_to_chunks::plan_dataset_chunk_indices;
+

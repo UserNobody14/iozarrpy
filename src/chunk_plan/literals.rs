@@ -222,6 +222,16 @@ pub(super) fn and_nodes(a: ChunkPlanNode, b: ChunkPlanNode) -> ChunkPlanNode {
     match (a, b) {
         (ChunkPlanNode::Empty, _) | (_, ChunkPlanNode::Empty) => ChunkPlanNode::Empty,
         (ChunkPlanNode::AllChunks, x) | (x, ChunkPlanNode::AllChunks) => x,
+        (ChunkPlanNode::Explicit(xs), ChunkPlanNode::Explicit(ys)) => {
+            // Exact set intersection on explicit chunk coords.
+            let set: std::collections::BTreeSet<Vec<u64>> = ys.into_iter().collect();
+            ChunkPlanNode::Explicit(xs.into_iter().filter(|v| set.contains(v)).collect())
+        }
+        (ChunkPlanNode::Explicit(xs), _) | (_, ChunkPlanNode::Explicit(xs)) => {
+            // Conservative: we don't have enough info to intersect Explicit with Rect/Union
+            // without chunk grid context, so keep the explicit set.
+            ChunkPlanNode::Explicit(xs)
+        }
         (ChunkPlanNode::Union(xs), y) => {
             ChunkPlanNode::Union(xs.into_iter().map(|x| and_nodes(x, y.clone())).collect())
         }
@@ -248,6 +258,12 @@ pub(super) fn or_nodes(a: ChunkPlanNode, b: ChunkPlanNode) -> ChunkPlanNode {
     match (a, b) {
         (ChunkPlanNode::Empty, x) | (x, ChunkPlanNode::Empty) => x,
         (ChunkPlanNode::AllChunks, _) | (_, ChunkPlanNode::AllChunks) => ChunkPlanNode::AllChunks,
+        (ChunkPlanNode::Explicit(mut xs), ChunkPlanNode::Explicit(ys)) => {
+            xs.extend(ys);
+            ChunkPlanNode::Explicit(xs)
+        }
+        (ChunkPlanNode::Explicit(xs), y) => ChunkPlanNode::Union(vec![ChunkPlanNode::Explicit(xs), y]),
+        (x, ChunkPlanNode::Explicit(ys)) => ChunkPlanNode::Union(vec![x, ChunkPlanNode::Explicit(ys)]),
         (ChunkPlanNode::Union(mut xs), ChunkPlanNode::Union(ys)) => {
             xs.extend(ys);
             ChunkPlanNode::Union(xs)

@@ -3,18 +3,18 @@ use super::compile_is_between::compile_is_between;
 use super::compile_is_in::compile_is_in;
 use super::errors::{CompileError, CoordIndexResolver};
 use super::literals::{literal_anyvalue, strip_wrappers};
-use super::plan::ChunkPlanNode;
 use super::prelude::*;
+use super::selection::DatasetSelection;
 
 pub(super) fn compile_boolean_function(
     bf: &BooleanFunction,
     input: &[Expr],
     meta: &ZarrDatasetMeta,
     dims: &[String],
-    grid_shape: &[u64],
-    regular_chunk_shape: &[u64],
+    dim_lengths: &[u64],
+    vars: &[String],
     resolver: &mut dyn CoordIndexResolver,
-) -> Result<ChunkPlanNode, CompileError> {
+) -> Result<DatasetSelection, CompileError> {
     match bf {
         BooleanFunction::Not => {
             let [arg] = input else {
@@ -26,20 +26,22 @@ pub(super) fn compile_boolean_function(
             // Try constant fold first.
             if let Expr::Literal(lit) = strip_wrappers(arg) {
                 return match literal_anyvalue(lit) {
-                    Some(AnyValue::Boolean(true)) => Ok(ChunkPlanNode::Empty),
-                    Some(AnyValue::Boolean(false)) => Ok(ChunkPlanNode::AllChunks),
-                    Some(AnyValue::Null) => Ok(ChunkPlanNode::Empty),
-                    _ => Ok(ChunkPlanNode::AllChunks),
+                    Some(AnyValue::Boolean(true)) => Ok(DatasetSelection::empty()),
+                    Some(AnyValue::Boolean(false)) => Ok(DatasetSelection::all_for_vars(vars.to_vec())),
+                    Some(AnyValue::Null) => Ok(DatasetSelection::empty()),
+                    _ => Ok(DatasetSelection::all_for_vars(vars.to_vec())),
                 };
             }
 
             // If the inner predicate is known to match nothing, NOT(...) matches everything.
             // Otherwise we can't represent complements with current plan nodes.
-            match compile_node(arg, meta, dims, grid_shape, regular_chunk_shape, resolver)
-                .unwrap_or(ChunkPlanNode::AllChunks)
-            {
-                ChunkPlanNode::Empty => Ok(ChunkPlanNode::AllChunks),
-                _ => Ok(ChunkPlanNode::AllChunks),
+            let inner =
+                compile_node(arg, meta, dims, dim_lengths, vars, resolver)
+                    .unwrap_or_else(|_| DatasetSelection::all_for_vars(vars.to_vec()));
+            if inner.0.is_empty() {
+                Ok(DatasetSelection::all_for_vars(vars.to_vec()))
+            } else {
+                Ok(DatasetSelection::all_for_vars(vars.to_vec()))
             }
         }
         BooleanFunction::IsNull | BooleanFunction::IsNotNull => {
@@ -59,12 +61,12 @@ pub(super) fn compile_boolean_function(
                     _ => unreachable!(),
                 };
                 return Ok(if keep {
-                    ChunkPlanNode::AllChunks
+                    DatasetSelection::all_for_vars(vars.to_vec())
                 } else {
-                    ChunkPlanNode::Empty
+                    DatasetSelection::empty()
                 });
             }
-            Ok(ChunkPlanNode::AllChunks)
+            Ok(DatasetSelection::all_for_vars(vars.to_vec()))
         }
         _ => {
             // Future-proof handling for optional Polars boolean features without hard-referencing
@@ -72,12 +74,12 @@ pub(super) fn compile_boolean_function(
             let name = bf.to_string();
             match name.as_str() {
                 "is_between" => {
-                    compile_is_between(input, meta, dims, grid_shape, regular_chunk_shape, resolver)
+                    compile_is_between(input, meta, dims, dim_lengths, vars, resolver)
                 }
                 "is_in" => {
-                    compile_is_in(input, meta, dims, grid_shape, regular_chunk_shape, resolver)
+                    compile_is_in(input, meta, dims, dim_lengths, vars, resolver)
                 }
-                _ => Ok(ChunkPlanNode::AllChunks),
+                _ => Ok(DatasetSelection::all_for_vars(vars.to_vec())),
             }
         }
     }

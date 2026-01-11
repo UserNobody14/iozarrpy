@@ -153,7 +153,7 @@ fn pick_tighter_max(
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct IndexRange {
     pub(crate) start: u64,
     pub(crate) end_exclusive: u64,

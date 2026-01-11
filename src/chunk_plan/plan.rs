@@ -5,12 +5,17 @@ pub(crate) enum ChunkPlanNode {
     Empty,
     AllChunks,
     Rect(Vec<DimChunkRange>),
+    Explicit(Vec<Vec<u64>>),
     Union(Vec<ChunkPlanNode>),
 }
 
 impl ChunkPlanNode {
     pub(crate) fn is_empty(&self) -> bool {
-        matches!(self, ChunkPlanNode::Empty)
+        match self {
+            ChunkPlanNode::Empty => true,
+            ChunkPlanNode::Explicit(v) => v.is_empty(),
+            _ => false,
+        }
     }
 }
 
@@ -52,6 +57,7 @@ enum OwnedIterFrame {
     Empty,
     AllChunks(AllChunksIter),
     Rect(RectIter),
+    Explicit(ExplicitIter),
     Union(UnionOwnedIter),
 }
 
@@ -71,6 +77,9 @@ impl ChunkIndexIter {
             ChunkPlanNode::Rect(ranges) => self
                 .stack
                 .push(OwnedIterFrame::Rect(RectIter::new(&ranges))),
+            ChunkPlanNode::Explicit(items) => self
+                .stack
+                .push(OwnedIterFrame::Explicit(ExplicitIter::new(items))),
             ChunkPlanNode::Union(children) => self.stack.push(OwnedIterFrame::Union(
                 UnionOwnedIter::new(children, grid_shape),
             )),
@@ -95,6 +104,12 @@ impl Iterator for ChunkIndexIter {
                 OwnedIterFrame::Rect(mut it) => {
                     if let Some(v) = it.next() {
                         self.stack.push(OwnedIterFrame::Rect(it));
+                        return Some(v);
+                    }
+                }
+                OwnedIterFrame::Explicit(mut it) => {
+                    if let Some(v) = it.next() {
+                        self.stack.push(OwnedIterFrame::Explicit(it));
                         return Some(v);
                     }
                 }
@@ -193,6 +208,30 @@ impl Iterator for RectIter {
         }
         self.done = true;
         None
+    }
+}
+
+struct ExplicitIter {
+    items: Vec<Vec<u64>>,
+    idx: usize,
+}
+
+impl ExplicitIter {
+    fn new(items: Vec<Vec<u64>>) -> Self {
+        Self { items, idx: 0 }
+    }
+}
+
+impl Iterator for ExplicitIter {
+    type Item = Vec<u64>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.idx >= self.items.len() {
+            return None;
+        }
+        let v = self.items[self.idx].clone();
+        self.idx += 1;
+        Some(v)
     }
 }
 

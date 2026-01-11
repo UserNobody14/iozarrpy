@@ -1,9 +1,11 @@
 use super::compile_boolean::compile_boolean_function;
-use super::compile_cmp::{compile_cmp, compile_value_range, try_expr_to_value_range};
+use super::compile_cmp::{
+    compile_cmp_to_dataset_selection, compile_value_range_to_dataset_selection, try_expr_to_value_range,
+};
 use super::errors::CompileError;
-use super::literals::{col_lit, literal_anyvalue, or_nodes, and_nodes, reverse_operator};
-use super::plan::ChunkPlanNode;
+use super::literals::{col_lit, literal_anyvalue, reverse_operator};
 use super::prelude::*;
+use super::selection::DatasetSelection;
 use super::selector::compile_selector;
 use super::errors::CoordIndexResolver;
 
@@ -12,74 +14,74 @@ pub(super) fn compile_node(
     expr: impl std::borrow::Borrow<Expr>,
     meta: &ZarrDatasetMeta,
     dims: &[String],
-    grid_shape: &[u64],
-    regular_chunk_shape: &[u64],
+    dim_lengths: &[u64],
+    vars: &[String],
     resolver: &mut dyn CoordIndexResolver,
-) -> Result<ChunkPlanNode, CompileError> {
+) -> Result<DatasetSelection, CompileError> {
     let expr: &Expr = std::borrow::Borrow::borrow(&expr);
     match expr {
         Expr::Alias(inner, _) => compile_node(
             inner.as_ref(),
             meta,
             dims,
-            grid_shape,
-            regular_chunk_shape,
+            dim_lengths,
+            vars,
             resolver,
         ),
         Expr::KeepName(inner) => compile_node(
             inner.as_ref(),
             meta,
             dims,
-            grid_shape,
-            regular_chunk_shape,
+            dim_lengths,
+            vars,
             resolver,
         ),
         Expr::RenameAlias { expr, .. } => compile_node(
             expr.as_ref(),
             meta,
             dims,
-            grid_shape,
-            regular_chunk_shape,
+            dim_lengths,
+            vars,
             resolver,
         ),
         Expr::Cast { expr, .. } => compile_node(
             expr.as_ref(),
             meta,
             dims,
-            grid_shape,
-            regular_chunk_shape,
+            dim_lengths,
+            vars,
             resolver,
         ),
         Expr::Sort { expr, .. } => compile_node(
             expr.as_ref(),
             meta,
             dims,
-            grid_shape,
-            regular_chunk_shape,
+            dim_lengths,
+            vars,
             resolver,
         ),
         Expr::SortBy { expr, .. } => compile_node(
             expr.as_ref(),
             meta,
             dims,
-            grid_shape,
-            regular_chunk_shape,
+            dim_lengths,
+            vars,
             resolver,
         ),
         Expr::Explode { input, .. } => compile_node(
             input.as_ref(),
             meta,
             dims,
-            grid_shape,
-            regular_chunk_shape,
+            dim_lengths,
+            vars,
             resolver,
         ),
         Expr::Slice { input, .. } => compile_node(
             input.as_ref(),
             meta,
             dims,
-            grid_shape,
-            regular_chunk_shape,
+            dim_lengths,
+            vars,
             resolver,
         ),
         // For window expressions, just compile the function expression only for now.
@@ -88,8 +90,8 @@ pub(super) fn compile_node(
             function.as_ref(),
             meta,
             dims,
-            grid_shape,
-            regular_chunk_shape,
+            dim_lengths,
+            vars,
             resolver,
         ),
         // Expr::Rolling { function, .. } => compile_node(
@@ -106,8 +108,8 @@ pub(super) fn compile_node(
             by.as_ref(),
             meta,
             dims,
-            grid_shape,
-            regular_chunk_shape,
+            dim_lengths,
+            vars,
             resolver,
         ),
         Expr::BinaryExpr { left, op, right } => {
@@ -121,14 +123,8 @@ pub(super) fn compile_node(
                     ) {
                         if col_a == col_b {
                             let vr = vr_a.intersect(&vr_b);
-                            return compile_value_range(
-                                &col_a,
-                                &vr,
-                                meta,
-                                dims,
-                                grid_shape,
-                                regular_chunk_shape,
-                                resolver,
+                            return compile_value_range_to_dataset_selection(
+                                &col_a, &vr, meta, dims, dim_lengths, vars, resolver,
                             );
                         }
                     }
@@ -138,38 +134,38 @@ pub(super) fn compile_node(
                         left.as_ref(),
                         meta,
                         dims,
-                        grid_shape,
-                        regular_chunk_shape,
+                        dim_lengths,
+                        vars,
                         resolver,
                     )?;
                     let b = compile_node(
                         right.as_ref(),
                         meta,
                         dims,
-                        grid_shape,
-                        regular_chunk_shape,
+                        dim_lengths,
+                        vars,
                         resolver,
                     )?;
-                    Ok(and_nodes(a, b))
+                    Ok(a.intersect(&b))
                 }
                 Operator::Or | Operator::LogicalOr => {
                     let a = compile_node(
                         left.as_ref(),
                         meta,
                         dims,
-                        grid_shape,
-                        regular_chunk_shape,
+                        dim_lengths,
+                        vars,
                         resolver,
                     )?;
                     let b = compile_node(
                         right.as_ref(),
                         meta,
                         dims,
-                        grid_shape,
-                        regular_chunk_shape,
+                        dim_lengths,
+                        vars,
                         resolver,
                     )?;
-                    Ok(or_nodes(a, b))
+                    Ok(a.union(&b))
                 }
                 Operator::Eq | Operator::GtEq | Operator::Gt | Operator::LtEq | Operator::Lt => {
                     if let Some((col, lit)) = col_lit(left, right).or_else(|| col_lit(right, left))
@@ -179,15 +175,8 @@ pub(super) fn compile_node(
                         } else {
                             *op
                         };
-                        compile_cmp(
-                            &col,
-                            op_eff,
-                            &lit,
-                            meta,
-                            dims,
-                            grid_shape,
-                            regular_chunk_shape,
-                            resolver,
+                        compile_cmp_to_dataset_selection(
+                            &col, op_eff, &lit, meta, dims, dim_lengths, vars, resolver,
                         )
                     } else {
                         Err(CompileError::Unsupported(format!(
@@ -205,10 +194,10 @@ pub(super) fn compile_node(
         Expr::Literal(lit) => {
             // Only boolean-ish literals can be predicates.
             match literal_anyvalue(lit) {
-                Some(AnyValue::Boolean(true)) => Ok(ChunkPlanNode::AllChunks),
-                Some(AnyValue::Boolean(false)) => Ok(ChunkPlanNode::Empty),
+                Some(AnyValue::Boolean(true)) => Ok(DatasetSelection::all_for_vars(vars.to_vec())),
+                Some(AnyValue::Boolean(false)) => Ok(DatasetSelection::empty()),
                 // In Polars filtering, null predicate behaves like "keep nothing".
-                Some(AnyValue::Null) => Ok(ChunkPlanNode::Empty),
+                Some(AnyValue::Null) => Ok(DatasetSelection::empty()),
                 _ => Err(CompileError::Unsupported(format!(
                     "unsupported literal: {:?}",
                     lit
@@ -224,40 +213,36 @@ pub(super) fn compile_node(
                 predicate.as_ref(),
                 meta,
                 dims,
-                grid_shape,
-                regular_chunk_shape,
+                dim_lengths,
+                vars,
                 resolver,
             )?;
-            if predicate_node.is_empty() {
-                return Ok(ChunkPlanNode::Empty);
+            if predicate_node.0.is_empty() {
+                return Ok(DatasetSelection::empty());
             }
             let truthy_node = compile_node(
                 truthy.as_ref(),
                 meta,
                 dims,
-                grid_shape,
-                regular_chunk_shape,
+                dim_lengths,
+                vars,
                 resolver,
             )?;
-            if truthy_node.is_empty() {
-                return Ok(ChunkPlanNode::Empty);
+            if truthy_node.0.is_empty() {
+                return Ok(DatasetSelection::empty());
             }
             let falsy_node = compile_node(
                 falsy.as_ref(),
                 meta,
                 dims,
-                grid_shape,
-                regular_chunk_shape,
+                dim_lengths,
+                vars,
                 resolver,
             )?;
-            if falsy_node.is_empty() {
-                return Ok(ChunkPlanNode::Empty);
+            if falsy_node.0.is_empty() {
+                return Ok(DatasetSelection::empty());
             }
-            Ok(ChunkPlanNode::Union(vec![
-                truthy_node,
-                falsy_node,
-                predicate_node,
-            ]))
+            Ok(truthy_node.union(&falsy_node).union(&predicate_node))
         }
         Expr::Function { input, function } => {
             match function {
@@ -266,11 +251,11 @@ pub(super) fn compile_node(
                     input,
                     meta,
                     dims,
-                    grid_shape,
-                    regular_chunk_shape,
+                    dim_lengths,
+                    vars,
                     resolver,
                 ),
-                FunctionExpr::NullCount => Ok(ChunkPlanNode::AllChunks),
+                FunctionExpr::NullCount => Ok(DatasetSelection::all_for_vars(vars.to_vec())),
                 // Most functions transform values in ways that we can't safely map to chunk-level constraints.
                 _ => Err(CompileError::Unsupported(format!(
                     "unsupported function: {:?}",
@@ -279,7 +264,7 @@ pub(super) fn compile_node(
             }
         }
         Expr::Selector(selector) => {
-            compile_selector(selector, meta, dims, grid_shape, regular_chunk_shape, resolver)
+            compile_selector(selector, meta, dims, dim_lengths, vars, resolver)
         }
 
         // Variants without a meaningful chunk-planning representation.
