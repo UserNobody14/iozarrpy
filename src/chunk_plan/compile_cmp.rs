@@ -125,10 +125,14 @@ pub(super) fn try_expr_to_value_range(
         return None;
     }
 
-    let (col, lit, op_eff) = match (strip_wrappers(left), strip_wrappers(right)) {
-        (Expr::Column(name), Expr::Literal(lit)) => (name.to_string(), lit.clone(), *op),
-        (Expr::Literal(lit), Expr::Column(name)) => (name.to_string(), lit.clone(), reverse_operator(*op)),
-        _ => return None,
+    let (col, lit, op_eff) = if let (Expr::Column(name), Expr::Literal(lit)) =
+        (strip_wrappers(left), strip_wrappers(right))
+    {
+        (name.to_string(), lit.clone(), *op)
+    } else if let (Expr::Literal(lit), Expr::Column(name)) = (strip_wrappers(left), strip_wrappers(right)) {
+        (name.to_string(), lit.clone(), reverse_operator(*op))
+    } else {
+        return None;
     };
 
     let time_encoding = meta.arrays.get(col.as_str()).and_then(|a| a.time_encoding.as_ref());
@@ -141,7 +145,13 @@ pub(super) fn try_expr_to_value_range(
         Operator::GtEq => vr.min = Some((scalar, BoundKind::Inclusive)),
         Operator::Lt => vr.max = Some((scalar, BoundKind::Exclusive)),
         Operator::LtEq => vr.max = Some((scalar, BoundKind::Inclusive)),
-        _ => return None,
+        other => {
+            debug_assert!(
+                false,
+                "unexpected operator after pre-check in try_expr_to_value_range: {other:?}"
+            );
+            return None;
+        }
     }
 
     Some((col, vr))

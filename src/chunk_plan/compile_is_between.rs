@@ -13,12 +13,15 @@ pub(super) fn compile_is_between(
     vars: &[String],
     resolver: &mut dyn CoordIndexResolver,
 ) -> Result<DatasetSelection, CompileError> {
-    let [expr, low, high] = input else {
+    if input.len() < 3 {
         return Err(CompileError::Unsupported(format!(
             "unsupported is_between expression: {:?}",
             input
         )));
     };
+    let expr = &input[0];
+    let low = &input[1];
+    let high = &input[2];
     let Some(col) = expr_to_col_name(expr) else {
         return Ok(DatasetSelection::all_for_vars(vars.to_vec()));
     };

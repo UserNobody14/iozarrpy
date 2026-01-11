@@ -68,19 +68,12 @@ pub(super) fn compile_boolean_function(
             }
             Ok(DatasetSelection::all_for_vars(vars.to_vec()))
         }
+        BooleanFunction::IsBetween { .. } => {
+            compile_is_between(input, meta, dims, dim_lengths, vars, resolver)
+        }
+        BooleanFunction::IsIn { .. } => compile_is_in(input, meta, dims, dim_lengths, vars, resolver),
         _ => {
-            // Future-proof handling for optional Polars boolean features without hard-referencing
-            // cfg-gated variants (e.g. `is_in`, `is_between`).
-            let name = bf.to_string();
-            match name.as_str() {
-                "is_between" => {
-                    compile_is_between(input, meta, dims, dim_lengths, vars, resolver)
-                }
-                "is_in" => {
-                    compile_is_in(input, meta, dims, dim_lengths, vars, resolver)
-                }
-                _ => Ok(DatasetSelection::all_for_vars(vars.to_vec())),
-            }
+            Ok(DatasetSelection::all_for_vars(vars.to_vec()))
         }
     }
 }

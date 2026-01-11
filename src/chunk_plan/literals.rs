@@ -50,7 +50,13 @@ pub(super) fn literal_anyvalue(lit: &LiteralValue) -> Option<AnyValue<'static>> 
             }
             None
         }
-        _ => None,
+        other => {
+            // This is intentionally conservative, but we don’t want silent fallthrough.
+            if cfg!(debug_assertions) {
+                eprintln!("chunk_plan: unsupported LiteralValue variant for planning: {other:?}");
+            }
+            None
+        }
     }
 }
 
@@ -148,7 +154,12 @@ pub(super) fn literal_to_scalar(
                     let _ = time_encoding;
                     Some(CoordScalar::DurationNs(ns))
                 }
-                _ => None,
+                other => {
+                    if cfg!(debug_assertions) {
+                        eprintln!("chunk_plan: unsupported AnyValue for planning: {other:?}");
+                    }
+                    None
+                }
             };
 
             // Last-ditch: parse the debug formatting of the literal itself, which is what our
@@ -161,9 +172,10 @@ pub(super) fn literal_to_scalar(
 pub(super) fn col_lit(col_side: &Expr, lit_side: &Expr) -> Option<(String, LiteralValue)> {
     let col_side = strip_wrappers(col_side);
     let lit_side = strip_wrappers(lit_side);
-    match (col_side, lit_side) {
-        (Expr::Column(name), Expr::Literal(lit)) => Some((name.to_string(), lit.clone())),
-        _ => None,
+    if let (Expr::Column(name), Expr::Literal(lit)) = (col_side, lit_side) {
+        Some((name.to_string(), lit.clone()))
+    } else {
+        None
     }
 }
 
@@ -187,6 +199,7 @@ pub(super) fn reverse_operator(op: Operator) -> Operator {
     }
 }
 
+#[allow(dead_code)]
 pub(super) fn chunk_ranges_for_index_range(
     idx: IndexRange,
     chunk_size: u64,
@@ -208,6 +221,7 @@ pub(super) fn chunk_ranges_for_index_range(
     })
 }
 
+#[allow(dead_code)]
 pub(super) fn rect_all_dims(grid_shape: &[u64]) -> Vec<DimChunkRange> {
     grid_shape
         .iter()
@@ -218,6 +232,7 @@ pub(super) fn rect_all_dims(grid_shape: &[u64]) -> Vec<DimChunkRange> {
         .collect()
 }
 
+#[allow(dead_code)]
 pub(super) fn and_nodes(a: ChunkPlanNode, b: ChunkPlanNode) -> ChunkPlanNode {
     match (a, b) {
         (ChunkPlanNode::Empty, _) | (_, ChunkPlanNode::Empty) => ChunkPlanNode::Empty,
@@ -254,6 +269,7 @@ pub(super) fn and_nodes(a: ChunkPlanNode, b: ChunkPlanNode) -> ChunkPlanNode {
     }
 }
 
+#[allow(dead_code)]
 pub(super) fn or_nodes(a: ChunkPlanNode, b: ChunkPlanNode) -> ChunkPlanNode {
     match (a, b) {
         (ChunkPlanNode::Empty, x) | (x, ChunkPlanNode::Empty) => x,

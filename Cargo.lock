@@ -1914,6 +1914,7 @@ dependencies = [
  "hashbrown 0.16.1",
  "indexmap",
  "itoa",
+ "ndarray 0.16.1",
  "num-traits",
  "polars-arrow",
  "polars-compute",
@@ -1968,6 +1969,7 @@ version = "0.52.0"
 source = "git+https://github.com/pola-rs/polars.git?tag=py-1.36.1#2a151c10fa76790711c2f75e6d012dd69c627ddd"
 dependencies = [
  "bitflags",
+ "chrono-tz",
  "hashbrown 0.16.1",
  "num-traits",
  "polars-arrow",
@@ -2005,6 +2007,7 @@ dependencies = [
  "blake3",
  "bytes",
  "chrono",
+ "chrono-tz",
  "fast-float2",
  "fs4",
  "futures",
@@ -2043,6 +2046,7 @@ version = "0.52.0"
 source = "git+https://github.com/pola-rs/polars.git?tag=py-1.36.1#2a151c10fa76790711c2f75e6d012dd69c627ddd"
 dependencies = [
  "chrono",
+ "chrono-tz",
  "fallible-streaming-iterator",
  "hashbrown 0.16.1",
  "indexmap",
@@ -2125,6 +2129,8 @@ dependencies = [
  "polars-error",
  "polars-schema",
  "polars-utils",
+ "rand",
+ "rand_distr",
  "rayon",
  "regex",
  "regex-syntax",

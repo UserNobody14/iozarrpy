@@ -77,7 +77,12 @@ fn parse_duration_units(units: &str) -> Option<i64> {
         "minutes" | "minute" | "min" | "m" => Some(60 * 1_000_000_000),
         "hours" | "hour" | "h" | "hr" => Some(3600 * 1_000_000_000),
         "days" | "day" | "d" => Some(86400 * 1_000_000_000),
-        _ => None,
+        other => {
+            if cfg!(debug_assertions) {
+                eprintln!("meta: unsupported duration units in attrs: '{other}' (raw='{units}')");
+            }
+            None
+        }
     }
 }
 
@@ -100,7 +105,12 @@ fn parse_cf_time_units(units: &str) -> Option<(i64, i64)> {
         "minutes" | "minute" | "min" => 60 * 1_000_000_000,
         "hours" | "hour" | "h" | "hr" => 3600 * 1_000_000_000,
         "days" | "day" | "d" => 86400 * 1_000_000_000,
-        _ => return None,
+        other => {
+            if cfg!(debug_assertions) {
+                eprintln!("meta: unsupported CF time unit in attrs: '{other}' (raw='{units}')");
+            }
+            return None;
+        }
     };
 
     let epoch_ns = parse_datetime_to_ns(epoch_str)?;
@@ -141,7 +151,12 @@ fn parse_timedelta_dtype(dtype_str: &str) -> Option<i64> {
         "m" => Some(60 * 1_000_000_000),
         "h" => Some(3600 * 1_000_000_000),
         "d" => Some(86400 * 1_000_000_000),
-        _ => None,
+        other => {
+            if cfg!(debug_assertions) {
+                eprintln!("meta: unsupported timedelta64 unit in attrs: '{other}' (raw='{dtype_str}')");
+            }
+            None
+        }
     }
 }
 

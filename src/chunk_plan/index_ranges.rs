@@ -5,7 +5,7 @@ pub(super) fn index_range_for_index_dim(vr: &ValueRange, dim_len_est: u64) -> Op
         match v {
             CoordScalar::I64(x) => Some(*x as i128),
             CoordScalar::U64(x) => Some(*x as i128),
-            _ => None,
+            CoordScalar::F64(_) | CoordScalar::DatetimeNs(_) | CoordScalar::DurationNs(_) => None,
         }
     };
 

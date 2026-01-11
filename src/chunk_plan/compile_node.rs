@@ -102,6 +102,14 @@ pub(super) fn compile_node(
         //     regular_chunk_shape,
         //     resolver,
         // ),
+        Expr::Rolling { function, .. } => compile_node(
+            function.as_ref(),
+            meta,
+            dims,
+            dim_lengths,
+            vars,
+            resolver,
+        ),
         // Expr::Window { function, .. } => compile_node(function, meta, dims, grid_shape, regular_chunk_shape, resolver),
         // If a filter expression is used where we expect a predicate, focus on the predicate.
         Expr::Filter { by, .. } => compile_node(
@@ -209,6 +217,40 @@ pub(super) fn compile_node(
             truthy,
             falsy,
         } => {
+            // Fast paths for common boolean ternaries produced by `when/then/otherwise`.
+            // These show up frequently and we can often preserve pushdown.
+            if let (Expr::Literal(t), Expr::Literal(f)) = (
+                super::literals::strip_wrappers(truthy.as_ref()),
+                super::literals::strip_wrappers(falsy.as_ref()),
+            ) {
+                if let (Some(AnyValue::Boolean(t)), Some(AnyValue::Boolean(f))) =
+                    (literal_anyvalue(t), literal_anyvalue(f))
+                {
+                    if t && !f {
+                        // when(predicate).then(true).otherwise(false) == predicate
+                        return compile_node(
+                            predicate.as_ref(),
+                            meta,
+                            dims,
+                            dim_lengths,
+                            vars,
+                            resolver,
+                        );
+                    }
+                    if !t && f {
+                        // when(predicate).then(false).otherwise(true) == !predicate, which we
+                        // can't represent precisely: return conservative All.
+                        return Ok(DatasetSelection::all_for_vars(vars.to_vec()));
+                    }
+                    if t && f {
+                        return Ok(DatasetSelection::all_for_vars(vars.to_vec()));
+                    }
+                    if !t && !f {
+                        return Ok(DatasetSelection::empty());
+                    }
+                }
+            }
+
             let predicate_node = compile_node(
                 predicate.as_ref(),
                 meta,
@@ -217,9 +259,6 @@ pub(super) fn compile_node(
                 vars,
                 resolver,
             )?;
-            if predicate_node.0.is_empty() {
-                return Ok(DatasetSelection::empty());
-            }
             let truthy_node = compile_node(
                 truthy.as_ref(),
                 meta,
@@ -228,9 +267,6 @@ pub(super) fn compile_node(
                 vars,
                 resolver,
             )?;
-            if truthy_node.0.is_empty() {
-                return Ok(DatasetSelection::empty());
-            }
             let falsy_node = compile_node(
                 falsy.as_ref(),
                 meta,
@@ -239,9 +275,6 @@ pub(super) fn compile_node(
                 vars,
                 resolver,
             )?;
-            if falsy_node.0.is_empty() {
-                return Ok(DatasetSelection::empty());
-            }
             Ok(truthy_node.union(&falsy_node).union(&predicate_node))
         }
         Expr::Function { input, function } => {
