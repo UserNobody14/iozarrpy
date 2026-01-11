@@ -72,6 +72,33 @@ pub(super) fn compile_boolean_function(
             compile_is_between(input, meta, dims, dim_lengths, vars, resolver)
         }
         BooleanFunction::IsIn { .. } => compile_is_in(input, meta, dims, dim_lengths, vars, resolver),
+        BooleanFunction::AnyHorizontal => {
+            // OR across all input expressions.
+            let mut acc = DatasetSelection::empty();
+            for e in input {
+                let sel = compile_node(e, meta, dims, dim_lengths, vars, resolver)
+                    .unwrap_or_else(|_| DatasetSelection::all_for_vars(vars.to_vec()));
+                // If any side is unconstrainable, OR becomes unconstrainable.
+                if sel == DatasetSelection::all_for_vars(vars.to_vec()) {
+                    return Ok(DatasetSelection::all_for_vars(vars.to_vec()));
+                }
+                acc = acc.union(&sel);
+            }
+            Ok(acc)
+        }
+        BooleanFunction::AllHorizontal => {
+            // AND across all input expressions.
+            let mut acc = DatasetSelection::all_for_vars(vars.to_vec());
+            for e in input {
+                let sel = compile_node(e, meta, dims, dim_lengths, vars, resolver)
+                    .unwrap_or_else(|_| DatasetSelection::all_for_vars(vars.to_vec()));
+                acc = acc.intersect(&sel);
+                if acc.0.is_empty() {
+                    break;
+                }
+            }
+            Ok(acc)
+        }
         _ => {
             Ok(DatasetSelection::all_for_vars(vars.to_vec()))
         }

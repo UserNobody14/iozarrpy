@@ -123,6 +123,50 @@ pub(super) fn compile_node(
         Expr::BinaryExpr { left, op, right } => {
             match op {
                 Operator::And | Operator::LogicalAnd => {
+                    // Special-case: A & !B => A \ B (can cut holes).
+                    if let Expr::Function { input, function } = super::literals::strip_wrappers(right.as_ref()) {
+                        if matches!(function, FunctionExpr::Boolean(BooleanFunction::Not)) && input.len() == 1 {
+                            let a = compile_node(
+                                left.as_ref(),
+                                meta,
+                                dims,
+                                dim_lengths,
+                                vars,
+                                resolver,
+                            )?;
+                            let b = compile_node(
+                                input[0].clone(),
+                                meta,
+                                dims,
+                                dim_lengths,
+                                vars,
+                                resolver,
+                            )?;
+                            return Ok(a.difference(&b));
+                        }
+                    }
+                    if let Expr::Function { input, function } = super::literals::strip_wrappers(left.as_ref()) {
+                        if matches!(function, FunctionExpr::Boolean(BooleanFunction::Not)) && input.len() == 1 {
+                            let a = compile_node(
+                                right.as_ref(),
+                                meta,
+                                dims,
+                                dim_lengths,
+                                vars,
+                                resolver,
+                            )?;
+                            let b = compile_node(
+                                input[0].clone(),
+                                meta,
+                                dims,
+                                dim_lengths,
+                                vars,
+                                resolver,
+                            )?;
+                            return Ok(a.difference(&b));
+                        }
+                    }
+
                     // Fast path: merge compatible comparisons on the same column into a single
                     // ValueRange. This reduces resolver reads and enables tighter planning.
                     if let (Some((col_a, vr_a)), Some((col_b, vr_b))) = (
@@ -174,6 +218,25 @@ pub(super) fn compile_node(
                         resolver,
                     )?;
                     Ok(a.union(&b))
+                }
+                Operator::Xor => {
+                    let a = compile_node(
+                        left.as_ref(),
+                        meta,
+                        dims,
+                        dim_lengths,
+                        vars,
+                        resolver,
+                    )?;
+                    let b = compile_node(
+                        right.as_ref(),
+                        meta,
+                        dims,
+                        dim_lengths,
+                        vars,
+                        resolver,
+                    )?;
+                    Ok(a.difference(&b).union(&b.difference(&a)))
                 }
                 Operator::Eq | Operator::GtEq | Operator::Gt | Operator::LtEq | Operator::Lt => {
                     if let Some((col, lit)) = col_lit(left, right).or_else(|| col_lit(right, left))
