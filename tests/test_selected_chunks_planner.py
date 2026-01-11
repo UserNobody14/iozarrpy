@@ -54,10 +54,9 @@ def test_planner_coord_reads_are_sublinear(tmp_path: Path) -> None:
     assert coord_reads < 500
 
 
-def test_selected_chunks_index_only_dims(tmp_path: Path) -> None:
+def test_selected_chunks_index_only_dims(baseline_datasets: dict[str, str]) -> None:
     # Store with dims (y, x) but *without* 1D coord arrays for y/x.
-    zarr_path = str(tmp_path / "index_only_dims.zarr")
-    _core._create_index_only_store(zarr_path)
+    zarr_path = baseline_datasets["index_only_dims"]
 
     expr = (pl.col("y") == 0) & (pl.col("x") >= 0)
     chunks = rainbear.selected_chunks(zarr_path, expr, variables=["var"])  # type: ignore[attr-defined]

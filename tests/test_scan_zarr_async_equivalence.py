@@ -13,7 +13,6 @@ import polars as pl
 import pytest
 
 import rainbear
-from rainbear import _core
 
 
 def _normalize(df: pl.DataFrame) -> list[dict[str, object]]:
@@ -27,27 +26,40 @@ def _normalize(df: pl.DataFrame) -> list[dict[str, object]]:
 
 
 @pytest.mark.asyncio
-async def test_scan_zarr_async_matches_sync_demo_store(dataset_path) -> None:
-    path = dataset_path("demo_store.zarr")
-    _core._create_demo_store(path)
+async def test_scan_zarr_async_matches_sync_orography_chunked_subset(
+    baseline_datasets: dict[str, str],
+) -> None:
+    zarr_url = baseline_datasets["orography_chunked_10x10"]
+    pred = (pl.col("y") >= 3) & (pl.col("y") <= 10) & (pl.col("x") >= 4) & (pl.col("x") <= 12)
+    cols = ["y", "x", "geopotential_height"]
 
-    pred = (pl.col("lat") >= 20.0) & (pl.col("lat") <= 30.0)
-
-    df_sync = rainbear.scan_zarr(path, variables=["temp"]).filter(pred).collect()
-    df_async = (
-        (await rainbear.scan_zarr_async(path, pred, variables=["temp"], max_concurrency=4))
+    df_sync = (
+        rainbear.scan_zarr(zarr_url, variables=["geopotential_height"])
         .filter(pred)
+        .select(cols)
+        .collect()
+    )
+    df_async = (
+        (
+            await rainbear.scan_zarr_async(
+                zarr_url,
+                pred,
+                variables=["geopotential_height"],
+                with_columns=cols,
+                max_concurrency=8,
+            )
+        ).filter(pred)
     )
 
     assert _normalize(df_async) == _normalize(df_sync)
 
 
 @pytest.mark.asyncio
-async def test_scan_zarr_async_matches_sync_orography_subset(
+async def test_scan_zarr_async_matches_sync_orography_sharded_subset(
     baseline_datasets: dict[str, str],
 ) -> None:
     # Use a small 2D dataset so CI doesn't end up scanning millions of rows.
-    zarr_url = baseline_datasets["orography_chunked_10x10"]
+    zarr_url = baseline_datasets["orography_sharded_small"]
 
     pred = (pl.col("y") >= 3) & (pl.col("y") <= 10) & (pl.col("x") >= 4) & (pl.col("x") <= 12)
     cols = ["y", "x", "geopotential_height"]

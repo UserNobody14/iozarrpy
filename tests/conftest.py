@@ -344,6 +344,24 @@ def _generate_baseline_datasets(output_dir: Path) -> dict[str, str]:
     })
     paths["orography_sharded_large"] = path
 
+    # =========================================================================
+    # Minimal dataset with index-only dims (no 1D coord arrays for y/x)
+    # =========================================================================
+    import numpy as np
+    import zarr
+
+    path = make_path("index_only_dims")
+    root = zarr.open_group(path, mode="w", zarr_format=3)
+    arr = root.create_array(
+        "var",
+        shape=(4, 4),
+        chunks=(2, 2),
+        dtype="f8",
+    )
+    arr.attrs["_ARRAY_DIMENSIONS"] = ["y", "x"]
+    arr[:] = np.arange(16, dtype=np.float64).reshape(4, 4)
+    paths["index_only_dims"] = path
+
     return paths
 
 

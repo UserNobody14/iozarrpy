@@ -80,7 +80,6 @@ uv run pytest
 - **Metadata loader (dims/coords/vars + schema)**: `rainbear/src/zarr_meta.rs`
 - **Streaming IO source**: `rainbear/src/zarr_source.rs` (exposed to Python as `ZarrSource`)
 - **Python API**: `rainbear/src/rainbear/__init__.py` (`scan_random`, `scan_zarr`, `LazyZarrFrame`)
-- **Test fixture helper**: `rainbear/src/test_utils.rs` (`_create_demo_store`)
 - **Tests**: `rainbear-tests/tests/` (separate workspace package)
 
 [`zarrs`]: https://docs.rs/zarrs/latest/zarrs/

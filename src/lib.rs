@@ -5,7 +5,6 @@ use pyo3::wrap_pyfunction;
 mod zarr_meta;
 mod zarr_source;
 mod zarr_store;
-mod test_utils;
 mod chunk_plan;
 mod zarr_scan_async;
 
@@ -155,8 +154,6 @@ fn _debug_expr_ast(predicate: &Bound<'_, PyAny>) -> PyResult<String> {
 #[pymodule]
 fn _core(m: &Bound<PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(hello_from_bin, m)?)?;
-    m.add_function(wrap_pyfunction!(test_utils::_create_demo_store, m)?)?;
-    m.add_function(wrap_pyfunction!(test_utils::_create_index_only_store, m)?)?;
     m.add_function(wrap_pyfunction!(selected_chunks, m)?)?;
     m.add_function(wrap_pyfunction!(_selected_chunks_debug, m)?)?;
     m.add_function(wrap_pyfunction!(_debug_expr_ast, m)?)?;

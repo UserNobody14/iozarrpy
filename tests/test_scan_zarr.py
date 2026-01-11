@@ -3,41 +3,44 @@
 from __future__ import annotations
 
 import polars as pl
+import pytest
 
 import rainbear
-from rainbear import _core
 
 
-def test_scan_zarr_smoke(dataset_path) -> None:
-    path = dataset_path("demo_store.zarr")
-    _core._create_demo_store(path)
-
-    lf = rainbear.scan_zarr(path)
+def test_scan_zarr_smoke(baseline_datasets: dict[str, str]) -> None:
+    zarr_url = baseline_datasets["orography_chunked_10x10"]
+    lf = rainbear.scan_zarr(zarr_url, variables=["geopotential_height"])
     df = lf.collect()
 
-    assert df.height == 12
-    assert df.columns == ["time", "lat", "temp"]
+    assert df.height == 16 * 20
+    assert df.columns == ["y", "x", "geopotential_height"]
 
 
-def test_sel_predicate(dataset_path) -> None:
-    path = dataset_path("demo_store_sel.zarr")
-    _core._create_demo_store(path)
-
-    lf = rainbear.scan_zarr(path)
-    lf = lf.filter((pl.col("lat") >= 20.0) & (pl.col("lat") <= 30.0))
+def test_sel_predicate(baseline_datasets: dict[str, str]) -> None:
+    zarr_url = baseline_datasets["orography_chunked_10x10"]
+    lf = rainbear.scan_zarr(zarr_url, variables=["geopotential_height"])
+    lf = lf.filter(
+        (pl.col("y") >= 3)
+        & (pl.col("y") <= 10)
+        & (pl.col("x") >= 4)
+        & (pl.col("x") <= 12)
+    )
     df = lf.collect()
 
-    assert df.height == 8
-    assert df["lat"].is_in([20.0, 30.0]).all()
+    assert df.height == (10 - 3 + 1) * (12 - 4 + 1)
+    assert df.filter(pl.col("y") < 3).is_empty()
+    assert df.filter(pl.col("y") > 10).is_empty()
+    assert df.filter(pl.col("x") < 4).is_empty()
+    assert df.filter(pl.col("x") > 12).is_empty()
 
 
-def test_max_chunks_to_read(dataset_path) -> None:
-    path = dataset_path("demo_store_max_chunks.zarr")
-    _core._create_demo_store(path)
+def test_max_chunks_to_read(baseline_datasets: dict[str, str]) -> None:
+    zarr_url = baseline_datasets["orography_chunked_10x10"]
 
-    # Demo store temp has 2 chunks (time chunked as [2, 2]), so limiting to 1 chunk must fail.
-    lf = rainbear.scan_zarr(path, max_chunks_to_read=1)
-    import pytest
+    lf = rainbear.scan_zarr(
+        zarr_url, variables=["geopotential_height"], max_chunks_to_read=1
+    )
 
     with pytest.raises(pl.exceptions.ComputeError, match="max_chunks_to_read"):
         lf.collect()
