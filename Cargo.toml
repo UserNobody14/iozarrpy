@@ -126,6 +126,12 @@ polars = { git = "https://github.com/pola-rs/polars.git", tag = "py-1.36.1", fea
     "zip_with",
     "cov",
 ] }
+polars-lazy = { git = "https://github.com/pola-rs/polars.git", tag = "py-1.36.1", features = [
+    "dtype-extension",
+    "dtype-full",
+    "ffi_plugin",
+    "python"
+] }
 pyo3-polars = { git = "https://github.com/pola-rs/polars.git", tag = "py-1.36.1", features = [
     "object",
     "dtype-extension",

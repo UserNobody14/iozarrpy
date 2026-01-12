@@ -12,6 +12,7 @@ mod compile_entry;
 mod compile_ctx;
 mod compile_node;
 mod compile_boolean;
+mod interpolate_selection_nd;
 mod selector;
 mod expr_utils;
 mod compile_is_between;

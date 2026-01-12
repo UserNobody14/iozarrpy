@@ -1,7 +1,9 @@
+
 use super::compile_boolean::compile_boolean_function;
 use super::compile_cmp::{
     compile_cmp_to_dataset_selection, compile_value_range_to_dataset_selection, try_expr_to_value_range,
 };
+use super::interpolate_selection_nd::interpolate_selection_nd;
 use super::compile_ctx::CompileCtx;
 use super::errors::CompileError;
 use super::literals::{col_lit, literal_anyvalue, reverse_operator};
@@ -244,6 +246,48 @@ pub(super) fn compile_node(
                     ctx,
                 ),
                 FunctionExpr::NullCount => Ok(ctx.all()),
+                FunctionExpr::FfiPlugin {
+                    // flags,
+                    lib,
+                    symbol,
+                    kwargs,
+                    ..
+                } => {
+                    // Print the lib, symbol, and kwargs.
+                    println!("lib: {:?}", lib);
+                    println!("symbol: {:?}", symbol);
+                    println!("kwargs: {:?}", kwargs);
+                    // If the symbol is "interpolate_nd", perform the proper interpolation.
+                    if symbol == "interpolate_nd" {
+                        // The interpolate_nd fn has 3 args in its input vec:
+                        // 1. source coords: a struct of the sources.
+                        let source_coords = input[0].clone();
+                        // This is critical for our use case
+                        // 2. source values: indicates which columns will be interpolated.
+                        let source_values = input[1].clone();
+                        // 3. target_scheme: not as relevant for us(?)
+                        let target_scheme = input[2].clone();
+                        // Perform the interpolation.
+                        let interpolated = interpolate_selection_nd(source_coords, source_values, target_scheme, kwargs, ctx)?;
+                        Ok(interpolated)
+                    } else {
+                        Err(CompileError::Unsupported(format!(
+                            "unsupported ffi plugin: {:?}",
+                            symbol
+                        )))
+                    }
+                },
+                // FunctionExpr::Extension(ext) => {
+                //     match ext {
+                //         &ExtensionFunction::To(nt) => {
+                            
+                //             Ok(ctx.all())
+                //         },
+                //         &ExtensionFunction::Storage => {
+                //             Ok(ctx.all())
+                //         },
+                //     }
+                // },
                 // Most functions transform values in ways that we can't safely map to chunk-level constraints.
                 _ => Err(CompileError::Unsupported(format!(
                     "unsupported function: {:?}",

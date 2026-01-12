@@ -1,0 +1,1438 @@
+{
+    "attributes": {
+  
+    },
+    "zarr_format": 3,
+    "consolidated_metadata": {
+      "kind": "inline",
+      "must_understand": false,
+      "metadata": {
+        "2m_dewpoint_temperature": {
+          "shape": [27049, 31, 1048, 1792],
+          "data_type": "float32",
+          "chunk_grid": {
+            "name": "regular",
+            "configuration": {
+              "chunk_shape": [1, 31, 54, 108]
+            }
+          },
+          "chunk_key_encoding": {
+            "name": "default",
+            "configuration": {
+              "separator": "/"
+            }
+          },
+          "fill_value": 0,
+          "codecs": [
+            {
+              "name": "bytes",
+              "configuration": {
+                "endian": "little"
+              }
+            },
+            {
+              "name": "zstd",
+              "configuration": {
+                "level": 0,
+                "checksum": false
+              }
+            }
+          ],
+          "attributes": {
+            "coordinates": "latitude longitude",
+            "_FillValue": "AAAAAAAA+H8="
+          },
+          "dimension_names": [
+            "time",
+            "lead_time",
+            "y",
+            "x"
+          ],
+          "zarr_format": 3,
+          "node_type": "array",
+          "storage_transformers": []
+        },
+        "10m_wind_speed_P90": {
+          "shape": [27049, 31, 1048, 1792],
+          "data_type": "float32",
+          "chunk_grid": {
+            "name": "regular",
+            "configuration": {
+              "chunk_shape": [1, 31, 54, 108]
+            }
+          },
+          "chunk_key_encoding": {
+            "name": "default",
+            "configuration": {
+              "separator": "/"
+            }
+          },
+          "fill_value": 0,
+          "codecs": [
+            {
+              "name": "bytes",
+              "configuration": {
+                "endian": "little"
+              }
+            },
+            {
+              "name": "zstd",
+              "configuration": {
+                "level": 0,
+                "checksum": false
+              }
+            }
+          ],
+          "attributes": {
+            "coordinates": "latitude longitude",
+            "_FillValue": "AAAAAAAA+H8="
+          },
+          "dimension_names": [
+            "time",
+            "lead_time",
+            "y",
+            "x"
+          ],
+          "zarr_format": 3,
+          "node_type": "array",
+          "storage_transformers": []
+        },
+        "10m_wind_speed": {
+          "shape": [27049, 31, 1048, 1792],
+          "data_type": "float32",
+          "chunk_grid": {
+            "name": "regular",
+            "configuration": {
+              "chunk_shape": [1, 31, 54, 108]
+            }
+          },
+          "chunk_key_encoding": {
+            "name": "default",
+            "configuration": {
+              "separator": "/"
+            }
+          },
+          "fill_value": 0,
+          "codecs": [
+            {
+              "name": "bytes",
+              "configuration": {
+                "endian": "little"
+              }
+            },
+            {
+              "name": "zstd",
+              "configuration": {
+                "level": 0,
+                "checksum": false
+              }
+            }
+          ],
+          "attributes": {
+            "coordinates": "latitude longitude",
+            "_FillValue": "AAAAAAAA+H8="
+          },
+          "dimension_names": [
+            "time",
+            "lead_time",
+            "y",
+            "x"
+          ],
+          "zarr_format": 3,
+          "node_type": "array",
+          "storage_transformers": []
+        },
+        "80m_u_component_of_wind": {
+          "shape": [27049, 31, 1048, 1792],
+          "data_type": "float32",
+          "chunk_grid": {
+            "name": "regular",
+            "configuration": {
+              "chunk_shape": [1, 31, 54, 108]
+            }
+          },
+          "chunk_key_encoding": {
+            "name": "default",
+            "configuration": {
+              "separator": "/"
+            }
+          },
+          "fill_value": 0,
+          "codecs": [
+            {
+              "name": "bytes",
+              "configuration": {
+                "endian": "little"
+              }
+            },
+            {
+              "name": "zstd",
+              "configuration": {
+                "level": 0,
+                "checksum": false
+              }
+            }
+          ],
+          "attributes": {
+            "coordinates": "latitude longitude",
+            "_FillValue": "AAAAAAAA+H8="
+          },
+          "dimension_names": [
+            "time",
+            "lead_time",
+            "y",
+            "x"
+          ],
+          "zarr_format": 3,
+          "node_type": "array",
+          "storage_transformers": []
+        },
+        "10m_v_component_of_wind": {
+          "shape": [27049, 31, 1048, 1792],
+          "data_type": "float32",
+          "chunk_grid": {
+            "name": "regular",
+            "configuration": {
+              "chunk_shape": [1, 31, 54, 108]
+            }
+          },
+          "chunk_key_encoding": {
+            "name": "default",
+            "configuration": {
+              "separator": "/"
+            }
+          },
+          "fill_value": 0,
+          "codecs": [
+            {
+              "name": "bytes",
+              "configuration": {
+                "endian": "little"
+              }
+            },
+            {
+              "name": "zstd",
+              "configuration": {
+                "level": 0,
+                "checksum": false
+              }
+            }
+          ],
+          "attributes": {
+            "coordinates": "latitude longitude",
+            "_FillValue": "AAAAAAAA+H8="
+          },
+          "dimension_names": [
+            "time",
+            "lead_time",
+            "y",
+            "x"
+          ],
+          "zarr_format": 3,
+          "node_type": "array",
+          "storage_transformers": []
+        },
+        "10m_wind_speed_gust": {
+          "shape": [27049, 31, 1048, 1792],
+          "data_type": "float32",
+          "chunk_grid": {
+            "name": "regular",
+            "configuration": {
+              "chunk_shape": [1, 31, 54, 108]
+            }
+          },
+          "chunk_key_encoding": {
+            "name": "default",
+            "configuration": {
+              "separator": "/"
+            }
+          },
+          "fill_value": 0,
+          "codecs": [
+            {
+              "name": "bytes",
+              "configuration": {
+                "endian": "little"
+              }
+            },
+            {
+              "name": "zstd",
+              "configuration": {
+                "level": 0,
+                "checksum": false
+              }
+            }
+          ],
+          "attributes": {
+            "coordinates": "latitude longitude",
+            "_FillValue": "AAAAAAAA+H8="
+          },
+          "dimension_names": [
+            "time",
+            "lead_time",
+            "y",
+            "x"
+          ],
+          "zarr_format": 3,
+          "node_type": "array",
+          "storage_transformers": []
+        },
+        "10m_wind_speed_P10": {
+          "shape": [27049, 31, 1048, 1792],
+          "data_type": "float32",
+          "chunk_grid": {
+            "name": "regular",
+            "configuration": {
+              "chunk_shape": [1, 31, 54, 108]
+            }
+          },
+          "chunk_key_encoding": {
+            "name": "default",
+            "configuration": {
+              "separator": "/"
+            }
+          },
+          "fill_value": 0,
+          "codecs": [
+            {
+              "name": "bytes",
+              "configuration": {
+                "endian": "little"
+              }
+            },
+            {
+              "name": "zstd",
+              "configuration": {
+                "level": 0,
+                "checksum": false
+              }
+            }
+          ],
+          "attributes": {
+            "coordinates": "latitude longitude",
+            "_FillValue": "AAAAAAAA+H8="
+          },
+          "dimension_names": [
+            "time",
+            "lead_time",
+            "y",
+            "x"
+          ],
+          "zarr_format": 3,
+          "node_type": "array",
+          "storage_transformers": []
+        },
+        "10m_u_component_of_wind": {
+          "shape": [27049, 31, 1048, 1792],
+          "data_type": "float32",
+          "chunk_grid": {
+            "name": "regular",
+            "configuration": {
+              "chunk_shape": [1, 31, 54, 108]
+            }
+          },
+          "chunk_key_encoding": {
+            "name": "default",
+            "configuration": {
+              "separator": "/"
+            }
+          },
+          "fill_value": 0,
+          "codecs": [
+            {
+              "name": "bytes",
+              "configuration": {
+                "endian": "little"
+              }
+            },
+            {
+              "name": "zstd",
+              "configuration": {
+                "level": 0,
+                "checksum": false
+              }
+            }
+          ],
+          "attributes": {
+            "coordinates": "latitude longitude",
+            "_FillValue": "AAAAAAAA+H8="
+          },
+          "dimension_names": [
+            "time",
+            "lead_time",
+            "y",
+            "x"
+          ],
+          "zarr_format": 3,
+          "node_type": "array",
+          "storage_transformers": []
+        },
+        "2m_temperature": {
+          "shape": [27049, 31, 1048, 1792],
+          "data_type": "float32",
+          "chunk_grid": {
+            "name": "regular",
+            "configuration": {
+              "chunk_shape": [1, 31, 54, 108]
+            }
+          },
+          "chunk_key_encoding": {
+            "name": "default",
+            "configuration": {
+              "separator": "/"
+            }
+          },
+          "fill_value": 0,
+          "codecs": [
+            {
+              "name": "bytes",
+              "configuration": {
+                "endian": "little"
+              }
+            },
+            {
+              "name": "zstd",
+              "configuration": {
+                "level": 0,
+                "checksum": false
+              }
+            }
+          ],
+          "attributes": {
+            "coordinates": "latitude longitude",
+            "_FillValue": "AAAAAAAA+H8="
+          },
+          "dimension_names": [
+            "time",
+            "lead_time",
+            "y",
+            "x"
+          ],
+          "zarr_format": 3,
+          "node_type": "array",
+          "storage_transformers": []
+        },
+        "80m_v_component_of_wind": {
+          "shape": [27049, 31, 1048, 1792],
+          "data_type": "float32",
+          "chunk_grid": {
+            "name": "regular",
+            "configuration": {
+              "chunk_shape": [1, 31, 54, 108]
+            }
+          },
+          "chunk_key_encoding": {
+            "name": "default",
+            "configuration": {
+              "separator": "/"
+            }
+          },
+          "fill_value": 0,
+          "codecs": [
+            {
+              "name": "bytes",
+              "configuration": {
+                "endian": "little"
+              }
+            },
+            {
+              "name": "zstd",
+              "configuration": {
+                "level": 0,
+                "checksum": false
+              }
+            }
+          ],
+          "attributes": {
+            "coordinates": "latitude longitude",
+            "_FillValue": "AAAAAAAA+H8="
+          },
+          "dimension_names": [
+            "time",
+            "lead_time",
+            "y",
+            "x"
+          ],
+          "zarr_format": 3,
+          "node_type": "array",
+          "storage_transformers": []
+        },
+        "latitude": {
+          "shape": [1048, 1792],
+          "data_type": "float64",
+          "chunk_grid": {
+            "name": "regular",
+            "configuration": {
+              "chunk_shape": [54, 108]
+            }
+          },
+          "chunk_key_encoding": {
+            "name": "default",
+            "configuration": {
+              "separator": "/"
+            }
+          },
+          "fill_value": 0,
+          "codecs": [
+            {
+              "name": "bytes",
+              "configuration": {
+                "endian": "little"
+              }
+            },
+            {
+              "name": "zstd",
+              "configuration": {
+                "level": 0,
+                "checksum": false
+              }
+            }
+          ],
+          "attributes": {
+            "units": "degrees_north",
+            "standard_name": "latitude",
+            "long_name": "latitude",
+            "_FillValue": "AAAAAAAA+H8="
+          },
+          "dimension_names": [
+            "y",
+            "x"
+          ],
+          "zarr_format": 3,
+          "node_type": "array",
+          "storage_transformers": []
+        },
+        "80m_wind_speed": {
+          "shape": [27049, 31, 1048, 1792],
+          "data_type": "float32",
+          "chunk_grid": {
+            "name": "regular",
+            "configuration": {
+              "chunk_shape": [1, 31, 54, 108]
+            }
+          },
+          "chunk_key_encoding": {
+            "name": "default",
+            "configuration": {
+              "separator": "/"
+            }
+          },
+          "fill_value": 0,
+          "codecs": [
+            {
+              "name": "bytes",
+              "configuration": {
+                "endian": "little"
+              }
+            },
+            {
+              "name": "zstd",
+              "configuration": {
+                "level": 0,
+                "checksum": false
+              }
+            }
+          ],
+          "attributes": {
+            "coordinates": "latitude longitude",
+            "_FillValue": "AAAAAAAA+H8="
+          },
+          "dimension_names": [
+            "time",
+            "lead_time",
+            "y",
+            "x"
+          ],
+          "zarr_format": 3,
+          "node_type": "array",
+          "storage_transformers": []
+        },
+        "geopotential": {
+          "shape": [27049, 31, 1048, 1792],
+          "data_type": "float32",
+          "chunk_grid": {
+            "name": "regular",
+            "configuration": {
+              "chunk_shape": [1, 31, 54, 108]
+            }
+          },
+          "chunk_key_encoding": {
+            "name": "default",
+            "configuration": {
+              "separator": "/"
+            }
+          },
+          "fill_value": 0,
+          "codecs": [
+            {
+              "name": "bytes",
+              "configuration": {
+                "endian": "little"
+              }
+            },
+            {
+              "name": "zstd",
+              "configuration": {
+                "level": 0,
+                "checksum": false
+              }
+            }
+          ],
+          "attributes": {
+            "coordinates": "latitude longitude",
+            "_FillValue": "AAAAAAAA+H8="
+          },
+          "dimension_names": [
+            "time",
+            "lead_time",
+            "y",
+            "x"
+          ],
+          "zarr_format": 3,
+          "node_type": "array",
+          "storage_transformers": []
+        },
+        "lead_time": {
+          "shape": [31],
+          "data_type": "int64",
+          "chunk_grid": {
+            "name": "regular",
+            "configuration": {
+              "chunk_shape": [31]
+            }
+          },
+          "chunk_key_encoding": {
+            "name": "default",
+            "configuration": {
+              "separator": "/"
+            }
+          },
+          "fill_value": 0,
+          "codecs": [
+            {
+              "name": "bytes",
+              "configuration": {
+                "endian": "little"
+              }
+            },
+            {
+              "name": "zstd",
+              "configuration": {
+                "level": 0,
+                "checksum": false
+              }
+            }
+          ],
+          "attributes": {
+            "units": "hours"
+          },
+          "dimension_names": [
+            "lead_time"
+          ],
+          "zarr_format": 3,
+          "node_type": "array",
+          "storage_transformers": []
+        },
+        "80m_wind_speed_P90": {
+          "shape": [27049, 31, 1048, 1792],
+          "data_type": "float32",
+          "chunk_grid": {
+            "name": "regular",
+            "configuration": {
+              "chunk_shape": [1, 31, 54, 108]
+            }
+          },
+          "chunk_key_encoding": {
+            "name": "default",
+            "configuration": {
+              "separator": "/"
+            }
+          },
+          "fill_value": 0,
+          "codecs": [
+            {
+              "name": "bytes",
+              "configuration": {
+                "endian": "little"
+              }
+            },
+            {
+              "name": "zstd",
+              "configuration": {
+                "level": 0,
+                "checksum": false
+              }
+            }
+          ],
+          "attributes": {
+            "coordinates": "latitude longitude",
+            "_FillValue": "AAAAAAAA+H8="
+          },
+          "dimension_names": [
+            "time",
+            "lead_time",
+            "y",
+            "x"
+          ],
+          "zarr_format": 3,
+          "node_type": "array",
+          "storage_transformers": []
+        },
+        "log_total_precipitation_1hr": {
+          "shape": [27049, 31, 1048, 1792],
+          "data_type": "float32",
+          "chunk_grid": {
+            "name": "regular",
+            "configuration": {
+              "chunk_shape": [1, 31, 54, 108]
+            }
+          },
+          "chunk_key_encoding": {
+            "name": "default",
+            "configuration": {
+              "separator": "/"
+            }
+          },
+          "fill_value": 0,
+          "codecs": [
+            {
+              "name": "bytes",
+              "configuration": {
+                "endian": "little"
+              }
+            },
+            {
+              "name": "zstd",
+              "configuration": {
+                "level": 0,
+                "checksum": false
+              }
+            }
+          ],
+          "attributes": {
+            "coordinates": "latitude longitude",
+            "_FillValue": "AAAAAAAA+H8="
+          },
+          "dimension_names": [
+            "time",
+            "lead_time",
+            "y",
+            "x"
+          ],
+          "zarr_format": 3,
+          "node_type": "array",
+          "storage_transformers": []
+        },
+        "80m_wind_speed_P10": {
+          "shape": [27049, 31, 1048, 1792],
+          "data_type": "float32",
+          "chunk_grid": {
+            "name": "regular",
+            "configuration": {
+              "chunk_shape": [1, 31, 54, 108]
+            }
+          },
+          "chunk_key_encoding": {
+            "name": "default",
+            "configuration": {
+              "separator": "/"
+            }
+          },
+          "fill_value": 0,
+          "codecs": [
+            {
+              "name": "bytes",
+              "configuration": {
+                "endian": "little"
+              }
+            },
+            {
+              "name": "zstd",
+              "configuration": {
+                "level": 0,
+                "checksum": false
+              }
+            }
+          ],
+          "attributes": {
+            "coordinates": "latitude longitude",
+            "_FillValue": "AAAAAAAA+H8="
+          },
+          "dimension_names": [
+            "time",
+            "lead_time",
+            "y",
+            "x"
+          ],
+          "zarr_format": 3,
+          "node_type": "array",
+          "storage_transformers": []
+        },
+        "mean_sea_level_pressure": {
+          "shape": [27049, 31, 1048, 1792],
+          "data_type": "float32",
+          "chunk_grid": {
+            "name": "regular",
+            "configuration": {
+              "chunk_shape": [1, 31, 54, 108]
+            }
+          },
+          "chunk_key_encoding": {
+            "name": "default",
+            "configuration": {
+              "separator": "/"
+            }
+          },
+          "fill_value": 0,
+          "codecs": [
+            {
+              "name": "bytes",
+              "configuration": {
+                "endian": "little"
+              }
+            },
+            {
+              "name": "zstd",
+              "configuration": {
+                "level": 0,
+                "checksum": false
+              }
+            }
+          ],
+          "attributes": {
+            "coordinates": "latitude longitude",
+            "_FillValue": "AAAAAAAA+H8="
+          },
+          "dimension_names": [
+            "time",
+            "lead_time",
+            "y",
+            "x"
+          ],
+          "zarr_format": 3,
+          "node_type": "array",
+          "storage_transformers": []
+        },
+        "longitude": {
+          "shape": [1048, 1792],
+          "data_type": "float64",
+          "chunk_grid": {
+            "name": "regular",
+            "configuration": {
+              "chunk_shape": [54, 108]
+            }
+          },
+          "chunk_key_encoding": {
+            "name": "default",
+            "configuration": {
+              "separator": "/"
+            }
+          },
+          "fill_value": 0,
+          "codecs": [
+            {
+              "name": "bytes",
+              "configuration": {
+                "endian": "little"
+              }
+            },
+            {
+              "name": "zstd",
+              "configuration": {
+                "level": 0,
+                "checksum": false
+              }
+            }
+          ],
+          "attributes": {
+            "units": "degrees_east",
+            "standard_name": "longitude",
+            "long_name": "longitude",
+            "_FillValue": "AAAAAAAA+H8="
+          },
+          "dimension_names": [
+            "y",
+            "x"
+          ],
+          "zarr_format": 3,
+          "node_type": "array",
+          "storage_transformers": []
+        },
+        "prob_of_precipitation_1hr": {
+          "shape": [27049, 31, 1048, 1792],
+          "data_type": "float32",
+          "chunk_grid": {
+            "name": "regular",
+            "configuration": {
+              "chunk_shape": [1, 31, 54, 108]
+            }
+          },
+          "chunk_key_encoding": {
+            "name": "default",
+            "configuration": {
+              "separator": "/"
+            }
+          },
+          "fill_value": 0,
+          "codecs": [
+            {
+              "name": "bytes",
+              "configuration": {
+                "endian": "little"
+              }
+            },
+            {
+              "name": "zstd",
+              "configuration": {
+                "level": 0,
+                "checksum": false
+              }
+            }
+          ],
+          "attributes": {
+            "coordinates": "latitude longitude",
+            "_FillValue": "AAAAAAAA+H8="
+          },
+          "dimension_names": [
+            "time",
+            "lead_time",
+            "y",
+            "x"
+          ],
+          "zarr_format": 3,
+          "node_type": "array",
+          "storage_transformers": []
+        },
+        "time": {
+          "shape": [27049],
+          "data_type": "int64",
+          "chunk_grid": {
+            "name": "regular",
+            "configuration": {
+              "chunk_shape": [17545]
+            }
+          },
+          "chunk_key_encoding": {
+            "name": "default",
+            "configuration": {
+              "separator": "/"
+            }
+          },
+          "fill_value": 0,
+          "codecs": [
+            {
+              "name": "bytes",
+              "configuration": {
+                "endian": "little"
+              }
+            },
+            {
+              "name": "zstd",
+              "configuration": {
+                "level": 0,
+                "checksum": false
+              }
+            }
+          ],
+          "attributes": {
+            "units": "hours since 2024-01-01 00:00:00",
+            "calendar": "proleptic_gregorian"
+          },
+          "dimension_names": [
+            "time"
+          ],
+          "zarr_format": 3,
+          "node_type": "array",
+          "storage_transformers": []
+        },
+        "specific_humidity": {
+          "shape": [27049, 31, 1048, 1792],
+          "data_type": "float32",
+          "chunk_grid": {
+            "name": "regular",
+            "configuration": {
+              "chunk_shape": [1, 31, 54, 108]
+            }
+          },
+          "chunk_key_encoding": {
+            "name": "default",
+            "configuration": {
+              "separator": "/"
+            }
+          },
+          "fill_value": 0,
+          "codecs": [
+            {
+              "name": "bytes",
+              "configuration": {
+                "endian": "little"
+              }
+            },
+            {
+              "name": "zstd",
+              "configuration": {
+                "level": 0,
+                "checksum": false
+              }
+            }
+          ],
+          "attributes": {
+            "coordinates": "latitude longitude",
+            "_FillValue": "AAAAAAAA+H8="
+          },
+          "dimension_names": [
+            "time",
+            "lead_time",
+            "y",
+            "x"
+          ],
+          "zarr_format": 3,
+          "node_type": "array",
+          "storage_transformers": []
+        },
+        "temperature": {
+          "shape": [27049, 31, 1048, 1792],
+          "data_type": "float32",
+          "chunk_grid": {
+            "name": "regular",
+            "configuration": {
+              "chunk_shape": [1, 31, 54, 108]
+            }
+          },
+          "chunk_key_encoding": {
+            "name": "default",
+            "configuration": {
+              "separator": "/"
+            }
+          },
+          "fill_value": 0,
+          "codecs": [
+            {
+              "name": "bytes",
+              "configuration": {
+                "endian": "little"
+              }
+            },
+            {
+              "name": "zstd",
+              "configuration": {
+                "level": 0,
+                "checksum": false
+              }
+            }
+          ],
+          "attributes": {
+            "coordinates": "latitude longitude",
+            "_FillValue": "AAAAAAAA+H8="
+          },
+          "dimension_names": [
+            "time",
+            "lead_time",
+            "y",
+            "x"
+          ],
+          "zarr_format": 3,
+          "node_type": "array",
+          "storage_transformers": []
+        },
+        "surface_solar_radiation_downwards_P90": {
+          "shape": [27049, 31, 1048, 1792],
+          "data_type": "float32",
+          "chunk_grid": {
+            "name": "regular",
+            "configuration": {
+              "chunk_shape": [1, 31, 54, 108]
+            }
+          },
+          "chunk_key_encoding": {
+            "name": "default",
+            "configuration": {
+              "separator": "/"
+            }
+          },
+          "fill_value": 0,
+          "codecs": [
+            {
+              "name": "bytes",
+              "configuration": {
+                "endian": "little"
+              }
+            },
+            {
+              "name": "zstd",
+              "configuration": {
+                "level": 0,
+                "checksum": false
+              }
+            }
+          ],
+          "attributes": {
+            "coordinates": "latitude longitude",
+            "_FillValue": "AAAAAAAA+H8="
+          },
+          "dimension_names": [
+            "time",
+            "lead_time",
+            "y",
+            "x"
+          ],
+          "zarr_format": 3,
+          "node_type": "array",
+          "storage_transformers": []
+        },
+        "total_cloud_cover": {
+          "shape": [27049, 31, 1048, 1792],
+          "data_type": "float32",
+          "chunk_grid": {
+            "name": "regular",
+            "configuration": {
+              "chunk_shape": [1, 31, 54, 108]
+            }
+          },
+          "chunk_key_encoding": {
+            "name": "default",
+            "configuration": {
+              "separator": "/"
+            }
+          },
+          "fill_value": 0,
+          "codecs": [
+            {
+              "name": "bytes",
+              "configuration": {
+                "endian": "little"
+              }
+            },
+            {
+              "name": "zstd",
+              "configuration": {
+                "level": 0,
+                "checksum": false
+              }
+            }
+          ],
+          "attributes": {
+            "coordinates": "latitude longitude",
+            "_FillValue": "AAAAAAAA+H8="
+          },
+          "dimension_names": [
+            "time",
+            "lead_time",
+            "y",
+            "x"
+          ],
+          "zarr_format": 3,
+          "node_type": "array",
+          "storage_transformers": []
+        },
+        "surface_solar_radiation_downwards": {
+          "shape": [27049, 31, 1048, 1792],
+          "data_type": "float32",
+          "chunk_grid": {
+            "name": "regular",
+            "configuration": {
+              "chunk_shape": [1, 31, 54, 108]
+            }
+          },
+          "chunk_key_encoding": {
+            "name": "default",
+            "configuration": {
+              "separator": "/"
+            }
+          },
+          "fill_value": 0,
+          "codecs": [
+            {
+              "name": "bytes",
+              "configuration": {
+                "endian": "little"
+              }
+            },
+            {
+              "name": "zstd",
+              "configuration": {
+                "level": 0,
+                "checksum": false
+              }
+            }
+          ],
+          "attributes": {
+            "coordinates": "latitude longitude",
+            "_FillValue": "AAAAAAAA+H8="
+          },
+          "dimension_names": [
+            "time",
+            "lead_time",
+            "y",
+            "x"
+          ],
+          "zarr_format": 3,
+          "node_type": "array",
+          "storage_transformers": []
+        },
+        "surface_solar_radiation_downwards_P10": {
+          "shape": [27049, 31, 1048, 1792],
+          "data_type": "float32",
+          "chunk_grid": {
+            "name": "regular",
+            "configuration": {
+              "chunk_shape": [1, 31, 54, 108]
+            }
+          },
+          "chunk_key_encoding": {
+            "name": "default",
+            "configuration": {
+              "separator": "/"
+            }
+          },
+          "fill_value": 0,
+          "codecs": [
+            {
+              "name": "bytes",
+              "configuration": {
+                "endian": "little"
+              }
+            },
+            {
+              "name": "zstd",
+              "configuration": {
+                "level": 0,
+                "checksum": false
+              }
+            }
+          ],
+          "attributes": {
+            "coordinates": "latitude longitude",
+            "_FillValue": "AAAAAAAA+H8="
+          },
+          "dimension_names": [
+            "time",
+            "lead_time",
+            "y",
+            "x"
+          ],
+          "zarr_format": 3,
+          "node_type": "array",
+          "storage_transformers": []
+        },
+        "total_precipitation_1hr": {
+          "shape": [27049, 31, 1048, 1792],
+          "data_type": "float32",
+          "chunk_grid": {
+            "name": "regular",
+            "configuration": {
+              "chunk_shape": [1, 31, 54, 108]
+            }
+          },
+          "chunk_key_encoding": {
+            "name": "default",
+            "configuration": {
+              "separator": "/"
+            }
+          },
+          "fill_value": 0,
+          "codecs": [
+            {
+              "name": "bytes",
+              "configuration": {
+                "endian": "little"
+              }
+            },
+            {
+              "name": "zstd",
+              "configuration": {
+                "level": 0,
+                "checksum": false
+              }
+            }
+          ],
+          "attributes": {
+            "coordinates": "latitude longitude",
+            "_FillValue": "AAAAAAAA+H8="
+          },
+          "dimension_names": [
+            "time",
+            "lead_time",
+            "y",
+            "x"
+          ],
+          "zarr_format": 3,
+          "node_type": "array",
+          "storage_transformers": []
+        },
+        "v_component_of_wind": {
+          "shape": [27049, 31, 1048, 1792],
+          "data_type": "float32",
+          "chunk_grid": {
+            "name": "regular",
+            "configuration": {
+              "chunk_shape": [1, 31, 54, 108]
+            }
+          },
+          "chunk_key_encoding": {
+            "name": "default",
+            "configuration": {
+              "separator": "/"
+            }
+          },
+          "fill_value": 0,
+          "codecs": [
+            {
+              "name": "bytes",
+              "configuration": {
+                "endian": "little"
+              }
+            },
+            {
+              "name": "zstd",
+              "configuration": {
+                "level": 0,
+                "checksum": false
+              }
+            }
+          ],
+          "attributes": {
+            "coordinates": "latitude longitude",
+            "_FillValue": "AAAAAAAA+H8="
+          },
+          "dimension_names": [
+            "time",
+            "lead_time",
+            "y",
+            "x"
+          ],
+          "zarr_format": 3,
+          "node_type": "array",
+          "storage_transformers": []
+        },
+        "u_component_of_wind": {
+          "shape": [27049, 31, 1048, 1792],
+          "data_type": "float32",
+          "chunk_grid": {
+            "name": "regular",
+            "configuration": {
+              "chunk_shape": [1, 31, 54, 108]
+            }
+          },
+          "chunk_key_encoding": {
+            "name": "default",
+            "configuration": {
+              "separator": "/"
+            }
+          },
+          "fill_value": 0,
+          "codecs": [
+            {
+              "name": "bytes",
+              "configuration": {
+                "endian": "little"
+              }
+            },
+            {
+              "name": "zstd",
+              "configuration": {
+                "level": 0,
+                "checksum": false
+              }
+            }
+          ],
+          "attributes": {
+            "coordinates": "latitude longitude",
+            "_FillValue": "AAAAAAAA+H8="
+          },
+          "dimension_names": [
+            "time",
+            "lead_time",
+            "y",
+            "x"
+          ],
+          "zarr_format": 3,
+          "node_type": "array",
+          "storage_transformers": []
+        },
+        "y": {
+          "shape": [1048],
+          "data_type": "int64",
+          "chunk_grid": {
+            "name": "regular",
+            "configuration": {
+              "chunk_shape": [1048]
+            }
+          },
+          "chunk_key_encoding": {
+            "name": "default",
+            "configuration": {
+              "separator": "/"
+            }
+          },
+          "fill_value": 0,
+          "codecs": [
+            {
+              "name": "bytes",
+              "configuration": {
+                "endian": "little"
+              }
+            },
+            {
+              "name": "zstd",
+              "configuration": {
+                "level": 0,
+                "checksum": false
+              }
+            }
+          ],
+          "attributes": {
+  
+          },
+          "dimension_names": [
+            "y"
+          ],
+          "zarr_format": 3,
+          "node_type": "array",
+          "storage_transformers": []
+        },
+        "x": {
+          "shape": [1792],
+          "data_type": "int64",
+          "chunk_grid": {
+            "name": "regular",
+            "configuration": {
+              "chunk_shape": [1792]
+            }
+          },
+          "chunk_key_encoding": {
+            "name": "default",
+            "configuration": {
+              "separator": "/"
+            }
+          },
+          "fill_value": 0,
+          "codecs": [
+            {
+              "name": "bytes",
+              "configuration": {
+                "endian": "little"
+              }
+            },
+            {
+              "name": "zstd",
+              "configuration": {
+                "level": 0,
+                "checksum": false
+              }
+            }
+          ],
+          "attributes": {
+  
+          },
+          "dimension_names": [
+            "x"
+          ],
+          "zarr_format": 3,
+          "node_type": "array",
+          "storage_transformers": []
+        }
+      }
+    },
+    "node_type": "group"
+  }

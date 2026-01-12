@@ -1270,6 +1270,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "37c93d8daa9d8a012fd8ab92f088405fb202ea0b6ab73ee2482ae66af4f42091"
 
 [[package]]
+name = "libloading"
+version = "0.8.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d7c4b02199fee7c5d21a5ae7d8cfa79a6ef5bb2fc834d6e9058e89c825efdc55"
+dependencies = [
+ "cfg-if",
+ "windows-link",
+]
+
+[[package]]
 name = "libm"
 version = "0.2.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1971,6 +1981,7 @@ dependencies = [
  "bitflags",
  "chrono-tz",
  "hashbrown 0.16.1",
+ "libloading",
  "num-traits",
  "polars-arrow",
  "polars-compute",
@@ -2187,6 +2198,7 @@ dependencies = [
  "chrono-tz",
  "either",
  "hashbrown 0.16.1",
+ "libloading",
  "memmap2",
  "num-traits",
  "percent-encoding",
@@ -2618,6 +2630,7 @@ dependencies = [
  "chrono",
  "futures",
  "polars",
+ "polars-lazy",
  "pyo3",
  "pyo3-async-runtimes",
  "pyo3-polars",
