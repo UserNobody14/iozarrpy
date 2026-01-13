@@ -154,4 +154,4 @@ pyo3-async-runtimes = { version = "0.26.0", features = ["tokio-runtime"] }
 [profile.release]
 opt-level = 1
 lto = false
-codegen-units = 4
+codegen-units = 1
