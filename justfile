@@ -57,5 +57,5 @@ publish:
 
 [group: 'tests']
 [doc('Run the smoke test')]
-smoke-test WHEEL_OR_SOURCE:
-    uv run --isolated --no-project --with dist/*.{{ if WHEEL_OR_SOURCE == "wheel" { "whl" } else { "tar.gz" } }} tests/smoke_test.py
+smoke-test:
+    uv run --isolated --no-project --with target/wheels/*.whl tests/smoke_test.py
