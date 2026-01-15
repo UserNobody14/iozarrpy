@@ -1,10 +1,10 @@
 use pyo3::prelude::*;
 use pyo3::types::PyAny;
-use pyo3_polars::PyExpr;
 use zarrs::array::Array;
 
 use crate::chunk_plan::{compile_expr_to_chunk_plan, ChunkPlan};
 use crate::meta::open_and_load_dataset_meta;
+use crate::py::expr_extract::extract_expr;
 
 #[pyfunction]
 #[pyo3(signature = (zarr_url, predicate, variables=None))]
@@ -25,13 +25,7 @@ pub(crate) fn selected_chunks(
     }
     let primary_var = &vars[0];
 
-    let expr = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let pyexpr: PyExpr = predicate.extract()?;
-        Ok::<polars::prelude::Expr, PyErr>(pyexpr.0.clone())
-    }))
-    .map_err(|_| {
-        PyErr::new::<pyo3::exceptions::PyRuntimeError, _>("panic while converting predicate Expr")
-    })??;
+    let expr = extract_expr(predicate)?;
 
     let primary_meta = meta
         .arrays
@@ -95,13 +89,7 @@ pub(crate) fn _selected_chunks_debug(
     }
     let primary_var = &vars[0];
 
-    let expr = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let pyexpr: PyExpr = predicate.extract()?;
-        Ok::<polars::prelude::Expr, PyErr>(pyexpr.0.clone())
-    }))
-    .map_err(|_| {
-        PyErr::new::<pyo3::exceptions::PyRuntimeError, _>("panic while converting predicate Expr")
-    })??;
+    let expr = extract_expr(predicate)?;
 
     let primary_meta = meta
         .arrays

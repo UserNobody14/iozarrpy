@@ -2,6 +2,7 @@ use pyo3::prelude::*;
 use pyo3::wrap_pyfunction;
 
 mod debug;
+pub(crate) mod expr_extract;
 mod scan_async;
 mod selected_chunks;
 

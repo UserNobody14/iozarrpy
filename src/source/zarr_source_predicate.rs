@@ -7,8 +7,7 @@ impl ZarrSource {
         // those panics into a normal Python exception which the Python wrapper can
         // safely ignore (disabling pushdown but keeping correctness).
         let expr = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let pyexpr: PyExpr = predicate.extract()?;
-            Ok::<Expr, PyErr>(pyexpr.0.clone())
+            crate::py::expr_extract::extract_expr(predicate)
         }))
         .map_err(|e| panic_to_py_err(e, "panic while converting predicate Expr"))??;
 
