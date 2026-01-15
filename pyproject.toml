@@ -49,6 +49,8 @@ dev = [
     "zarr>=3.0.0",
     "numcodecs>=0.13.0",
     "pytest-benchmark>=5.2.3",
+    # Needed for FFI-plugin planning tests and for real-world Expr shapes.
+    "interpolars @ git+https://github.com/UserNobody14/interpolars.git",
 ]
 
 build = [

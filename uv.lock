@@ -130,6 +130,14 @@ wheels = [
 ]
 
 [[package]]
+name = "interpolars"
+version = "0.1.0"
+source = { git = "https://github.com/UserNobody14/interpolars.git#794715c96b90c7683396e851a1639dbb5b9b66d4" }
+dependencies = [
+    { name = "polars" },
+]
+
+[[package]]
 name = "maturin"
 version = "1.10.2"
 source = { registry = "https://pypi.org/simple" }
@@ -499,6 +507,7 @@ build = [
     { name = "patchelf", marker = "sys_platform == 'linux'" },
 ]
 dev = [
+    { name = "interpolars" },
     { name = "maturin" },
     { name = "numcodecs" },
     { name = "numpy" },
@@ -520,6 +529,7 @@ build = [
     { name = "patchelf", marker = "sys_platform == 'linux'", specifier = ">=0.17.2.2" },
 ]
 dev = [
+    { name = "interpolars", git = "https://github.com/UserNobody14/interpolars.git" },
     { name = "maturin", specifier = ">=1.10.2" },
     { name = "numcodecs", specifier = ">=0.13.0" },
     { name = "numpy", specifier = ">=1.26" },

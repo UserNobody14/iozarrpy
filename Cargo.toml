@@ -21,32 +21,6 @@ crate-type = ["cdylib"]
 # "extension-module" tells pyo3 we want to build an extension module (skips linking against libpython.so)
 # "abi3-py39" tells pyo3 (and maturin) to build using the stable ABI with minimum Python version 3.9
 pyo3 = { version = "0.26.0", features = ["extension-module", "abi3-py39"] }
-# polars = { version = "0.52.0", features = ["full"] }
-# polars = { version = "0.52.0", features = [
-#     "dtype-array",
-#     "dtype-categorical",
-#     "dtype-date",
-#     "dtype-datetime",
-#     "dtype-decimal",
-#     "dtype-i16",
-#     "dtype-i8",
-#     "dtype-struct",
-#     "dtype-time",
-#     "dtype-u16",
-#     "dtype-u8",
-#     "is_between",
-#     "is_in",
-#     # "full",
-#     "lazy",
-#     "timezones"
-# ] }
-# pyo3-polars = { version = "0.25.0", features = [
-#     "object",
-#     # "dtype-extension",
-#     "derive",
-#     "lazy",
-#     "dtype-full",
-# ] }
 
 # Get polars from git.
 #
