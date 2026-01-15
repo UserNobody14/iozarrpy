@@ -20,15 +20,15 @@ crate-type = ["cdylib"]
 [dependencies]
 # "extension-module" tells pyo3 we want to build an extension module (skips linking against libpython.so)
 # "abi3-py39" tells pyo3 (and maturin) to build using the stable ABI with minimum Python version 3.9
-pyo3 = { version = "0.26.0", features = ["extension-module", "abi3-py39"] }
+pyo3 = { version = "0.27.2", features = ["extension-module", "abi3-py39"] }
 
 # Get polars from git.
 #
 # IMPORTANT: these features must match Python Polars' enabled DSL surface area; otherwise Expr
 # deserialization can decode to the wrong FunctionExpr variants (feature-gated enum variant index drift).
 #
-# This list is mirrored from Polars' `polars-python` crate for the `py-1.36.1` tag.
-polars = { git = "https://github.com/pola-rs/polars.git", tag = "py-1.36.1", features = [
+# This list is mirrored from Polars' `polars-python` crate for the `py-1.37.1` tag.
+polars = { git = "https://github.com/UserNobody14/polars.git", rev = "8a373cfdb769aa78d699b6a526aa48f3216df3e5", features = [
     "abs",
     "approx_unique",
     "array_any_all",
@@ -99,19 +99,15 @@ polars = { git = "https://github.com/pola-rs/polars.git", tag = "py-1.36.1", fea
     "unique_counts",
     "zip_with",
     "cov",
-] }
-polars-lazy = { git = "https://github.com/pola-rs/polars.git", tag = "py-1.36.1", features = [
-    "dtype-extension",
-    "dtype-full",
     "ffi_plugin",
-    "python"
 ] }
-pyo3-polars = { git = "https://github.com/pola-rs/polars.git", tag = "py-1.36.1", features = [
+pyo3-polars = { git = "https://github.com/UserNobody14/polars.git", rev = "8a373cfdb769aa78d699b6a526aa48f3216df3e5", features = [
     "object",
     "dtype-extension",
     "derive",
     "lazy",
     "dtype-full",
+    "ffi_plugin",
 ] }
 tokio = { version = "1.45.1", features = ["rt-multi-thread", "macros", "sync"] }
 url = "2.5.4"
@@ -126,7 +122,7 @@ zarrs_object_store = { version = "0.6.1", features = [
 serde_json = "1.0.145"
 chrono = { version = "0.4", features = ["clock", "std"] }
 futures = "0.3.31"
-pyo3-async-runtimes = { version = "0.26.0", features = ["tokio-runtime"] }
+pyo3-async-runtimes = { version = "0.27.0", features = ["tokio-runtime"] }
 
 # Builds on this machine have intermittently hit compiler crashes (GCC ICE while compiling
 # `zstd-sys` at `-O3`, and rustc SIGSEGVs in optimized builds). We intentionally dial back

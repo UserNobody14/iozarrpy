@@ -52,7 +52,7 @@ pub(crate) fn compile_expr_to_dataset_selection(
     };
 
     let vars = default_vars_for_dataset_selection(meta);
-    let mut resolver = MonotonicCoordResolver::new(meta, store);
+    let mut resolver: MonotonicCoordResolver<'_> = MonotonicCoordResolver::new(meta, store);
     let mut ctx = CompileCtx {
         meta,
         dims: &dims,

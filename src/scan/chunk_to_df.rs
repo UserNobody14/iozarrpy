@@ -131,6 +131,7 @@ async fn chunk_to_df(
     }
 
     let mut cols: Vec<Column> = Vec::new();
+    let height = keep.len();
 
     // Coord columns.
     for (d, dim_name) in dims.iter().enumerate() {
@@ -231,6 +232,6 @@ async fn chunk_to_df(
         }
     }
 
-    Ok(DataFrame::new(cols).map_err(PyPolarsErr::from)?)
+    Ok(DataFrame::new(height, cols).map_err(PyPolarsErr::from)?)
 }
 

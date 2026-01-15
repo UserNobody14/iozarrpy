@@ -18,6 +18,10 @@ pub(super) fn compile_node(
 ) -> Result<DatasetSelection, CompileError> {
     let expr: &Expr = std::borrow::Borrow::borrow(&expr);
     match expr {
+        Expr::StructEval { .. } => Err(CompileError::Unsupported(format!(
+            "unsupported expression: {:?}",
+            expr
+        ))),
         Expr::Alias(inner, _) => compile_node(
             inner.as_ref(),
             ctx,

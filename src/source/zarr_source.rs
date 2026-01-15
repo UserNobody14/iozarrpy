@@ -46,13 +46,13 @@ fn to_py_err<E: std::fmt::Display>(e: E) -> PyErr {
     PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string())
 }
 
-fn panic_to_py_err(e: Box<dyn std::any::Any + Send>) -> PyErr {
+fn panic_to_py_err(e: Box<dyn std::any::Any + Send>, msg2: &str) -> PyErr {
     let msg = if let Some(s) = e.downcast_ref::<&str>() {
-        s.to_string()
+        format!("{msg2}: {}", s.to_string())
     } else if let Some(s) = e.downcast_ref::<String>() {
-        s.clone()
+        format!("{msg2}: {}", s.clone())
     } else {
-        "panic while compiling predicate chunk plan".to_string()
+        format!("{msg2}: {e:?}")
     };
     PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(msg)
 }

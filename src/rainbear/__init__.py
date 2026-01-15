@@ -5,12 +5,8 @@ from typing import Iterator
 import polars as pl
 from polars.io.plugins import register_io_source
 
-from rainbear._core import (
-    ZarrSource,
-    print_extension_info,
-    scan_zarr_async,
-    selected_chunks,
-)
+from rainbear._core import (ZarrSource, print_extension_info, scan_zarr_async,
+                            selected_chunks)
 
 __all__ = [
     "ZarrSource",
@@ -54,8 +50,9 @@ def scan_zarr(
                 )
             try:
                 src.try_set_predicate(predicate)
-            except Exception:
-                pass  # Constraint extraction failed, no chunk pruning
+            except Exception as e:
+                print(f"[rainbear] constraint extraction failed: {e}", file=sys.stderr, flush=True)
+                raise e
 
         while (out := src.next()) is not None:
             # Always apply predicate in Python for correctness

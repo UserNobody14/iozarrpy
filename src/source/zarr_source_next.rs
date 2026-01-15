@@ -27,7 +27,7 @@ impl ZarrSource {
                 let data = retrieve_chunk(&arr, &[]).map_err(to_py_err)?;
                 cols.push(data.slice(0, 1).into_series(v).into());
             }
-            let df = DataFrame::new(cols).map_err(PyPolarsErr::from)?;
+            let df = DataFrame::new(1, cols).map_err(PyPolarsErr::from)?;
             self.n_rows_left = self.n_rows_left.saturating_sub(1);
 
             self.done = true;
@@ -289,7 +289,7 @@ impl ZarrSource {
                 }
             }
 
-            let df = DataFrame::new(cols).map_err(PyPolarsErr::from)?;
+            let df = DataFrame::new(keep.len(), cols).map_err(PyPolarsErr::from)?;
             self.chunk_offset += len;
             self.n_rows_left = self.n_rows_left.saturating_sub(keep.len());
             return Ok(Some(PyDataFrame(df)));

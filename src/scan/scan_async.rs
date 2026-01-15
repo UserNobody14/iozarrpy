@@ -109,5 +109,5 @@ pub(crate) async fn scan_zarr_df_async(
         }
     }
 
-    Ok(out.unwrap_or_else(|| DataFrame::new(vec![]).unwrap()))
+    Ok(out.unwrap_or_else(|| DataFrame::new(0, vec![]).unwrap()))
 }

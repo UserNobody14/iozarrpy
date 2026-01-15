@@ -10,13 +10,13 @@ impl ZarrSource {
             let pyexpr: PyExpr = predicate.extract()?;
             Ok::<Expr, PyErr>(pyexpr.0.clone())
         }))
-        .map_err(|e| panic_to_py_err(e))??;
+        .map_err(|e| panic_to_py_err(e, "panic while converting predicate Expr"))??;
 
         // Compile Expr -> candidate-chunk plan (no full-grid scans).
         let compiled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             compile_expr_to_chunk_plan(&expr, &self.meta, self.store.clone(), &self.vars[0])
         }))
-        .map_err(|e| panic_to_py_err(e))?;
+        .map_err(|e| panic_to_py_err(e, "panic while compiling predicate chunk plan"))?;
 
         match compiled {
             Ok((plan, _stats)) => {

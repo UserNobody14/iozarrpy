@@ -16,7 +16,7 @@ impl ZarrSource {
         self.schema_impl()
     }
 
-    fn try_set_predicate(&mut self, predicate: &Bound<'_, PyAny>) -> PyResult<()> {
+    fn try_set_predicate(&mut self, predicate: PyExpr) -> PyResult<()> {
         self.try_set_predicate_impl(predicate)
     }
 
