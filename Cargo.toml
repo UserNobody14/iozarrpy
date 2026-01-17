@@ -125,11 +125,3 @@ serde_json = "1.0.145"
 chrono = { version = "0.4", features = ["clock", "std"] }
 futures = "0.3.31"
 pyo3-async-runtimes = { version = "0.27.0", features = ["tokio-runtime"] }
-
-# Builds on this machine have intermittently hit compiler crashes (GCC ICE while compiling
-# `zstd-sys` at `-O3`, and rustc SIGSEGVs in optimized builds). We intentionally dial back
-# release optimization and disable LTO for stability.
-[profile.release]
-opt-level = 0
-lto = false
-codegen-units = 1

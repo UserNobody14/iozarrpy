@@ -40,7 +40,7 @@ build-manylinux:
       -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" \
       --entrypoint sh \
       ghcr.io/pyo3/maturin \
-      -lc 'set -eux; maturin build --release; chown -R "$HOST_UID:$HOST_GID" /io/target /io/dist /io/build 2>/dev/null || true'
+      -lc 'set -eux; RUST_MIN_STACK=16777216 && maturin build --release; chown -R "$HOST_UID:$HOST_GID" /io/target /io/dist /io/build 2>/dev/null || true'
 
 [group: 'build']
 [doc('Clean the project')]

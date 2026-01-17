@@ -1,6 +1,6 @@
 [project]
 name = "rainbear"
-version = "1.1.0b2"
+version = "1.1.0b3"
 description = "Build lazy Zarr scans with Polars"
 readme = "README.md"
 authors = [
@@ -28,6 +28,9 @@ include = [
     { path = "src/rainbear/dependencies/", format = "sdist"},
     { path = "LICENSE", format = "sdist"},
 ]
+# Add environment variables to the build process
+[tool.maturin.env]
+RUST_MIN_STACK = "16777216"
 
 [tool.uv]
   
