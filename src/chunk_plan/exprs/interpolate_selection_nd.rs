@@ -1,9 +1,9 @@
 use crate::chunk_plan::exprs::compile_ctx::CompileCtx;
 use crate::chunk_plan::exprs::errors::CompileError;
-use super::index_ranges::index_range_for_index_dim;
+use crate::chunk_plan::indexing::index_ranges::index_range_for_index_dim;
 use crate::chunk_plan::exprs::literals;
-use super::selection::{DataArraySelection, DatasetSelection, HyperRectangleSelection, RangeList};
-use super::types::{BoundKind, CoordScalar, IndexRange, ValueRange};
+use crate::chunk_plan::indexing::selection::{DataArraySelection, DatasetSelection, HyperRectangleSelection, RangeList};
+use crate::chunk_plan::indexing::types::{BoundKind, CoordScalar, IndexRange, ValueRange};
 use crate::chunk_plan::prelude::*;
 use polars::prelude::Series;
 

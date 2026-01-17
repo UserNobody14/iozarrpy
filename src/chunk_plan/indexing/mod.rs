@@ -6,7 +6,6 @@ pub mod index_ranges;
 pub mod monotonic_scalar;
 pub mod monotonic_bounds;
 pub mod monotonic_impl;
-pub mod interpolate_selection_nd;
 
 pub(crate) use plan::{ChunkIndexIter, ChunkPlan};
 pub(crate) use selection::{
