@@ -132,9 +132,12 @@ wheels = [
 [[package]]
 name = "interpolars"
 version = "0.1.0"
-source = { git = "https://github.com/UserNobody14/interpolars.git?rev=offbeaten#5002b29920fa841ba3f7ef76c4511882e7952c03" }
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "polars" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a7/2c/968ad0fd3f49ffe3f0011f264c739c0988558d4f15241515970aa685287c/interpolars-0.1.0-cp39-abi3-manylinux_2_24_x86_64.whl", hash = "sha256:ed04314b9dafec57fc656670c42dd8fd98ddd90b112144c70e2358eadd79e0ea", size = 6769150, upload-time = "2026-01-17T19:20:58.758Z" },
 ]
 
 [[package]]
@@ -531,7 +534,7 @@ build = [
     { name = "patchelf", marker = "sys_platform == 'linux'", specifier = ">=0.17.2.2" },
 ]
 dev = [
-    { name = "interpolars", git = "https://github.com/UserNobody14/interpolars.git?rev=offbeaten" },
+    { name = "interpolars", specifier = ">=0.1.0" },
     { name = "maturin", specifier = ">=1.10.2" },
     { name = "numcodecs", specifier = ">=0.13.0" },
     { name = "numpy", specifier = ">=1.26" },

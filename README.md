@@ -57,7 +57,7 @@ uv run pytest
 
 ### Near Term
 - [ ] Geospatial support via ewkb and polars-st
-- [ ] Interpolation support
+- [x] Interpolation support
 - [ ] Tests against cloud storage backends
 - [ ] Benchmarks
 - [ ] Documentation

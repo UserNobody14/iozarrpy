@@ -130,6 +130,6 @@ pyo3-async-runtimes = { version = "0.27.0", features = ["tokio-runtime"] }
 # `zstd-sys` at `-O3`, and rustc SIGSEGVs in optimized builds). We intentionally dial back
 # release optimization and disable LTO for stability.
 [profile.release]
-opt-level = 1
+opt-level = 0
 lto = false
-codegen-units = 4
+codegen-units = 1

@@ -39,17 +39,12 @@ pub(super) fn interpolate_selection_nd(
             continue;
         }
 
+        // If this coord dim isn't present in the target DataFrame, interpolars treats it as a
+        // group key (README: "Grouped interpolation over extra coordinate dims").
+        // For planning: we can't constrain that dim, but we *can* still constrain others.
         let Some(s) = target_fields.iter().find(|s| s.name() == name.as_str()) else {
-            return Ok(ctx.all());
+            continue;
         };
-
-        let Ok((min_v, max_v)) = series_min_max_scalar(s) else {
-            return Ok(ctx.all());
-        };
-
-        let mut vr = ValueRange::default();
-        vr.min = Some((min_v, BoundKind::Inclusive));
-        vr.max = Some((max_v, BoundKind::Inclusive));
 
         let dim_idx = ctx
             .dims
@@ -62,28 +57,31 @@ pub(super) fn interpolate_selection_nd(
             .copied()
             .ok_or_else(|| CompileError::Unsupported("dimension length unavailable".to_owned()))?;
 
-        let mut idx_range = match ctx.resolver.index_range_for_value_range(&name, &vr) {
-            Ok(Some(r)) => r,
-            Ok(None) => {
-                // Index-only dimension fallback (only works for integer scalar ranges).
-                if ctx.meta.arrays.get(&name).is_none() {
-                    index_range_for_index_dim(&vr, dim_len)
-                        .ok_or_else(|| CompileError::Unsupported("failed to plan index-only dimension".to_owned()))?
-                } else {
-                    return Ok(ctx.all());
-                }
-            }
-            Err(_) => return Ok(ctx.all()),
+        // New interpolars behavior can group by "extra" columns in the target coords.
+        // For chunk planning we must take the union of all coordinate points (across all groups),
+        // *without* collapsing them into a single [min,max] range (which can over-select).
+        let Ok(values) = series_values_scalar(s) else {
+            return Ok(ctx.all());
         };
 
-        if idx_range.is_empty() {
+        let mut idx_ranges: Vec<IndexRange> = Vec::new();
+        for v in values {
+            let Some(idx_range) = index_range_for_interp_value(&name, &v, dim_len, ctx) else {
+                return Ok(ctx.all());
+            };
+            idx_ranges.push(idx_range);
+        }
+
+        if idx_ranges.is_empty() {
             return Ok(DatasetSelection::empty());
         }
 
-        // Expand by one in index space to ensure we include neighbors for interpolation.
-        idx_range = expand_index_range(idx_range, dim_len);
+        let mut rl = RangeList::empty();
+        for r in idx_ranges {
+            rl = rl.union(&RangeList::from_index_range(r));
+        }
 
-        rect = rect.with_dim(name, RangeList::from_index_range(idx_range));
+        rect = rect.with_dim(name, rl);
         if rect.is_empty() {
             return Ok(DatasetSelection::empty());
         }
@@ -105,6 +103,67 @@ fn expand_index_range(r: IndexRange, len: u64) -> IndexRange {
     let start = r.start.saturating_sub(1);
     let end_exclusive = r.end_exclusive.saturating_add(1).min(len);
     IndexRange { start, end_exclusive }
+}
+
+fn index_range_for_interp_value(
+    dim: &str,
+    v: &CoordScalar,
+    dim_len: u64,
+    ctx: &mut CompileCtx<'_>,
+) -> Option<IndexRange> {
+    if dim_len == 0 {
+        return Some(IndexRange {
+            start: 0,
+            end_exclusive: 0,
+        });
+    }
+
+    // For interpolation we need the bracketing indices around `v` (clamping at bounds).
+    //
+    // We derive those using two monotonic lookups:
+    // - `<= v` (max bound) gives us the last index on the left
+    // - `>= v` (min bound) gives us the first index on the right
+    //
+    // This works even when `v` is between grid points (no exact match) and for out-of-bounds
+    // values (it naturally clamps to 0 / n-1).
+    let mut vr_max = ValueRange::default();
+    vr_max.max = Some((v.clone(), BoundKind::Inclusive));
+    let mut vr_min = ValueRange::default();
+    vr_min.min = Some((v.clone(), BoundKind::Inclusive));
+
+    let (left_end, right_start) = match (
+        ctx.resolver.index_range_for_value_range(dim, &vr_max),
+        ctx.resolver.index_range_for_value_range(dim, &vr_min),
+    ) {
+        (Ok(Some(r_max)), Ok(Some(r_min))) => (r_max.end_exclusive, r_min.start),
+        (Ok(None), Ok(None)) => {
+            // Index-only dimension fallback (only works for integer scalar ranges).
+            if ctx.meta.arrays.get(dim).is_some() {
+                return None;
+            }
+            let r_max = index_range_for_index_dim(&vr_max, dim_len)?;
+            let r_min = index_range_for_index_dim(&vr_min, dim_len)?;
+            (r_max.end_exclusive, r_min.start)
+        }
+        _ => return None,
+    };
+
+    let last = dim_len - 1;
+    let left_idx = if left_end == 0 {
+        0
+    } else {
+        (left_end - 1).min(last)
+    };
+    let right_idx = right_start.min(last);
+
+    let start = left_idx.min(right_idx);
+    let end_exclusive = left_idx.max(right_idx).saturating_add(1).min(dim_len);
+
+    // Optionally expand by one to be extra-safe near chunk boundaries.
+    Some(expand_index_range(
+        IndexRange { start, end_exclusive },
+        dim_len,
+    ))
 }
 
 fn extract_literal_struct_series(expr: &Expr) -> Option<Series> {
@@ -163,49 +222,88 @@ fn walk_expr(expr: &Expr, f: &mut impl FnMut(&Expr)) {
     }
 }
 
-fn series_min_max_scalar(s: &Series) -> Result<(CoordScalar, CoordScalar), ()> {
+fn series_values_scalar(s: &Series) -> Result<Vec<CoordScalar>, ()> {
     use polars::prelude::DataType as PlDataType;
+    use polars::prelude::TimeUnit;
     match s.dtype() {
+        PlDataType::Date => {
+            // Polars Date is i32 days since unix epoch.
+            let phys = s.to_physical_repr();
+            let ca = phys.i32().map_err(|_| ())?;
+            let mut out: Vec<CoordScalar> = Vec::with_capacity(ca.len());
+            for v in ca.into_iter() {
+                let days = v.ok_or(())? as i64;
+                let ns = days.saturating_mul(86_400_000_000_000);
+                out.push(CoordScalar::DatetimeNs(ns));
+            }
+            Ok(out)
+        }
+        PlDataType::Datetime(tu, _tz) => {
+            // Stored as i64 in the given time unit, relative to unix epoch.
+            let phys = s.to_physical_repr();
+            let ca = phys.i64().map_err(|_| ())?;
+            let mut out: Vec<CoordScalar> = Vec::with_capacity(ca.len());
+            for v in ca.into_iter() {
+                let raw = v.ok_or(())?;
+                let ns = match tu {
+                    TimeUnit::Nanoseconds => raw,
+                    TimeUnit::Microseconds => raw.saturating_mul(1_000),
+                    TimeUnit::Milliseconds => raw.saturating_mul(1_000_000),
+                };
+                out.push(CoordScalar::DatetimeNs(ns));
+            }
+            Ok(out)
+        }
+        PlDataType::Duration(tu) => {
+            // Stored as i64 in the given time unit.
+            let phys = s.to_physical_repr();
+            let ca = phys.i64().map_err(|_| ())?;
+            let mut out: Vec<CoordScalar> = Vec::with_capacity(ca.len());
+            for v in ca.into_iter() {
+                let raw = v.ok_or(())?;
+                let ns = match tu {
+                    TimeUnit::Nanoseconds => raw,
+                    TimeUnit::Microseconds => raw.saturating_mul(1_000),
+                    TimeUnit::Milliseconds => raw.saturating_mul(1_000_000),
+                };
+                out.push(CoordScalar::DurationNs(ns));
+            }
+            Ok(out)
+        }
         PlDataType::Int64 => {
             let ca = s.i64().map_err(|_| ())?;
-            let mut min: Option<i64> = None;
-            let mut max: Option<i64> = None;
+            let mut out: Vec<CoordScalar> = Vec::with_capacity(ca.len());
             for v in ca.into_iter() {
                 let v = v.ok_or(())?;
-                min = Some(min.map(|m| m.min(v)).unwrap_or(v));
-                max = Some(max.map(|m| m.max(v)).unwrap_or(v));
+                out.push(CoordScalar::I64(v));
             }
-            Ok((CoordScalar::I64(min.ok_or(())?), CoordScalar::I64(max.ok_or(())?)))
+            Ok(out)
         }
         PlDataType::UInt64 => {
             let ca = s.u64().map_err(|_| ())?;
-            let mut min: Option<u64> = None;
-            let mut max: Option<u64> = None;
+            let mut out: Vec<CoordScalar> = Vec::with_capacity(ca.len());
             for v in ca.into_iter() {
                 let v = v.ok_or(())?;
-                min = Some(min.map(|m| m.min(v)).unwrap_or(v));
-                max = Some(max.map(|m| m.max(v)).unwrap_or(v));
+                out.push(CoordScalar::U64(v));
             }
-            Ok((CoordScalar::U64(min.ok_or(())?), CoordScalar::U64(max.ok_or(())?)))
+            Ok(out)
         }
         PlDataType::Float64 => {
             let ca = s.f64().map_err(|_| ())?;
-            let mut min: Option<f64> = None;
-            let mut max: Option<f64> = None;
+            let mut out: Vec<CoordScalar> = Vec::with_capacity(ca.len());
             for v in ca.into_iter() {
                 let v = v.ok_or(())?;
                 if v.is_nan() {
                     return Err(());
                 }
-                min = Some(min.map(|m| m.min(v)).unwrap_or(v));
-                max = Some(max.map(|m| m.max(v)).unwrap_or(v));
+                out.push(CoordScalar::F64(v));
             }
-            Ok((CoordScalar::F64(min.ok_or(())?), CoordScalar::F64(max.ok_or(())?)))
+            Ok(out)
         }
         _ => {
             // Try a last-ditch cast to Float64.
             let s2 = s.cast(&PlDataType::Float64).map_err(|_| ())?;
-            series_min_max_scalar(&s2)
+            series_values_scalar(&s2)
         }
     }
 }
