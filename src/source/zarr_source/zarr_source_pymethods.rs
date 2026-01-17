@@ -1,3 +1,9 @@
+use pyo3::prelude::*;
+use pyo3::types::PyAny;
+use pyo3_polars::{PyDataFrame, PySchema};
+
+use super::ZarrSource;
+
 #[pymethods]
 impl ZarrSource {
     #[new]
@@ -28,3 +34,4 @@ impl ZarrSource {
         self.next_impl()
     }
 }
+

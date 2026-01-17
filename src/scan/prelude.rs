@@ -1,27 +1,27 @@
-use std::collections::BTreeSet;
-use std::sync::Arc;
+pub(crate) use std::collections::BTreeSet;
+pub(crate) use std::sync::Arc;
 
-use futures::stream::{FuturesUnordered, StreamExt};
-use polars::prelude::*;
-use pyo3::prelude::*;
-use pyo3_polars::error::PyPolarsErr;
-use zarrs::array::Array;
+pub(crate) use futures::stream::{FuturesUnordered, StreamExt};
+pub(crate) use polars::prelude::*;
+pub(crate) use pyo3::prelude::*;
+pub(crate) use pyo3_polars::error::PyPolarsErr;
+pub(crate) use zarrs::array::Array;
 // (moved to `reader::retrieve_*`)
 
-use crate::chunk_plan::{compile_expr_to_chunk_plan, ChunkPlan};
-use crate::reader::{
+pub(crate) use crate::chunk_plan::{compile_expr_to_chunk_plan, ChunkPlan};
+pub(crate) use crate::reader::{
     checked_chunk_len, compute_strides, compute_var_chunk_info_async, retrieve_1d_subset_async,
     retrieve_chunk_async, ColumnData,
 };
-use crate::meta::{open_and_load_dataset_meta_async, ZarrDatasetMeta};
-use crate::store::open_store;
+pub(crate) use crate::meta::{open_and_load_dataset_meta_async, ZarrDatasetMeta};
+pub(crate) use crate::store::open_store;
 
-const DEFAULT_MAX_CONCURRENCY: usize = 16;
+pub(super) const DEFAULT_MAX_CONCURRENCY: usize = 16;
 
-fn to_string_err<E: std::fmt::Display>(e: E) -> String {
+pub(super) fn to_string_err<E: std::fmt::Display>(e: E) -> String {
     e.to_string()
 }
 
-fn to_py_err<E: std::fmt::Display>(e: E) -> PyErr {
+pub(super) fn to_py_err<E: std::fmt::Display>(e: E) -> PyErr {
     PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string())
 }

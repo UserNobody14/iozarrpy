@@ -21,6 +21,7 @@ rainbear = "rainbear:main"
 module-name = "rainbear._core"
 python-packages = ["rainbear"]
 python-source = "src"
+env = { RUST_MIN_STACK = "16777216" }
 bindings = "pyo3"
 include = [
     { path = "src/rainbear/*.so", format = "sdist"},
@@ -28,12 +29,8 @@ include = [
     { path = "src/rainbear/dependencies/", format = "sdist"},
     { path = "LICENSE", format = "sdist"},
 ]
-# Add environment variables to the build process
-[tool.maturin.env]
-RUST_MIN_STACK = "16777216"
 
 [tool.uv]
-  
 cache-keys = [{ file = "pyproject.toml" }, { file = "src/**/*.rs" }, { file = "Cargo.toml" }, { file = "Cargo.lock" }]
 
 [build-system]
@@ -53,7 +50,6 @@ dev = [
     "numcodecs>=0.13.0",
     "pytest-benchmark>=5.2.3",
     # Needed for FFI-plugin planning tests and for real-world Expr shapes.
-    # Use the `offbeaten` branch
     "interpolars>=0.1.0",
 ]
 

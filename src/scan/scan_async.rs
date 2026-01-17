@@ -1,3 +1,7 @@
+use super::chunk_to_df::chunk_to_df;
+use super::open_arrays::open_arrays_async;
+use super::prelude::*;
+
 pub(crate) async fn scan_zarr_df_async(
     zarr_url: String,
     expr: Expr,

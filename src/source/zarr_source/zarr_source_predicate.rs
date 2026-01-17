@@ -1,5 +1,13 @@
+use pyo3::prelude::*;
+use pyo3::types::PyAny;
+use zarrs::array::Array;
+
+use crate::chunk_plan::{compile_expr_to_chunk_plan, ChunkPlan};
+
+use super::{panic_to_py_err, to_py_err, ZarrSource};
+
 impl ZarrSource {
-    fn try_set_predicate_impl(&mut self, predicate: &Bound<'_, PyAny>) -> PyResult<()> {
+    pub(super) fn try_set_predicate_impl(&mut self, predicate: &Bound<'_, PyAny>) -> PyResult<()> {
         // IMPORTANT: Taking `PyExpr` directly in the signature can abort the whole
         // Python process if the Python->Rust Expr conversion panics.
         //
@@ -40,8 +48,8 @@ impl ZarrSource {
         Ok(())
     }
 
-    fn set_with_columns_impl(&mut self, columns: Vec<String>) {
+    pub(super) fn set_with_columns_impl(&mut self, columns: Vec<String>) {
         self.with_columns = Some(columns.into_iter().collect());
     }
-
 }
+

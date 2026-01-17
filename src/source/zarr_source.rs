@@ -1,21 +1,12 @@
 use std::collections::BTreeSet;
 
-use polars::prelude::*;
+use polars::prelude::Expr;
 use pyo3::prelude::*;
-use pyo3::types::PyAny;
-use pyo3_polars::error::PyPolarsErr;
-use pyo3_polars::{PyDataFrame, PySchema};
-use zarrs::array::Array;
-// (moved to `reader::retrieve_*`)
 
-use crate::chunk_plan::{compile_expr_to_chunk_plan, ChunkIndexIter, ChunkPlan};
-use crate::reader::{
-    checked_chunk_len, compute_strides, compute_var_chunk_info, retrieve_1d_subset, retrieve_chunk,
-    ColumnData,
-};
+use crate::chunk_plan::ChunkIndexIter;
 use crate::meta::ZarrDatasetMeta;
 
-const DEFAULT_BATCH_SIZE: usize = 10_000;
+pub(super) const DEFAULT_BATCH_SIZE: usize = 10_000;
 
 #[pyclass]
 pub struct ZarrSource {
@@ -42,11 +33,11 @@ pub struct ZarrSource {
     chunks_left: Option<usize>,
 }
 
-fn to_py_err<E: std::fmt::Display>(e: E) -> PyErr {
+pub(super) fn to_py_err<E: std::fmt::Display>(e: E) -> PyErr {
     PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string())
 }
 
-fn panic_to_py_err(e: Box<dyn std::any::Any + Send>, msg2: &str) -> PyErr {
+pub(super) fn panic_to_py_err(e: Box<dyn std::any::Any + Send>, msg2: &str) -> PyErr {
     let msg = if let Some(s) = e.downcast_ref::<&str>() {
         format!("{msg2}: {}", s.to_string())
     } else if let Some(s) = e.downcast_ref::<String>() {
@@ -58,11 +49,19 @@ fn panic_to_py_err(e: Box<dyn std::any::Any + Send>, msg2: &str) -> PyErr {
 }
 
 impl ZarrSource {
-    fn should_emit(&self, name: &str) -> bool {
+    pub(super) fn should_emit(&self, name: &str) -> bool {
         self.with_columns
             .as_ref()
             .map(|s| s.contains(name))
             .unwrap_or(true)
     }
 }
+
+// Keep the implementation split into proper submodules, but nest them under
+// `zarr_source` so they can access `ZarrSource` private fields (like the old
+// `include!` layout allowed).
+mod zarr_source_new;
+mod zarr_source_predicate;
+mod zarr_source_next;
+mod zarr_source_pymethods;
 

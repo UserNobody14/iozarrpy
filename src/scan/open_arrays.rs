@@ -1,4 +1,6 @@
-async fn open_arrays_async(
+use super::prelude::*;
+
+pub(super) async fn open_arrays_async(
     store: zarrs::storage::AsyncReadableWritableListableStorage,
     meta: &ZarrDatasetMeta,
     vars: &[String],

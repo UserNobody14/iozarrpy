@@ -1,5 +1,15 @@
+use std::sync::Arc;
+
+use pyo3::prelude::*;
+use pyo3_polars::PySchema;
+use zarrs::array::Array;
+
+use crate::chunk_plan::ChunkPlan;
+
+use super::{DEFAULT_BATCH_SIZE, ZarrSource};
+
 impl ZarrSource {
-    fn new_impl(
+    pub(super) fn new_impl(
         zarr_url: String,
         batch_size: Option<usize>,
         n_rows: Option<usize>,
@@ -72,7 +82,7 @@ impl ZarrSource {
         })
     }
 
-    fn consume_chunk_budget(&mut self) -> PyResult<()> {
+    pub(super) fn consume_chunk_budget(&mut self) -> PyResult<()> {
         if let Some(left) = self.chunks_left {
             if left == 0 {
                 return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
@@ -84,9 +94,9 @@ impl ZarrSource {
         Ok(())
     }
 
-    fn schema_impl(&self) -> PySchema {
+    pub(super) fn schema_impl(&self) -> PySchema {
         let schema = self.meta.tidy_schema(Some(&self.vars));
         PySchema(Arc::new(schema))
     }
-
 }
+
