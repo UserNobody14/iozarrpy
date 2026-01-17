@@ -1,6 +1,6 @@
-use super::errors::ResolveError;
-use super::literals::apply_time_encoding;
-use super::prelude::*;
+use crate::chunk_plan::exprs::errors::ResolveError;
+use crate::chunk_plan::exprs::literals;
+use crate::chunk_plan::prelude::*;
 use super::types::CoordScalar;
 
 pub(crate) struct MonotonicCoordResolver<'a> {
@@ -90,28 +90,28 @@ impl<'a> MonotonicCoordResolver<'a> {
                 let raw = arr
                     .retrieve_array_subset::<Vec<i64>>(&subset)
                     .map_err(|e| ResolveError::Zarr(e.to_string()))?[0];
-                Ok(apply_time_encoding(raw, te))
+                Ok(literals::apply_time_encoding(raw, te))
             }
             "int32" => {
                 let raw = arr
                     .retrieve_array_subset::<Vec<i32>>(&subset)
                     .map_err(|e| ResolveError::Zarr(e.to_string()))?[0]
                     as i64;
-                Ok(apply_time_encoding(raw, te))
+                Ok(literals::apply_time_encoding(raw, te))
             }
             "int16" => {
                 let raw = arr
                     .retrieve_array_subset::<Vec<i16>>(&subset)
                     .map_err(|e| ResolveError::Zarr(e.to_string()))?[0]
                     as i64;
-                Ok(apply_time_encoding(raw, te))
+                Ok(literals::apply_time_encoding(raw, te))
             }
             "int8" => {
                 let raw = arr
                     .retrieve_array_subset::<Vec<i8>>(&subset)
                     .map_err(|e| ResolveError::Zarr(e.to_string()))?[0]
                     as i64;
-                Ok(apply_time_encoding(raw, te))
+                Ok(literals::apply_time_encoding(raw, te))
             }
             "uint64" => {
                 let v = arr

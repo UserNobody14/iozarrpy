@@ -1,16 +1,16 @@
-use super::compile_ctx::CompileCtx;
-use super::errors::CompileError;
+use crate::chunk_plan::exprs::compile_ctx::CompileCtx;
+use crate::chunk_plan::exprs::errors::CompileError;
 use super::index_ranges::index_range_for_index_dim;
-use super::literals::strip_wrappers;
+use crate::chunk_plan::exprs::literals;
 use super::selection::{DataArraySelection, DatasetSelection, HyperRectangleSelection, RangeList};
 use super::types::{BoundKind, CoordScalar, IndexRange, ValueRange};
-use super::prelude::*;
+use crate::chunk_plan::prelude::*;
 use polars::prelude::Series;
 
 /// Take an nd interpolation and extract the necessary selection to allow it to work.
 /// For an interpolation, if the value is (e.g.) 8.5 and the chunk is from 5 to 10, we only need chunk 5->10.
 /// If the value is 11.5, we need both chunks 5->10 and 10->15.
-pub(super) fn interpolate_selection_nd(
+pub(crate) fn interpolate_selection_nd(
     source_coords: &Expr,
     _source_values: &Expr,
     target_values: &Expr,
@@ -167,7 +167,7 @@ fn index_range_for_interp_value(
 }
 
 fn extract_literal_struct_series(expr: &Expr) -> Option<Series> {
-    let expr = strip_wrappers(expr);
+    let expr = literals::strip_wrappers(expr);
     let Expr::Literal(lit) = expr else {
         return None;
     };

@@ -1,4 +1,4 @@
-use super::types::{IndexRange, ValueRange};
+use crate::chunk_plan::indexing::types::{IndexRange, ValueRange};
 
 #[derive(Debug)]
 pub(crate) enum CompileError {

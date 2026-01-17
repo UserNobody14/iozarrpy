@@ -1,8 +1,8 @@
 use super::compile_node::compile_node;
 use super::compile_ctx::CompileCtx;
 use super::errors::CompileError;
-use super::prelude::*;
-use super::selection::DatasetSelection;
+use crate::chunk_plan::prelude::*;
+use crate::chunk_plan::indexing::selection::DatasetSelection;
 
 pub(super) fn compile_selector(
     selector: &Selector,
@@ -73,7 +73,9 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::chunk_plan::errors::CoordIndexResolver;
+    use crate::chunk_plan::exprs::errors::CoordIndexResolver;
+    use crate::chunk_plan::indexing::types::{IndexRange, ValueRange};
+    use crate::chunk_plan::exprs::errors::ResolveError;
     use crate::meta::ZarrDatasetMeta;
 
     struct DummyResolver;
@@ -81,8 +83,8 @@ mod tests {
         fn index_range_for_value_range(
             &mut self,
             _dim: &str,
-            _range: &super::super::types::ValueRange,
-        ) -> Result<Option<super::super::types::IndexRange>, super::super::errors::ResolveError> {
+            _range: &ValueRange,
+        ) -> Result<Option<IndexRange>, ResolveError> {
             Ok(None)
         }
     }

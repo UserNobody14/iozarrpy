@@ -3,8 +3,8 @@ use super::compile_ctx::CompileCtx;
 use super::errors::CompileError;
 use super::expr_utils::expr_to_col_name;
 use super::literals::strip_wrappers;
-use super::prelude::*;
-use super::selection::DatasetSelection;
+use crate::chunk_plan::prelude::*;
+use crate::chunk_plan::indexing::selection::DatasetSelection;
 
 pub(super) fn compile_is_between(
     input: &[Expr],

@@ -1,6 +1,6 @@
 use super::types::{BoundKind, CoordScalar, IndexRange, ValueRange};
 
-pub(super) fn index_range_for_index_dim(vr: &ValueRange, dim_len_est: u64) -> Option<IndexRange> {
+pub(crate) fn index_range_for_index_dim(vr: &ValueRange, dim_len_est: u64) -> Option<IndexRange> {
     let to_i128 = |v: &CoordScalar| -> Option<i128> {
         match v {
             CoordScalar::I64(x) => Some(*x as i128),

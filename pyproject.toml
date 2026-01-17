@@ -32,6 +32,7 @@ include = [
 
 [tool.uv]
 cache-keys = [{ file = "pyproject.toml" }, { file = "src/**/*.rs" }, { file = "Cargo.toml" }, { file = "Cargo.lock" }]
+extra-build-variables = { rainbear = { RUST_MIN_STACK = "16777216" } }
 
 [build-system]
 requires = ["maturin>=1.0,<2.0"]

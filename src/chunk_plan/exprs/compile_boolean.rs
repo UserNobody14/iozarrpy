@@ -4,8 +4,8 @@ use super::compile_is_in::compile_is_in;
 use super::compile_ctx::CompileCtx;
 use super::errors::CompileError;
 use super::literals::{literal_anyvalue, strip_wrappers};
-use super::prelude::*;
-use super::selection::DatasetSelection;
+use crate::chunk_plan::prelude::*;
+use crate::chunk_plan::indexing::selection::DatasetSelection;
 
 pub(super) fn compile_boolean_function(
     bf: &BooleanFunction,

@@ -1,12 +1,11 @@
-use super::compile_node::compile_node;
-use super::compile_ctx::CompileCtx;
-use super::errors::CompileError;
-use super::errors::CoordIndexResolver;
-use super::monotonic_scalar::MonotonicCoordResolver;
-use super::plan::{ChunkPlan, ChunkPlanNode};
-use super::prelude::*;
-use super::selection::DatasetSelection;
-use super::selection_to_chunks::plan_data_array_chunk_indices;
+use crate::chunk_plan::exprs::compile_node::compile_node;
+use crate::chunk_plan::exprs::compile_ctx::CompileCtx;
+use crate::chunk_plan::exprs::errors::{CompileError, CoordIndexResolver};
+use crate::chunk_plan::indexing::monotonic_scalar::MonotonicCoordResolver;
+use crate::chunk_plan::indexing::plan::{ChunkPlan, ChunkPlanNode};
+use crate::chunk_plan::prelude::*;
+use crate::chunk_plan::indexing::selection::DatasetSelection;
+use crate::chunk_plan::indexing::selection_to_chunks::plan_data_array_chunk_indices;
 
 pub(crate) struct PlannerStats {
     pub(crate) coord_reads: u64,

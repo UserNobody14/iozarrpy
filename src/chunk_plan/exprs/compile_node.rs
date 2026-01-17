@@ -3,15 +3,15 @@ use super::compile_boolean::compile_boolean_function;
 use super::compile_cmp::{
     compile_cmp_to_dataset_selection, compile_value_range_to_dataset_selection, try_expr_to_value_range,
 };
-use super::interpolate_selection_nd::interpolate_selection_nd;
+use crate::chunk_plan::indexing::interpolate_selection_nd::interpolate_selection_nd;
 use super::compile_ctx::CompileCtx;
 use super::errors::CompileError;
 use super::literals::{col_lit, literal_anyvalue, reverse_operator};
-use super::prelude::*;
-use super::selection::DatasetSelection;
+use crate::chunk_plan::prelude::*;
+use crate::chunk_plan::indexing::selection::DatasetSelection;
 use super::selector::compile_selector;
 
-pub(super) fn compile_node(
+pub(crate) fn compile_node(
     // Either a borrowed or owned expression.
     expr: impl std::borrow::Borrow<Expr>,
     ctx: &mut CompileCtx<'_>,

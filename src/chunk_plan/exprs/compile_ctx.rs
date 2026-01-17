@@ -1,6 +1,6 @@
 use super::errors::CoordIndexResolver;
-use super::prelude::ZarrDatasetMeta;
-use super::selection::DatasetSelection;
+use crate::chunk_plan::prelude::ZarrDatasetMeta;
+use crate::chunk_plan::indexing::selection::DatasetSelection;
 
 pub(crate) struct CompileCtx<'a> {
     pub(crate) meta: &'a ZarrDatasetMeta,

@@ -1,4 +1,4 @@
-use super::errors::ResolveError;
+use crate::chunk_plan::exprs::errors::ResolveError;
 use super::monotonic_scalar::{MonotonicCoordResolver, MonotonicDirection};
 use super::types::CoordScalar;
 

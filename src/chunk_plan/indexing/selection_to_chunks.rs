@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use zarrs::array::Array;
 
-use super::errors::CompileError;
+use crate::chunk_plan::exprs::errors::CompileError;
 use super::selection::{DataArraySelection, DatasetSelection, HyperRectangleSelection, RangeList};
 use super::types::DimChunkRange;
 use crate::meta::ZarrDatasetMeta;
@@ -68,7 +68,7 @@ fn insert_cartesian_ranges(
     }
 }
 
-pub(super) fn plan_data_array_chunk_indices(
+pub(crate) fn plan_data_array_chunk_indices(
     sel: &DataArraySelection,
     array_dims: &[String],
     array_shape: &[u64],
@@ -202,8 +202,8 @@ pub(crate) fn plan_dataset_chunk_indices(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::chunk_plan::selection::{DataArraySelection, HyperRectangleSelection, RangeList};
-    use crate::chunk_plan::types::IndexRange;
+    use crate::chunk_plan::indexing::selection::{DataArraySelection, HyperRectangleSelection, RangeList};
+    use crate::chunk_plan::indexing::types::IndexRange;
 
     #[test]
     fn plan_data_array_chunks_1d_range() {

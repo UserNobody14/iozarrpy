@@ -1,10 +1,10 @@
 use super::errors::CompileError;
 use super::compile_ctx::CompileCtx;
-use super::index_ranges::index_range_for_index_dim;
+use crate::chunk_plan::indexing::index_ranges;
 use super::literals::{literal_to_scalar, reverse_operator, strip_wrappers};
-use super::prelude::*;
-use super::selection::{DataArraySelection, DatasetSelection, HyperRectangleSelection, RangeList};
-use super::types::{BoundKind, ValueRange};
+use crate::chunk_plan::prelude::*;
+use crate::chunk_plan::indexing::selection::{DataArraySelection, DatasetSelection, HyperRectangleSelection, RangeList};
+use crate::chunk_plan::indexing::types::{BoundKind, ValueRange};
 
 pub(super) fn compile_value_range_to_dataset_selection(
     col: &str,
@@ -35,7 +35,7 @@ pub(super) fn compile_value_range_to_dataset_selection(
                     .get(dim_idx)
                     .copied()
                     .ok_or_else(|| CompileError::Unsupported("dimension length unavailable".to_owned()))?;
-                index_range_for_index_dim(vr, dim_len).ok_or_else(|| {
+                index_ranges::index_range_for_index_dim(vr, dim_len).ok_or_else(|| {
                     CompileError::Unsupported("failed to plan index-only dimension".to_owned())
                 })?
             } else {

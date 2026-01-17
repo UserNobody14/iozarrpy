@@ -1,6 +1,6 @@
-use super::errors::{CoordIndexResolver, ResolveError};
+use crate::chunk_plan::exprs::errors::{CoordIndexResolver, ResolveError};
 use super::monotonic_scalar::MonotonicCoordResolver;
-use super::prelude::*;
+use crate::chunk_plan::prelude::*;
 use super::types::{BoundKind, IndexRange, ValueRange};
 
 impl CoordIndexResolver for MonotonicCoordResolver<'_> {

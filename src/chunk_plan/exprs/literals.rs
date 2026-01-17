@@ -1,8 +1,8 @@
-use super::prelude::*;
-use super::plan::ChunkPlanNode;
-use super::types::{CoordScalar, DimChunkRange, IndexRange};
+use crate::chunk_plan::prelude::*;
+use crate::chunk_plan::indexing::plan::ChunkPlanNode;
+use crate::chunk_plan::indexing::types::{CoordScalar, DimChunkRange, IndexRange};
 
-pub(super) fn apply_time_encoding(raw: i64, te: Option<&TimeEncoding>) -> CoordScalar {
+pub(crate) fn apply_time_encoding(raw: i64, te: Option<&TimeEncoding>) -> CoordScalar {
     if let Some(enc) = te {
         let ns = enc.decode(raw);
         if enc.is_duration {
@@ -179,7 +179,7 @@ pub(super) fn col_lit(col_side: &Expr, lit_side: &Expr) -> Option<(String, Liter
     }
 }
 
-pub(super) fn strip_wrappers(mut e: &Expr) -> &Expr {
+pub(crate) fn strip_wrappers(mut e: &Expr) -> &Expr {
     loop {
         match e {
             Expr::Alias(inner, _) => e = inner.as_ref(),
