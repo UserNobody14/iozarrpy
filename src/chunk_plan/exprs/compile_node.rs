@@ -60,19 +60,10 @@ pub(crate) fn compile_node(
             function.as_ref(),
             ctx,
         ),
-        // Expr::Rolling { function, .. } => compile_node(
-        //     function,
-        //     meta,
-        //     dims,
-        //     grid_shape,
-        //     regular_chunk_shape,
-        //     resolver,
-        // ),
         Expr::Rolling { function, .. } => compile_node(
             function.as_ref(),
             ctx,
         ),
-        // Expr::Window { function, .. } => compile_node(function, meta, dims, grid_shape, regular_chunk_shape, resolver),
         // If a filter expression is used where we expect a predicate, focus on the predicate.
         Expr::Filter { by, .. } => compile_node(
             by.as_ref(),

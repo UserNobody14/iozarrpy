@@ -1,8 +1,13 @@
+use std::collections::HashMap;
+
 use pyo3::prelude::*;
 use pyo3::types::PyAny;
 use zarrs::array::Array;
 
-use crate::chunk_plan::{compile_expr_to_chunk_plan, ChunkPlan};
+use crate::chunk_plan::{
+    compile_expr_to_chunk_plan, compile_expr_to_dataset_selection, plan_dataset_chunk_indices,
+    ChunkPlan,
+};
 use crate::meta::open_and_load_dataset_meta;
 use crate::py::expr_extract::extract_expr;
 
@@ -133,4 +138,89 @@ pub(crate) fn _selected_chunks_debug(
     }
 
     Ok((out, stats.coord_reads))
+}
+
+/// Debug function that returns per-variable chunk selections.
+/// 
+/// Returns:
+/// - `inferred_variables`: List of variable names found in the DatasetSelection
+/// - `per_variable_chunks`: Dict mapping variable name -> list of chunk dicts
+/// - `coord_reads`: Number of coordinate array reads performed
+#[pyfunction]
+#[pyo3(signature = (zarr_url, expr))]
+pub(crate) fn _selected_variables_debug(
+    py: Python<'_>,
+    zarr_url: String,
+    expr: &Bound<'_, PyAny>,
+) -> PyResult<(Vec<String>, HashMap<String, Vec<Py<PyAny>>>, u64)> {
+    let (opened, meta) = open_and_load_dataset_meta(&zarr_url)
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e))?;
+
+    // Use the first data var as the primary for dimension resolution
+    let primary_var = meta.data_vars.first().ok_or_else(|| {
+        PyErr::new::<pyo3::exceptions::PyValueError, _>("no data variables found")
+    })?;
+
+    let parsed_expr = extract_expr(expr)?;
+
+    let (selection, stats) = compile_expr_to_dataset_selection(
+        &parsed_expr,
+        &meta,
+        opened.store.clone(),
+        primary_var,
+    )
+    .map_err(|e| match e {
+        crate::chunk_plan::CompileError::Unsupported(e) => {
+            PyErr::new::<pyo3::exceptions::PyValueError, _>(e)
+        }
+        crate::chunk_plan::CompileError::MissingPrimaryDims(e) => {
+            PyErr::new::<pyo3::exceptions::PyValueError, _>(e)
+        }
+    })?;
+
+    // Get the variable names from the selection
+    let inferred_vars: Vec<String> = selection.0.keys().cloned().collect();
+
+    // Plan chunk indices for all variables in the selection
+    let per_var_chunks = plan_dataset_chunk_indices(&selection, &meta, opened.store.clone(), false)
+        .map_err(|e| match e {
+            crate::chunk_plan::CompileError::Unsupported(e) => {
+                PyErr::new::<pyo3::exceptions::PyValueError, _>(e)
+            }
+            crate::chunk_plan::CompileError::MissingPrimaryDims(e) => {
+                PyErr::new::<pyo3::exceptions::PyValueError, _>(e)
+            }
+        })?;
+
+    // Convert to Python-friendly format
+    let mut out: HashMap<String, Vec<Py<PyAny>>> = HashMap::new();
+    for (var, indices) in per_var_chunks {
+        let Some(var_meta) = meta.arrays.get(&var) else {
+            continue;
+        };
+        let arr = Array::open(opened.store.clone(), &var_meta.path)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
+
+        let mut var_chunks: Vec<Py<PyAny>> = Vec::new();
+        for idx in indices {
+            let chunk_shape_nz = arr
+                .chunk_shape(&idx)
+                .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
+            let shape: Vec<u64> = chunk_shape_nz.iter().map(|x| x.get()).collect();
+            let origin = arr
+                .chunk_grid()
+                .chunk_origin(&idx)
+                .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?
+                .unwrap_or_else(|| vec![0; shape.len()]);
+
+            let d = pyo3::types::PyDict::new(py);
+            d.set_item("indices", &idx)?;
+            d.set_item("origin", &origin)?;
+            d.set_item("shape", &shape)?;
+            var_chunks.push(d.into());
+        }
+        out.insert(var, var_chunks);
+    }
+
+    Ok((inferred_vars, out, stats.coord_reads))
 }

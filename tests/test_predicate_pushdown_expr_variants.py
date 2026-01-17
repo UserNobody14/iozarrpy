@@ -112,3 +112,27 @@ def test_and_or_with_complex_side(_grid_dataset: tuple[str, int, int]) -> None:
     idxs = _chunk_indices(chunks)
     assert len(idxs) == all_total
 
+
+
+def test_filter_on_alias_preserves_pushdown(_grid_dataset: tuple[str, int, int]) -> None:
+    zarr_url, _all_total, per_x = _grid_dataset
+
+    chunks, _ = _core._selected_chunks_debug(
+        zarr_url, pl.col("x").eq(0).alias("pushed").cast(pl.Boolean), variables=["2m_temperature"]
+    )
+    idxs = _chunk_indices(chunks)
+    _assert_grid_x_selection(idxs, expected_x_chunks={0}, expected_total=per_x)
+
+
+def test_filter_on_alias_complex_expression_preserves_pushdown(_grid_dataset: tuple[str, int, int]) -> None:
+    zarr_url, all_total, per_x = _grid_dataset
+
+    # More complex expressions should not break AND pushdown.
+    flt = pl.col("x").alias("filtertest").eq(0)
+    flt = flt.alias("pushed").cast(pl.Boolean)
+    chunks, _ = _core._selected_chunks_debug(
+        zarr_url, flt, variables=["2m_temperature"]
+    )
+    idxs = _chunk_indices(chunks)
+    _assert_grid_x_selection(idxs, expected_x_chunks={0}, expected_total=per_x)
+

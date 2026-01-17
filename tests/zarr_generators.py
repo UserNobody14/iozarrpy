@@ -533,6 +533,233 @@ def write_datasets_to_zarr_v3_sharded(output_dir):
     )
 
 
+def create_comprehensive_test_dataset(*, use_cartopy: bool = False):
+    """
+    Create a 3D dataset with prime-factored chunk grid (7x5x3=105 chunks).
+    
+    This dataset is designed for rigorous chunk selection testing where:
+    - Dimension a: 70 elements, chunk size 10 -> 7 chunks
+    - Dimension b: 50 elements, chunk size 10 -> 5 chunks
+    - Dimension c: 30 elements, chunk size 10 -> 3 chunks
+    
+    Coordinate values are designed to map precisely to chunks:
+    - a coords: 0..69 (chunk i contains a values i*10..(i+1)*10-1)
+    - b coords: 0..49
+    - c coords: 0..29
+    
+    This enables precise arithmetic verification:
+    - Selecting a == 15 hits only chunk a=1 -> 1*5*3 = 15 chunks
+    - Selecting a < 20 hits chunks a=0,1 -> 2*5*3 = 30 chunks
+    - Selecting (a < 20) & (b < 20) -> 2*2*3 = 12 chunks
+    - Selecting (a < 20) & (b < 20) & (c < 20) -> 2*2*2 = 8 chunks
+    
+    Args:
+        use_cartopy: If True, use cartopy for coordinate generation (requires cartopy).
+                     If False, use simple linear coordinates.
+    """
+    na, nb, nc = 70, 50, 30
+    
+    # Create coordinate arrays - these are the values used in predicates
+    a_coords = np.arange(na, dtype=np.int64)
+    b_coords = np.arange(nb, dtype=np.int64)
+    c_coords = np.arange(nc, dtype=np.int64)
+    
+    # Create data array with deterministic values for verification
+    # Value at (i, j, k) = i * 10000 + j * 100 + k
+    data = np.zeros((na, nb, nc), dtype=np.float64)
+    for i in range(na):
+        for j in range(nb):
+            for k in range(nc):
+                data[i, j, k] = i * 10000 + j * 100 + k
+    
+    # Generate 2D coordinate grids for a subset (for testing 2D coord handling)
+    # Note: get_lon_lat_grids returns (len(y), len(x)) shaped arrays
+    if use_cartopy and ccrs is not None:
+        # Use cartopy to generate realistic lon/lat
+        # get_lon_lat_grids expects (x, y) and returns (y, x) shaped arrays
+        x_for_grid = np.arange(nc)  # c dimension acts as x
+        y_for_grid = np.arange(nb)  # b dimension acts as y
+        lon_2d, lat_2d = get_lon_lat_grids(x_for_grid, y_for_grid)
+        # Result is (nb, nc) shaped which matches (["b", "c"])
+    else:
+        # Simple linear fallback - create (nb, nc) shaped arrays directly
+        # meshgrid with indexing='ij' gives (nb, nc) shape for (b, c) iteration
+        bb, cc = np.meshgrid(np.arange(nb), np.arange(nc), indexing='ij')
+        lon_2d = -120.0 + cc.astype(np.float64) * 0.1
+        lat_2d = 30.0 + bb.astype(np.float64) * 0.1
+    
+    ds = xr.Dataset(
+        data_vars={
+            "data": (["a", "b", "c"], data),
+            # Secondary variable for multi-variable tests
+            "data2": (["a", "b", "c"], data * 2),
+            # 2D variable for testing non-dimension coordinates
+            "surface": (["b", "c"], np.random.randn(nb, nc)),
+        },
+        coords={
+            "a": a_coords,
+            "b": b_coords,
+            "c": c_coords,
+            # 2D coordinates for testing multi-dimensional coord handling
+            # Shape: (nb, nc) = (50, 30)
+            "lon": (["b", "c"], lon_2d),
+            "lat": (["b", "c"], lat_2d),
+        },
+        attrs={
+            "description": "Comprehensive test dataset with prime-factored chunk grid",
+            "chunk_grid": "7x5x3=105 chunks",
+            "coordinate_mode": "cartopy" if (use_cartopy and ccrs is not None) else "fallback",
+        },
+    )
+    return ds
+
+
+def create_comprehensive_4d_test_dataset():
+    """
+    Create a 4D dataset for testing time/lead_time style dimensions.
+    
+    Chunk grid: 3x5x7x4 = 420 chunks (all primes or semi-primes)
+    - time: 6 elements, chunk size 2 -> 3 chunks
+    - lead: 10 elements, chunk size 2 -> 5 chunks
+    - y: 70 elements, chunk size 10 -> 7 chunks
+    - x: 40 elements, chunk size 10 -> 4 chunks
+    """
+    nt, nl, ny, nx = 6, 10, 70, 40
+    
+    # Time coordinates - datetime
+    time_values = [datetime(2024, 1, 1) + timedelta(hours=i * 6) for i in range(nt)]
+    # Lead time - duration
+    lead_time_values = [timedelta(hours=i) for i in range(nl)]
+    
+    y_coords = np.arange(ny, dtype=np.int64)
+    x_coords = np.arange(nx, dtype=np.int64)
+    
+    # Deterministic data
+    data = np.zeros((nt, nl, ny, nx), dtype=np.float64)
+    for t in range(nt):
+        for l in range(nl):
+            for y in range(ny):
+                for x in range(nx):
+                    data[t, l, y, x] = t * 1000000 + l * 10000 + y * 100 + x
+    
+    ds = xr.Dataset(
+        data_vars={
+            "temperature": (["time", "lead_time", "y", "x"], data),
+            "precipitation": (["time", "lead_time", "y", "x"], data * 0.01),
+        },
+        coords={
+            "time": time_values,
+            "lead_time": lead_time_values,
+            "y": y_coords,
+            "x": x_coords,
+        },
+        attrs={
+            "description": "4D comprehensive test dataset",
+            "chunk_grid": "3x5x7x4=420 chunks",
+        },
+    )
+    return ds
+
+
+def create_multi_var_test_dataset():
+    """
+    Create a dataset with multiple variables for testing variable inference.
+    
+    This dataset is designed for testing:
+    - Variable inference from expressions
+    - Per-variable chunk selection
+    - Variables with different dimensions
+    - Aggregation and window function tests
+    
+    Variables:
+    - temp: 3D (a, b, c) - primary data variable
+    - precip: 3D (a, b, c) - secondary data variable
+    - wind_u: 3D (a, b, c) - wind component u
+    - wind_v: 3D (a, b, c) - wind component v
+    - surface: 2D (b, c) - surface-only variable (different dims)
+    - pressure: 3D (a, b, c) - another 3D variable
+    
+    Chunk grid for 3D vars: 5x4x3 = 60 chunks
+    - Dimension a: 50 elements, chunk size 10 -> 5 chunks
+    - Dimension b: 40 elements, chunk size 10 -> 4 chunks
+    - Dimension c: 30 elements, chunk size 10 -> 3 chunks
+    
+    Chunk grid for 2D var (surface): 4x3 = 12 chunks
+    """
+    na, nb, nc = 50, 40, 30
+    
+    # Create coordinate arrays
+    a_coords = np.arange(na, dtype=np.int64)
+    b_coords = np.arange(nb, dtype=np.int64)
+    c_coords = np.arange(nc, dtype=np.int64)
+    
+    # Create data arrays with distinct patterns for each variable
+    # temp: linear in a
+    temp = np.zeros((na, nb, nc), dtype=np.float64)
+    for i in range(na):
+        temp[i, :, :] = 273.15 + i * 0.5  # Temperature in K
+    
+    # precip: linear in b
+    precip = np.zeros((na, nb, nc), dtype=np.float64)
+    for j in range(nb):
+        precip[:, j, :] = j * 0.1  # Precipitation in mm
+    
+    # wind_u: linear in c
+    wind_u = np.zeros((na, nb, nc), dtype=np.float64)
+    for k in range(nc):
+        wind_u[:, :, k] = k * 2.0  # Wind u-component in m/s
+    
+    # wind_v: linear in a + b
+    wind_v = np.zeros((na, nb, nc), dtype=np.float64)
+    for i in range(na):
+        for j in range(nb):
+            wind_v[i, j, :] = (i + j) * 0.5  # Wind v-component in m/s
+    
+    # pressure: linear in all dims
+    pressure = np.zeros((na, nb, nc), dtype=np.float64)
+    for i in range(na):
+        for j in range(nb):
+            for k in range(nc):
+                pressure[i, j, k] = 1000.0 + i * 0.1 + j * 0.2 + k * 0.3
+    
+    # surface: 2D variable (only b, c dims)
+    surface = np.zeros((nb, nc), dtype=np.float64)
+    for j in range(nb):
+        for k in range(nc):
+            surface[j, k] = 100.0 + j + k * 2
+    
+    # 2D coordinate grids
+    bb, cc = np.meshgrid(np.arange(nb), np.arange(nc), indexing='ij')
+    lon_2d = -120.0 + cc.astype(np.float64) * 0.1
+    lat_2d = 30.0 + bb.astype(np.float64) * 0.1
+    
+    ds = xr.Dataset(
+        data_vars={
+            "temp": (["a", "b", "c"], temp),
+            "precip": (["a", "b", "c"], precip),
+            "wind_u": (["a", "b", "c"], wind_u),
+            "wind_v": (["a", "b", "c"], wind_v),
+            "pressure": (["a", "b", "c"], pressure),
+            "surface": (["b", "c"], surface),
+        },
+        coords={
+            "a": a_coords,
+            "b": b_coords,
+            "c": c_coords,
+            "lon": (["b", "c"], lon_2d),
+            "lat": (["b", "c"], lat_2d),
+        },
+        attrs={
+            "description": "Multi-variable test dataset for variable inference testing",
+            "chunk_grid_3d": "5x4x3=60 chunks",
+            "chunk_grid_2d": "4x3=12 chunks",
+            "variables_3d": ["temp", "precip", "wind_u", "wind_v", "pressure"],
+            "variables_2d": ["surface"],
+        },
+    )
+    return ds
+
+
 if __name__ == "__main__":
     # Set the output directory
     output_dir = "output-datasets"

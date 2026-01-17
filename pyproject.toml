@@ -8,6 +8,7 @@ authors = [
 ]
 requires-python = ">=3.12"
 dependencies = [
+    "cartopy>=0.25.0",
     "polars==1.37.1",
 ]
 license = { file = "LICENSE" }
@@ -21,7 +22,7 @@ rainbear = "rainbear:main"
 module-name = "rainbear._core"
 python-packages = ["rainbear"]
 python-source = "src"
-env = { RUST_MIN_STACK = "16777216" }
+env = { RUST_MIN_STACK = "33554432" }
 bindings = "pyo3"
 include = [
     { path = "src/rainbear/*.so", format = "sdist"},
@@ -32,7 +33,7 @@ include = [
 
 [tool.uv]
 cache-keys = [{ file = "pyproject.toml" }, { file = "src/**/*.rs" }, { file = "Cargo.toml" }, { file = "Cargo.lock" }]
-extra-build-variables = { rainbear = { RUST_MIN_STACK = "16777216" } }
+extra-build-variables = { rainbear = { RUST_MIN_STACK = "33554432" } }
 
 [build-system]
 requires = ["maturin>=1.0,<2.0"]

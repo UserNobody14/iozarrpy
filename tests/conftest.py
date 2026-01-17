@@ -378,3 +378,197 @@ def get_dataset_config(name: str) -> DatasetConfig:
         if cfg.name == name:
             return cfg
     raise ValueError(f"Unknown dataset config: {name}")
+
+
+# ---------------------------------------------------------------------------
+# Comprehensive expression test datasets
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class ComprehensiveDatasetInfo:
+    """Metadata about the comprehensive test dataset for assertions."""
+
+    path: str
+    # Chunk grid shape (a_chunks, b_chunks, c_chunks)
+    chunk_grid: tuple[int, int, int]
+    # Total number of chunks
+    total_chunks: int
+    # Chunk size per dimension
+    chunk_size: int
+    # Dimension lengths
+    dim_lengths: tuple[int, int, int]
+    # Coordinate mode used
+    coord_mode: str
+
+
+def _generate_comprehensive_datasets(output_dir: Path) -> dict[str, ComprehensiveDatasetInfo]:
+    """Generate comprehensive test datasets for expression testing."""
+    from tests import zarr_generators
+
+    paths: dict[str, ComprehensiveDatasetInfo] = {}
+    blosc_zstd = BloscCodec(cname="zstd", clevel=5, shuffle=BloscShuffle.shuffle)
+
+    # 3D dataset with prime-factored chunk grid: 7x5x3 = 105 chunks
+    # Dimensions: a=70 (7 chunks), b=50 (5 chunks), c=30 (3 chunks)
+    chunk_size = 10
+    chunk_grid = (7, 5, 3)
+    dim_lengths = (70, 50, 30)
+    total_chunks = 7 * 5 * 3  # = 105
+
+    # Generate with fallback coordinates
+    ds = zarr_generators.create_comprehensive_test_dataset(use_cartopy=False)
+    path = output_dir / "comprehensive_3d_fallback.zarr"
+    if path.exists():
+        shutil.rmtree(path)
+    encoding = {
+        "data": {"chunks": (chunk_size, chunk_size, chunk_size), "compressors": [blosc_zstd]},
+        "data2": {"chunks": (chunk_size, chunk_size, chunk_size), "compressors": [blosc_zstd]},
+        "surface": {"chunks": (chunk_size, chunk_size), "compressors": [blosc_zstd]},
+    }
+    ds.to_zarr(str(path), zarr_format=3, encoding=encoding)
+    paths["comprehensive_3d_fallback"] = ComprehensiveDatasetInfo(
+        path=str(path),
+        chunk_grid=chunk_grid,
+        total_chunks=total_chunks,
+        chunk_size=chunk_size,
+        dim_lengths=dim_lengths,
+        coord_mode="fallback",
+    )
+
+    # Generate with cartopy coordinates (if available)
+    ds = zarr_generators.create_comprehensive_test_dataset(use_cartopy=True)
+    path = output_dir / "comprehensive_3d_cartopy.zarr"
+    if path.exists():
+        shutil.rmtree(path)
+    ds.to_zarr(str(path), zarr_format=3, encoding=encoding)
+    paths["comprehensive_3d_cartopy"] = ComprehensiveDatasetInfo(
+        path=str(path),
+        chunk_grid=chunk_grid,
+        total_chunks=total_chunks,
+        chunk_size=chunk_size,
+        dim_lengths=dim_lengths,
+        coord_mode=ds.attrs.get("coordinate_mode", "unknown"),
+    )
+
+    # 4D dataset: 3x5x7x4 = 420 chunks
+    ds = zarr_generators.create_comprehensive_4d_test_dataset()
+    path = output_dir / "comprehensive_4d.zarr"
+    if path.exists():
+        shutil.rmtree(path)
+    encoding_4d = {
+        "temperature": {"chunks": (2, 2, 10, 10), "compressors": [blosc_zstd]},
+        "precipitation": {"chunks": (2, 2, 10, 10), "compressors": [blosc_zstd]},
+    }
+    ds.to_zarr(str(path), zarr_format=3, encoding=encoding_4d)
+    paths["comprehensive_4d"] = ComprehensiveDatasetInfo(
+        path=str(path),
+        chunk_grid=(3, 5, 7, 4),  # type: ignore[arg-type]
+        total_chunks=3 * 5 * 7 * 4,  # = 420
+        chunk_size=10,  # Spatial chunk size (time/lead are 2)
+        dim_lengths=(6, 10, 70, 40),  # type: ignore[arg-type]
+        coord_mode="datetime",
+    )
+
+    return paths
+
+
+@pytest.fixture(scope="session")
+def comprehensive_datasets() -> dict[str, ComprehensiveDatasetInfo]:
+    """Session-scoped fixture providing comprehensive test datasets.
+
+    Returns a dict with keys:
+    - 'comprehensive_3d_fallback': 3D dataset (7x5x3=105 chunks) with simple coords
+    - 'comprehensive_3d_cartopy': 3D dataset with cartopy coords (or fallback if unavailable)
+    - 'comprehensive_4d': 4D dataset (3x5x7x4=420 chunks) with datetime/duration coords
+    """
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    return _generate_comprehensive_datasets(OUTPUT_DIR)
+
+
+@pytest.fixture(params=["comprehensive_3d_fallback", "comprehensive_3d_cartopy"])
+def comprehensive_3d_dataset(
+    comprehensive_datasets: dict[str, ComprehensiveDatasetInfo],
+    request: pytest.FixtureRequest,
+) -> ComprehensiveDatasetInfo:
+    """Parameterized fixture that runs tests against both coord modes."""
+    return comprehensive_datasets[str(request.param)]
+
+
+# ---------------------------------------------------------------------------
+# Multi-variable dataset for advanced expression testing
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class MultiVarDatasetInfo:
+    """Metadata about the multi-variable test dataset."""
+
+    path: str
+    # Chunk grid shape for 3D variables (a_chunks, b_chunks, c_chunks)
+    chunk_grid_3d: tuple[int, int, int]
+    # Chunk grid shape for 2D variables (b_chunks, c_chunks)
+    chunk_grid_2d: tuple[int, int]
+    # Total chunks for 3D/2D
+    total_chunks_3d: int
+    total_chunks_2d: int
+    # Chunk size per dimension
+    chunk_size: int
+    # Dimension lengths
+    dim_lengths: tuple[int, int, int]
+    # 3D variable names
+    vars_3d: list[str]
+    # 2D variable names
+    vars_2d: list[str]
+    # All data variable names
+    all_data_vars: list[str]
+
+
+def _generate_multi_var_dataset(output_dir: Path) -> MultiVarDatasetInfo:
+    """Generate multi-variable test dataset for advanced expression testing."""
+    from tests import zarr_generators
+
+    blosc_zstd = BloscCodec(cname="zstd", clevel=5, shuffle=BloscShuffle.shuffle)
+
+    ds = zarr_generators.create_multi_var_test_dataset()
+    path = output_dir / "multi_var.zarr"
+    if path.exists():
+        shutil.rmtree(path)
+
+    chunk_size = 10
+    encoding = {
+        "temp": {"chunks": (chunk_size, chunk_size, chunk_size), "compressors": [blosc_zstd]},
+        "precip": {"chunks": (chunk_size, chunk_size, chunk_size), "compressors": [blosc_zstd]},
+        "wind_u": {"chunks": (chunk_size, chunk_size, chunk_size), "compressors": [blosc_zstd]},
+        "wind_v": {"chunks": (chunk_size, chunk_size, chunk_size), "compressors": [blosc_zstd]},
+        "pressure": {"chunks": (chunk_size, chunk_size, chunk_size), "compressors": [blosc_zstd]},
+        "surface": {"chunks": (chunk_size, chunk_size), "compressors": [blosc_zstd]},
+    }
+    ds.to_zarr(str(path), zarr_format=3, encoding=encoding)
+
+    return MultiVarDatasetInfo(
+        path=str(path),
+        chunk_grid_3d=(5, 4, 3),
+        chunk_grid_2d=(4, 3),
+        total_chunks_3d=5 * 4 * 3,  # = 60
+        total_chunks_2d=4 * 3,  # = 12
+        chunk_size=chunk_size,
+        dim_lengths=(50, 40, 30),
+        vars_3d=["temp", "precip", "wind_u", "wind_v", "pressure"],
+        vars_2d=["surface"],
+        all_data_vars=["temp", "precip", "wind_u", "wind_v", "pressure", "surface"],
+    )
+
+
+@pytest.fixture(scope="session")
+def multi_var_dataset() -> MultiVarDatasetInfo:
+    """Session-scoped fixture providing multi-variable test dataset.
+
+    Dataset has:
+    - 5 3D variables: temp, precip, wind_u, wind_v, pressure
+    - 1 2D variable: surface
+    - 3D chunk grid: 5x4x3 = 60 chunks
+    - 2D chunk grid: 4x3 = 12 chunks
+    """
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    return _generate_multi_var_dataset(OUTPUT_DIR)
