@@ -2,9 +2,10 @@ use crate::chunk_plan::exprs::compile_ctx::CompileCtx;
 use crate::chunk_plan::exprs::errors::CompileError;
 use crate::chunk_plan::indexing::index_ranges::index_range_for_index_dim;
 use crate::chunk_plan::exprs::literals;
-use crate::chunk_plan::indexing::selection::{DataArraySelection, DatasetSelection, HyperRectangleSelection, RangeList};
+use crate::chunk_plan::indexing::selection::{DataArraySelection, DatasetSelection, HyperRectangleSelection, RangeList, dataset_for_vars_with_selection};
 use crate::chunk_plan::indexing::types::{BoundKind, CoordScalar, IndexRange, ValueRange};
 use crate::chunk_plan::prelude::*;
+use crate::chunk_plan::indexing::selection::SetOperations;
 use polars::prelude::Series;
 
 /// Take an nd interpolation and extract the necessary selection to allow it to work.
@@ -19,15 +20,15 @@ pub(crate) fn interpolate_selection_nd(
     // Extract coordinate names from the source coord struct expression.
     let coord_names = extract_column_names(source_coords);
     if coord_names.is_empty() {
-        return Ok(ctx.all());
+        return Ok(DatasetSelection::NoSelectionMade);
     }
 
     let Some(target_struct) = extract_literal_struct_series(target_values) else {
-        return Ok(ctx.all());
+        return Ok(DatasetSelection::NoSelectionMade);
     };
 
     let Ok(target_sc) = target_struct.struct_() else {
-        return Ok(ctx.all());
+        return Ok(DatasetSelection::NoSelectionMade);
     };
     let target_fields = target_sc.fields_as_series();
 
@@ -61,13 +62,13 @@ pub(crate) fn interpolate_selection_nd(
         // For chunk planning we must take the union of all coordinate points (across all groups),
         // *without* collapsing them into a single [min,max] range (which can over-select).
         let Ok(values) = series_values_scalar(s) else {
-            return Ok(ctx.all());
+            return Ok(DatasetSelection::NoSelectionMade);
         };
 
         let mut idx_ranges: Vec<IndexRange> = Vec::new();
         for v in values {
             let Some(idx_range) = index_range_for_interp_value(&name, &v, dim_len, ctx) else {
-                return Ok(ctx.all());
+                return Ok(DatasetSelection::NoSelectionMade);
             };
             idx_ranges.push(idx_range);
         }
@@ -89,11 +90,11 @@ pub(crate) fn interpolate_selection_nd(
 
     // If we couldn't constrain anything, fall back to conservative All.
     if rect.dims().next().is_none() {
-        return Ok(ctx.all());
+        return Ok(DatasetSelection::NoSelectionMade);
     }
 
     let sel = DataArraySelection(vec![rect]);
-    Ok(DatasetSelection::for_vars_with_selection(
+    Ok(dataset_for_vars_with_selection(
         ctx.vars.to_vec(),
         sel,
     ))

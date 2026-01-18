@@ -4,6 +4,7 @@ use super::errors::CompileError;
 use super::expr_utils::expr_to_col_name;
 use super::literals::strip_wrappers;
 use crate::chunk_plan::prelude::*;
+use super::SetOperations;
 use crate::chunk_plan::indexing::selection::DatasetSelection;
 
 pub(super) fn compile_is_between(
@@ -20,13 +21,13 @@ pub(super) fn compile_is_between(
     let low = &input[1];
     let high = &input[2];
     let Some(col) = expr_to_col_name(expr) else {
-        return Ok(ctx.all());
+        return Ok(DatasetSelection::NoSelectionMade);
     };
     let Expr::Literal(low_lit) = strip_wrappers(low) else {
-        return Ok(ctx.all());
+        return Ok(DatasetSelection::NoSelectionMade);
     };
     let Expr::Literal(high_lit) = strip_wrappers(high) else {
-        return Ok(ctx.all());
+        return Ok(DatasetSelection::NoSelectionMade);
     };
 
     // Conservatively assume a closed interval (inclusive bounds) to avoid false negatives.

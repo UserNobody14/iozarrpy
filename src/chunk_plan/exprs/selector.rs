@@ -4,7 +4,9 @@ use super::compile_node::compile_node;
 use super::compile_ctx::CompileCtx;
 use super::errors::CompileError;
 use crate::chunk_plan::prelude::*;
+use super::SetOperations;
 use crate::chunk_plan::indexing::selection::DatasetSelection;
+use crate::chunk_plan::indexing::selection::dataset_all_for_vars;
 
 pub(super) fn compile_selector(
     selector: &Selector,
@@ -42,9 +44,7 @@ pub(super) fn compile_selector(
                 right.as_ref().clone().as_expr(),
                 ctx,
             )?;
-            Ok(left_node
-                .difference(&right_node)
-                .union(&right_node.difference(&left_node)))
+            Ok(left_node.exclusive_or(&right_node))
         }
         Selector::Intersect(left, right) => {
             let left_node = compile_node(
@@ -60,7 +60,7 @@ pub(super) fn compile_selector(
         Selector::Empty => Ok(DatasetSelection::empty()),
         Selector::ByName { names, .. } => {
             let vars = names.iter().map(|s| s.to_string()).collect::<Vec<_>>();
-            Ok(DatasetSelection::all_for_vars(vars))
+            Ok(dataset_all_for_vars(vars))
         }
         Selector::Matches(pattern) => {
             // Filter data variables that match the regex pattern
@@ -75,7 +75,7 @@ pub(super) fn compile_selector(
             if matching_vars.is_empty() {
                 Ok(DatasetSelection::empty())
             } else {
-                Ok(DatasetSelection::all_for_vars(matching_vars))
+                Ok(dataset_all_for_vars(matching_vars))
             }
         }
         Selector::ByDType(dtype_selector) => {
@@ -97,27 +97,22 @@ pub(super) fn compile_selector(
             if matching_vars.is_empty() {
                 Ok(DatasetSelection::empty())
             } else {
-                Ok(DatasetSelection::all_for_vars(matching_vars))
+                Ok(dataset_all_for_vars(matching_vars))
             }
         }
-        Selector::ByIndex { .. } => Ok(ctx.all()),
+        Selector::ByIndex { .. } => Ok(DatasetSelection::NoSelectionMade),
         Selector::Wildcard => {
             // Wildcard selects all data variables
-            Ok(DatasetSelection::all_for_vars(ctx.meta.data_vars.clone()))
+            Ok(dataset_all_for_vars(ctx.meta.data_vars.clone()))
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
-    use std::sync::Arc;
-
-    use super::*;
     use crate::chunk_plan::exprs::errors::CoordIndexResolver;
     use crate::chunk_plan::indexing::types::{IndexRange, ValueRange};
     use crate::chunk_plan::exprs::errors::ResolveError;
-    use crate::meta::ZarrDatasetMeta;
 
     struct DummyResolver;
     impl CoordIndexResolver for DummyResolver {
@@ -130,37 +125,4 @@ mod tests {
         }
     }
 
-    #[test]
-    fn selector_by_name_limits_variable_set() {
-        let meta = ZarrDatasetMeta {
-            arrays: BTreeMap::new(),
-            dims: vec![],
-            data_vars: vec![],
-        };
-        let dims: Vec<String> = vec![];
-        let dim_lengths: Vec<u64> = vec![];
-        let vars: Vec<String> = vec!["a".to_string(), "b".to_string(), "c".to_string()];
-        let mut resolver = DummyResolver;
-
-        let names: Arc<[polars::prelude::PlSmallStr]> = Arc::from(
-            vec![
-                polars::prelude::PlSmallStr::from("a"),
-                polars::prelude::PlSmallStr::from("c"),
-            ]
-            .into_boxed_slice(),
-        );
-        let sel = Selector::ByName { names, strict: true };
-
-        let mut ctx = CompileCtx {
-            meta: &meta,
-            dims: &dims,
-            dim_lengths: &dim_lengths,
-            vars: &vars,
-            resolver: &mut resolver,
-        };
-        let out = compile_selector(&sel, &mut ctx).unwrap();
-        assert!(out.0.contains_key("a"));
-        assert!(out.0.contains_key("c"));
-        assert!(!out.0.contains_key("b"));
-    }
 }

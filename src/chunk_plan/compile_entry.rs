@@ -89,9 +89,8 @@ pub(crate) fn compile_expr_to_chunk_plan(
         .chunk_shape(&zero)
         .map_err(|e| CompileError::Unsupported(e.to_string()))?;
     let chunk_shape = chunk_shape_nz.iter().map(|nz| nz.get()).collect::<Vec<_>>();
-
-    let chunk_set = selection
-        .0
+    if let DatasetSelection::Selection(selection) = selection {
+        let chunk_set = selection
         .get(primary_var)
         .map(|sel| {
             plan_data_array_chunk_indices(
@@ -107,5 +106,13 @@ pub(crate) fn compile_expr_to_chunk_plan(
     let indices: Vec<Vec<u64>> = chunk_set.into_iter().collect();
     let plan = ChunkPlan::from_root(grid_shape, ChunkPlanNode::Explicit(indices));
     Ok((plan, stats))
+    } else if let DatasetSelection::NoSelectionMade = selection {
+        let plan = ChunkPlan::all(grid_shape);
+        Ok((plan, stats))
+    } else {
+        let plan = ChunkPlan::from_root(grid_shape, ChunkPlanNode::Empty);
+        Ok((plan, stats))
+
+    }
 }
 

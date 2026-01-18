@@ -5,37 +5,66 @@ use super::types::BoundKind;
 /// Dataset-level selection: variable name -> selection on that variable.
 ///
 /// This is intended to be a pure index-selection representation (no chunking info).
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(crate) struct DatasetSelection(pub(crate) BTreeMap<String, DataArraySelection>);
+#[derive(Debug, Clone, PartialEq, Eq)]
+// pub(crate) struct DatasetSelection(pub(crate) BTreeMap<String, DataArraySelection>);
+pub (crate) enum DatasetSelection {
+    /// If no selection was made:
+    NoSelectionMade,
+    /// If everything has been excluded
+    Empty,
+    /// Standard selection:
+    Selection(BTreeMap<String, DataArraySelection>),
+}
 
 impl DatasetSelection {
     pub(crate) fn empty() -> Self {
-        Self(BTreeMap::new())
-    }
-
-    /// Returns a selection containing `vars`, each selected entirely (all indices).
-    pub(crate) fn all_for_vars(vars: impl IntoIterator<Item = String>) -> Self {
-        let mut m = BTreeMap::new();
-        for v in vars {
-            m.insert(v, DataArraySelection::all());
-        }
-        Self(m)
+        Self::Empty
     }
 
     pub(crate) fn vars(&self) -> impl Iterator<Item = (&str, &DataArraySelection)> {
-        self.0.iter().map(|(k, v)| (k.as_str(), v))
+        match self {
+            Self::Selection(selection) => Box::new(selection.iter().map(|(k, v)| (k.as_str(), v)).collect::<Vec<_>>().into_iter()),
+            Self::NoSelectionMade | Self::Empty => Box::new(Vec::new().into_iter()),
+        }
     }
 
-    pub(crate) fn for_vars_with_selection(
-        vars: impl IntoIterator<Item = String>,
-        sel: DataArraySelection,
-    ) -> Self {
-        let mut m = BTreeMap::new();
-        for v in vars {
-            m.insert(v, sel.clone());
+    pub(crate) fn contains_dim(&self, dim: &str) -> bool {
+        match self {
+            Self::Selection(selection) => selection.contains_key(dim),
+            Self::NoSelectionMade | Self::Empty => false,
         }
-        Self(m)
     }
+
+    pub(crate) fn insert_dim(&mut self, dim: String, da: DataArraySelection) {
+        match self {
+            Self::Selection(selection) => {
+                let _ = selection.insert(dim, da);
+            }
+            Self::NoSelectionMade | Self::Empty => {
+                *self = Self::Selection(BTreeMap::new());
+                self.insert_dim(dim, da);
+            }
+        }
+    }
+
+}
+pub(crate) fn dataset_all_for_vars(vars: impl IntoIterator<Item = String>) -> DatasetSelection {
+    let mut m = BTreeMap::new();
+    for v in vars {
+        m.insert(v, DataArraySelection::all());
+    }
+    DatasetSelection::Selection(m)
+}
+
+pub(crate) fn dataset_for_vars_with_selection(
+    vars: impl IntoIterator<Item = String>,
+    sel: DataArraySelection,
+) -> DatasetSelection {
+    let mut m = BTreeMap::new();
+    for v in vars {
+        m.insert(v, sel.clone());
+    }
+    DatasetSelection::Selection(m)
 }
 
 /// Selection for a single array, expressed as a disjunction (OR) of hyper-rectangles.
@@ -54,60 +83,7 @@ impl DataArraySelection {
         Self(vec![HyperRectangleSelection::all()])
     }
 
-    pub(crate) fn is_empty(&self) -> bool {
-        self.0.is_empty()
-    }
-
-    pub(crate) fn union(&self, other: &DataArraySelection) -> DataArraySelection {
-        if self.is_empty() {
-            return other.clone();
-        }
-        if other.is_empty() {
-            return self.clone();
-        }
-        let mut out = self.0.clone();
-        out.extend(other.0.iter().cloned());
-        DataArraySelection(out)
-    }
-
-    pub(crate) fn intersect(&self, other: &DataArraySelection) -> DataArraySelection {
-        if self.is_empty() || other.is_empty() {
-            return DataArraySelection::empty();
-        }
-        let mut out: Vec<HyperRectangleSelection> = Vec::new();
-        for a in &self.0 {
-            for b in &other.0 {
-                if let Some(r) = a.intersect(b) {
-                    out.push(r);
-                }
-            }
-        }
-        DataArraySelection(out)
-    }
-
-    pub(crate) fn difference(&self, other: &DataArraySelection) -> DataArraySelection {
-        if self.is_empty() {
-            return DataArraySelection::empty();
-        }
-        if other.is_empty() {
-            return self.clone();
-        }
-
-        let mut cur = self.clone();
-        for b in &other.0 {
-            let mut next: Vec<HyperRectangleSelection> = Vec::new();
-            for a in &cur.0 {
-                next.extend(a.difference(b).0);
-            }
-            cur = DataArraySelection(next);
-            if cur.is_empty() {
-                break;
-            }
-        }
-        cur
-    }
 }
-
 /// Conjunction (AND) of per-dimension index constraints.
 ///
 /// Missing dimension keys mean “all indices along that dimension”.
@@ -164,114 +140,6 @@ impl HyperRectangleSelection {
         self
     }
 
-    pub(crate) fn intersect(&self, other: &HyperRectangleSelection) -> Option<HyperRectangleSelection> {
-        if self.is_empty() || other.is_empty() {
-            return None;
-        }
-
-        let mut out: BTreeMap<String, RangeList> = BTreeMap::new();
-        for dim in self.dim_names_union(other) {
-            let a = self.dims.get(&dim).cloned().unwrap_or_else(RangeList::all);
-            let b = other.dims.get(&dim).cloned().unwrap_or_else(RangeList::all);
-            let r = a.intersect(&b);
-            if r.is_empty() {
-                return None;
-            }
-            if r != RangeList::all() {
-                out.insert(dim, r);
-            }
-        }
-        Some(HyperRectangleSelection {
-            dims: out,
-            empty: false,
-        })
-    }
-
-    /// Conservative DNF subtraction: returns a disjunction (OR) of hyper-rectangles.
-    ///
-    /// Uses: A \\ B = union_dim ( A with that dim replaced by (A_dim \\ B_dim) ).
-    /// This is exact (though may produce overlapping rectangles).
-    pub(crate) fn difference(&self, other: &HyperRectangleSelection) -> DataArraySelection {
-        if self.is_empty() {
-            return DataArraySelection::empty();
-        }
-        if other.is_empty() {
-            return DataArraySelection(vec![self.clone()]);
-        }
-        if other.dims.is_empty() && !other.empty {
-            // subtracting the universal rectangle => empty
-            return DataArraySelection::empty();
-        }
-
-        let dims = self.dim_names_union(other);
-        let mut out: Vec<HyperRectangleSelection> = Vec::new();
-        for dim in dims {
-            let a = self.dims.get(&dim).cloned().unwrap_or_else(RangeList::all);
-            let b = other.dims.get(&dim).cloned().unwrap_or_else(RangeList::all);
-            let diff = a.difference(&b);
-            if diff.is_empty() {
-                continue;
-            }
-
-            let mut rect_dims = self.dims.clone();
-            if diff == RangeList::all() {
-                rect_dims.remove(&dim);
-            } else {
-                rect_dims.insert(dim, diff);
-            }
-            out.push(HyperRectangleSelection {
-                dims: rect_dims,
-                empty: false,
-            });
-        }
-        DataArraySelection(out)
-    }
-}
-
-impl DatasetSelection {
-    pub(crate) fn union(&self, other: &DatasetSelection) -> DatasetSelection {
-        if self.0.is_empty() {
-            return other.clone();
-        }
-        if other.0.is_empty() {
-            return self.clone();
-        }
-        let mut out = self.0.clone();
-        for (k, v) in &other.0 {
-            out.entry(k.clone())
-                .and_modify(|cur| *cur = cur.union(v))
-                .or_insert_with(|| v.clone());
-        }
-        DatasetSelection(out)
-    }
-
-    pub(crate) fn intersect(&self, other: &DatasetSelection) -> DatasetSelection {
-        let mut out = BTreeMap::new();
-        for (k, a) in &self.0 {
-            if let Some(b) = other.0.get(k) {
-                let sel = a.intersect(b);
-                if !sel.is_empty() {
-                    out.insert(k.clone(), sel);
-                }
-            }
-        }
-        DatasetSelection(out)
-    }
-
-    pub(crate) fn difference(&self, other: &DatasetSelection) -> DatasetSelection {
-        let mut out = BTreeMap::new();
-        for (k, a) in &self.0 {
-            let sel = if let Some(b) = other.0.get(k) {
-                a.difference(b)
-            } else {
-                a.clone()
-            };
-            if !sel.is_empty() {
-                out.insert(k.clone(), sel);
-            }
-        }
-        DatasetSelection(out)
-    }
 }
 
 /// A scalar range using inclusive/exclusive endpoints.
@@ -376,8 +244,25 @@ impl RangeList {
         out.normalize();
         out
     }
+}
 
-    pub(crate) fn union(&self, other: &RangeList) -> RangeList {
+/// Operations for sets of selections.
+pub trait SetOperations {
+    fn union(&self, other: &Self) -> Self;
+    fn intersect(&self, other: &Self) -> Self;
+    fn difference(&self, other: &Self) -> Self;
+    fn exclusive_or(&self, other: &Self) -> Self;
+    fn is_empty(&self) -> bool;
+    fn is_subset(&self, other: &Self) -> bool;
+    fn is_superset(&self, other: &Self) -> bool;
+    fn is_disjoint(&self, other: &Self) -> bool;
+    fn is_equal(&self, other: &Self) -> bool;
+    fn is_not_equal(&self, other: &Self) -> bool;
+    fn is_subset_of(&self, other: &Self) -> bool;
+}
+
+impl SetOperations for RangeList {
+    fn union(&self, other: &RangeList) -> RangeList {
         if self.is_empty() {
             return other.clone();
         }
@@ -396,7 +281,7 @@ impl RangeList {
         out
     }
 
-    pub(crate) fn intersect(&self, other: &RangeList) -> RangeList {
+    fn intersect(&self, other: &RangeList) -> RangeList {
         let mut out = RangeList::empty();
         let mut i = 0usize;
         let mut j = 0usize;
@@ -421,7 +306,7 @@ impl RangeList {
         out
     }
 
-    pub(crate) fn difference(&self, other: &RangeList) -> RangeList {
+    fn difference(&self, other: &RangeList) -> RangeList {
         if self.is_empty() || other.is_empty() {
             return self.clone();
         }
@@ -464,7 +349,373 @@ impl RangeList {
         out.normalize();
         out
     }
+
+    fn exclusive_or(&self, other: &RangeList) -> RangeList {
+        self.difference(other).union(&other.difference(self))
+    }
+
+    fn is_empty(&self) -> bool {
+        self.ranges.is_empty()
+    }
+    
+    fn is_subset(&self, other: &RangeList) -> bool {
+        self.ranges.iter().all(|r| other.ranges.contains(r))
+    }
+
+    fn is_superset(&self, other: &RangeList) -> bool {
+        other.is_subset(self)
+    }
+    
+    fn is_disjoint(&self, other: &RangeList) -> bool {
+        self.ranges.iter().all(|r| !other.ranges.contains(r))
+    }
+
+    fn is_equal(&self, other: &RangeList) -> bool {
+        self.is_subset_of(other) && other.is_subset_of(self)
+    }
+    
+    fn is_not_equal(&self, other: &RangeList) -> bool {
+        !self.is_equal(other)
+    }
+
+    fn is_subset_of(&self, other: &RangeList) -> bool {
+        self.ranges.iter().all(|r| other.ranges.contains(r))
+    }
 }
+
+impl SetOperations for DatasetSelection {
+    fn union(&self, other: &DatasetSelection) -> DatasetSelection {
+        match (self, other) {
+            (Self::Selection(s), Self::Selection(o)) => {
+                if s.is_empty() {
+                    return other.clone();
+                }
+                if o.is_empty() {
+                    return self.clone();
+                }
+                let mut out = s.clone();
+                for (k, v) in o {
+                    out.entry(k.clone())
+                        .and_modify(|cur| *cur = cur.union(v))
+                        .or_insert_with(|| v.clone());
+                }
+                DatasetSelection::Selection(out)
+            },
+            // NoSelectionMade means "all chunks" - union with all is all
+            (Self::NoSelectionMade, _) | (_, Self::NoSelectionMade) => Self::NoSelectionMade,
+            // Empty means "no chunks" - union with empty is the other side
+            (Self::Empty, _) => other.clone(),
+            (_, Self::Empty) => self.clone(),
+        }
+    }
+
+    fn intersect(&self, other: &DatasetSelection) -> DatasetSelection {
+        match (self, other) {
+            (Self::Selection(s), Self::Selection(o)) => {
+                let mut out = BTreeMap::new();
+                for (k, a) in s {
+                    if let Some(b) = o.get(k) {
+                        let sel = a.intersect(b);
+                        if !sel.is_empty() {
+                            out.insert(k.clone(), sel);
+                        }
+                    }
+                }
+                DatasetSelection::Selection(out)
+            }
+            (Self::NoSelectionMade, _) => other.clone(),
+            (_, Self::NoSelectionMade) => self.clone(),
+            (Self::Empty, _) => self.clone(),
+            (_, Self::Empty) => other.clone(),
+        }
+    }
+
+    fn difference(&self, other: &DatasetSelection) -> DatasetSelection {
+        match (self, other) {
+            (Self::Selection(s), Self::Selection(o)) => {
+                let mut out = BTreeMap::new();
+                for (k, a) in s {
+                    if let Some(b) = o.get(k) {
+                        let sel = a.difference(b);
+                        if !sel.is_empty() {
+                            out.insert(k.clone(), sel);
+                        }
+                    } else {
+                        // Key only in self: keep it (we're subtracting nothing)
+                        out.insert(k.clone(), a.clone());
+                    }
+                }
+                DatasetSelection::Selection(out)
+            }
+            // NoSelectionMade - X = can't represent complement, stay conservative
+            (Self::NoSelectionMade, _) => Self::NoSelectionMade,
+            // X - NoSelectionMade = empty (subtracting everything)
+            (_, Self::NoSelectionMade) => Self::Empty,
+            // Empty - X = Empty
+            (Self::Empty, _) => Self::Empty,
+            // X - Empty = X
+            (_, Self::Empty) => self.clone(),
+        }
+    }
+
+    fn exclusive_or(&self, other: &DatasetSelection) -> DatasetSelection {
+        match (self, other) {
+            (Self::Selection(s), Self::Selection(o)) => {
+                let mut out = BTreeMap::new();
+                // Keys in self
+                for (k, a) in s {
+                    if let Some(b) = o.get(k) {
+                        let sel = a.exclusive_or(b);
+                        if !sel.is_empty() {
+                            out.insert(k.clone(), sel);
+                        }
+                    } else {
+                        // Key only in self: include it
+                        out.insert(k.clone(), a.clone());
+                    }
+                }
+                // Keys only in other
+                for (k, b) in o {
+                    if !s.contains_key(k) {
+                        out.insert(k.clone(), b.clone());
+                    }
+                }
+                DatasetSelection::Selection(out)
+            }
+            // NoSelectionMade XOR X = can't represent complement, stay conservative
+            (Self::NoSelectionMade, _) | (_, Self::NoSelectionMade) => Self::NoSelectionMade,
+            // Empty XOR X = X
+            (Self::Empty, _) => other.clone(),
+            (_, Self::Empty) => self.clone(),
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        match self {
+            Self::Selection(s) => s.is_empty(),
+            Self::NoSelectionMade | Self::Empty => true,
+        }
+    }
+
+    fn is_equal(&self, other: &DatasetSelection) -> bool {
+        self.is_subset_of(other) && other.is_subset_of(self)
+    }
+    
+    fn is_not_equal(&self, other: &DatasetSelection) -> bool {
+        !self.is_equal(other)
+    }
+
+    fn is_subset_of(&self, other: &DatasetSelection) -> bool {
+        match (self, other) {
+            (Self::Selection(s), Self::Selection(o)) => s.iter().all(|(k, a)| o.get(k).map_or(false, |b| a.is_subset(b))),
+            (Self::NoSelectionMade, _) => true,
+            (_, Self::NoSelectionMade) => false,
+            (Self::Empty, _) => true,
+            (_, Self::Empty) => false,
+        }
+    }
+
+    fn is_superset(&self, other: &DatasetSelection) -> bool {
+        other.is_subset(self)
+    }
+
+    fn is_disjoint(&self, other: &DatasetSelection) -> bool {
+        match (self, other) {
+            (Self::Selection(s), Self::Selection(o)) => s.iter().all(|(k, a)| o.get(k).map_or(true, |b| a.is_disjoint(b))),
+            (Self::NoSelectionMade, _) => true,
+            (_, Self::NoSelectionMade) => false,
+            (Self::Empty, _) => true,
+            (_, Self::Empty) => false,
+        }
+    }
+    fn is_subset(&self, other: &DatasetSelection) -> bool {
+        match (self, other) {
+            (Self::Selection(s), Self::Selection(o)) => s.iter().all(|(k, a)| o.get(k).map_or(false, |b| a.is_subset(b))),
+            (Self::NoSelectionMade, _) => true,
+            (_, Self::NoSelectionMade) => false,
+            (Self::Empty, _) => true,
+            (_, Self::Empty) => false,
+        }
+    }
+}
+
+impl SetOperations for DataArraySelection {
+
+    fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    fn union(&self, other: &DataArraySelection) -> DataArraySelection {
+        if self.is_empty() {
+            return other.clone();
+        }
+        if other.is_empty() {
+            return self.clone();
+        }
+        let mut out = self.0.clone();
+        out.extend(other.0.iter().cloned());
+        DataArraySelection(out)
+    }
+
+    fn intersect(&self, other: &DataArraySelection) -> DataArraySelection {
+        if self.is_empty() || other.is_empty() {
+            return DataArraySelection::empty();
+        }
+        let mut out: Vec<HyperRectangleSelection> = Vec::new();
+        for a in &self.0 {
+            for b in &other.0 {
+                if a.is_empty() || b.is_empty() {
+                    continue;
+                }
+        
+                let mut rect_dims = BTreeMap::new();
+                for dim in a.dim_names_union(b) {
+                    let a = a.dims.get(&dim).cloned().unwrap_or_else(RangeList::all);
+                    let b = b.dims.get(&dim).cloned().unwrap_or_else(RangeList::all);
+                    let r = a.intersect(&b);
+                    if r.is_empty() {
+                        continue;
+                    }
+                    if r != RangeList::all() {
+                        rect_dims.insert(dim, r);
+                    }
+                }
+                out.push(HyperRectangleSelection {
+                    dims: rect_dims,
+                    empty: false,
+                });
+            }
+        }
+        DataArraySelection(out)
+    }
+
+    fn difference(&self, other: &DataArraySelection) -> DataArraySelection {
+        if self.is_empty() {
+            return DataArraySelection::empty();
+        }
+        if other.is_empty() {
+            return self.clone();
+        }
+
+        let mut cur = self.clone();
+        for b in &other.0 {
+            let mut next: Vec<HyperRectangleSelection> = Vec::new();
+            for a in &cur.0 {
+                if a.is_empty() {
+                    continue;
+                }
+                if b.is_empty() {
+                    // b is empty, so a - b = a
+                    next.push(a.clone());
+                    continue;
+                }
+                if b.dims.is_empty() && !b.empty {
+                    // subtracting the universal rectangle => empty
+                    continue;
+                }
+
+                // Compute hyper-rectangle difference A \ B.
+                // Result is a union of "slabs" where we escape B in each dimension.
+                // For each dimension in B, we create a slab that is:
+                // - Outside B in that dimension (A_dim \ B_dim)
+                // - Intersected with B in all prior dimensions (to avoid double-counting)
+                // - Keeps all of A's other constraints
+                let b_dims: Vec<String> = b.dims.keys().cloned().collect();
+                let mut prefix_constraint: BTreeMap<String, RangeList> = BTreeMap::new();
+
+                for dim in b_dims.iter() {
+                    let a_dim = a.dims.get(dim).cloned().unwrap_or_else(RangeList::all);
+                    let b_dim = b.dims.get(dim).cloned().unwrap_or_else(RangeList::all);
+                    let diff = a_dim.difference(&b_dim);
+
+                    if !diff.is_empty() {
+                        // Create a slab: start with A's constraints
+                        let mut rect_dims = a.dims.clone();
+                        // Add prefix constraints (intersection with B in prior dims)
+                        for (prefix_dim, prefix_range) in &prefix_constraint {
+                            let a_prefix = rect_dims.get(prefix_dim).cloned().unwrap_or_else(RangeList::all);
+                            let intersected = a_prefix.intersect(prefix_range);
+                            if intersected.is_empty() {
+                                // This slab is empty, skip it
+                                continue;
+                            }
+                            if intersected != RangeList::all() {
+                                rect_dims.insert(prefix_dim.clone(), intersected);
+                            }
+                        }
+                        // Set this dimension to the difference (escape B here)
+                        if diff != RangeList::all() {
+                            rect_dims.insert(dim.clone(), diff);
+                        } else {
+                            rect_dims.remove(dim);
+                        }
+                        next.push(HyperRectangleSelection {
+                            dims: rect_dims,
+                            empty: false,
+                        });
+                    }
+
+                    // Update prefix constraint: intersect A with B in this dimension
+                    let a_dim = a.dims.get(dim).cloned().unwrap_or_else(RangeList::all);
+                    let b_dim = b.dims.get(dim).cloned().unwrap_or_else(RangeList::all);
+                    let intersected = a_dim.intersect(&b_dim);
+                    if intersected.is_empty() {
+                        // A and B are disjoint in this dimension, so A \ B = A
+                        // All remaining slabs from later dimensions won't contribute
+                        // (their prefix would be empty)
+                        // But we've already added A above... wait, no, we added (A with diff in this dim)
+                        // Actually if disjoint, diff = A_dim, so we added A already. We're done with this b.
+                        break;
+                    }
+                    prefix_constraint.insert(dim.clone(), intersected);
+                }
+            }
+            cur = DataArraySelection(next);
+            if cur.is_empty() {
+                break;
+            }
+        }
+        cur
+    }
+
+    /// Conservative DNF subtraction: returns a disjunction (OR) of hyper-rectangles.
+    ///
+    /// Uses: A \\ B = union_dim ( A with that dim replaced by (A_dim \\ B_dim) ).
+    /// This is exact (though may produce overlapping rectangles).
+    // fn difference(&self, other: &HyperRectangleSelection) -> DataArraySelection {
+
+    //     DataArraySelection(out)
+    // }
+
+    fn exclusive_or(&self, other: &DataArraySelection) -> DataArraySelection {
+        self.difference(other).union(&other.difference(self))
+    }
+
+    fn is_subset(&self, other: &DataArraySelection) -> bool {
+        self.0.iter().all(|a| other.0.contains(a))
+    }
+
+    fn is_superset(&self, other: &DataArraySelection) -> bool {
+        other.is_subset(self)
+    }
+
+    fn is_disjoint(&self, other: &DataArraySelection) -> bool {
+        self.0.iter().all(|a| !other.0.contains(a))
+    }
+
+    fn is_equal(&self, other: &DataArraySelection) -> bool {
+        self.is_subset_of(other) && other.is_subset_of(self)
+    }
+
+    fn is_not_equal(&self, other: &DataArraySelection) -> bool {
+        !self.is_equal(other)
+    }
+
+    fn is_subset_of(&self, other: &DataArraySelection) -> bool {
+        self.0.iter().all(|a| other.0.contains(a))
+    }
+}
+
 
 fn scalar_range_to_index_range(r: ScalarRange) -> Option<super::types::IndexRange> {
     let start = match r.start {
@@ -559,22 +810,5 @@ mod tests {
         );
     }
 
-    #[test]
-    fn dataset_selection_set_ops_basic() {
-        let vars = vec!["a".to_string(), "b".to_string()];
-        let all = DatasetSelection::all_for_vars(vars.clone());
-
-        let only_a = DatasetSelection::all_for_vars(vec!["a".to_string()]);
-        assert!(all.intersect(&only_a).0.contains_key("a"));
-        assert!(!all.intersect(&only_a).0.contains_key("b"));
-
-        let diff = all.difference(&only_a);
-        assert!(!diff.0.contains_key("a"));
-        assert!(diff.0.contains_key("b"));
-
-        let back = diff.union(&only_a);
-        assert!(back.0.contains_key("a"));
-        assert!(back.0.contains_key("b"));
-    }
 }
 

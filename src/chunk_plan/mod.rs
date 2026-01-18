@@ -17,7 +17,7 @@ pub(crate) use indexing::plan::{ChunkIndexIter, ChunkPlan};
 pub(crate) use indexing::types::ChunkId;
 #[allow(unused_imports)]
 pub(crate) use indexing::selection::{
-    DataArraySelection, DatasetSelection, HyperRectangleSelection, RangeList, ScalarRange,
+    SetOperations, DataArraySelection, DatasetSelection, HyperRectangleSelection, RangeList, ScalarRange,
 };
 #[allow(unused_imports)]
 pub(crate) use indexing::selection_to_chunks::plan_dataset_chunk_indices;

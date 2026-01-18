@@ -179,7 +179,7 @@ pub(crate) fn _selected_variables_debug(
     })?;
 
     // Get the variable names from the selection
-    let inferred_vars: Vec<String> = selection.0.keys().cloned().collect();
+    let inferred_vars: Vec<String> = selection.vars().map(|(k, _)| k.to_string()).collect();
 
     // Plan chunk indices for all variables in the selection
     let per_var_chunks = plan_dataset_chunk_indices(&selection, &meta, opened.store.clone(), false)

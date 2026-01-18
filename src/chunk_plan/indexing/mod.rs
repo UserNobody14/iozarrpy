@@ -9,6 +9,7 @@ pub mod monotonic_impl;
 
 pub(crate) use plan::{ChunkIndexIter, ChunkPlan};
 pub(crate) use selection::{
+    SetOperations,
     DataArraySelection, DatasetSelection, HyperRectangleSelection, RangeList, ScalarRange,
 };
 pub(crate) use selection_to_chunks::plan_dataset_chunk_indices;

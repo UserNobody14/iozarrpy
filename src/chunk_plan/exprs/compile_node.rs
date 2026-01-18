@@ -3,12 +3,13 @@ use super::compile_boolean::compile_boolean_function;
 use super::compile_cmp::{
     compile_cmp_to_dataset_selection, compile_value_range_to_dataset_selection, try_expr_to_value_range,
 };
+use super::SetOperations;
 use super::interpolate_selection_nd::interpolate_selection_nd;
 use super::compile_ctx::CompileCtx;
 use super::errors::CompileError;
 use super::literals::{col_lit, literal_anyvalue, reverse_operator, strip_wrappers};
 use crate::chunk_plan::prelude::*;
-use crate::chunk_plan::indexing::selection::DatasetSelection;
+use crate::chunk_plan::indexing::selection::{DatasetSelection, dataset_all_for_vars};
 use super::selector::compile_selector;
 
 /// Collects all column names referenced in an expression using a simple recursive approach.
@@ -111,7 +112,7 @@ fn all_for_referenced_vars(expr: &Expr, ctx: &CompileCtx<'_>) -> DatasetSelectio
     if refs.is_empty() {
         ctx.all()
     } else {
-        DatasetSelection::all_for_vars(refs)
+        dataset_all_for_vars(refs)
     }
 }
 
@@ -170,7 +171,7 @@ pub(crate) fn compile_node(
             if refs.is_empty() {
                 Ok(func_sel)
             } else {
-                let part_sel = DatasetSelection::all_for_vars(refs);
+                let part_sel = dataset_all_for_vars(refs);
                 Ok(func_sel.union(&part_sel))
             }
         }
@@ -276,7 +277,7 @@ pub(crate) fn compile_node(
                         // Try to compile as dimension constraint; if not a dimension, return
                         // the referenced variable with all chunks (can't narrow).
                         compile_cmp_to_dataset_selection(&col, op_eff, &lit, ctx)
-                            .or_else(|_| Ok(DatasetSelection::all_for_vars(vec![col])))
+                            .or_else(|_| Ok(dataset_all_for_vars(vec![col])))
                     } else {
                         // Complex comparison (e.g., col1 < col2) - return referenced vars with all chunks.
                         Ok(all_for_referenced_vars(expr, ctx))
@@ -289,12 +290,12 @@ pub(crate) fn compile_node(
         Expr::Literal(lit) => {
             // Only boolean-ish literals can be predicates.
             match literal_anyvalue(lit) {
-                Some(AnyValue::Boolean(true)) => Ok(ctx.all()),
+                Some(AnyValue::Boolean(true)) => Ok(DatasetSelection::NoSelectionMade),
                 Some(AnyValue::Boolean(false)) => Ok(DatasetSelection::empty()),
                 // In Polars filtering, null predicate behaves like "keep nothing".
                 Some(AnyValue::Null) => Ok(DatasetSelection::empty()),
                 // Non-boolean literals don't reference any variables, return all conservatively.
-                _ => Ok(ctx.all()),
+                _ => Ok(DatasetSelection::NoSelectionMade),
             }
         }
         Expr::Ternary {
@@ -321,10 +322,10 @@ pub(crate) fn compile_node(
                     if !t && f {
                         // when(predicate).then(false).otherwise(true) == !predicate, which we
                         // can't represent precisely: return conservative All.
-                        return Ok(ctx.all());
+                        return Ok(DatasetSelection::NoSelectionMade);
                     }
                     if t && f {
-                        return Ok(ctx.all());
+                        return Ok(DatasetSelection::NoSelectionMade);
                     }
                     if !t && !f {
                         return Ok(DatasetSelection::empty());
@@ -353,7 +354,7 @@ pub(crate) fn compile_node(
                     input,
                     ctx,
                 ),
-                FunctionExpr::NullCount => Ok(ctx.all()),
+                FunctionExpr::NullCount => Ok(DatasetSelection::NoSelectionMade),
                 FunctionExpr::FfiPlugin {
                     symbol,
                     ..
@@ -362,7 +363,7 @@ pub(crate) fn compile_node(
                     // If the symbol is "interpolate_nd", perform the proper interpolation.
                     if symbol == "interpolate_nd" {
                         if input.len() < 3 {
-                            return Ok(ctx.all());
+                            return Ok(DatasetSelection::NoSelectionMade);
                         }
                         interpolate_selection_nd(&input[0], &input[1], &input[2], ctx)
                     } else {
@@ -381,9 +382,9 @@ pub(crate) fn compile_node(
                     refs.sort();
                     refs.dedup();
                     if refs.is_empty() {
-                        Ok(ctx.all())
+                        Ok(DatasetSelection::NoSelectionMade)
                     } else {
-                        Ok(DatasetSelection::all_for_vars(refs))
+                        Ok(dataset_all_for_vars(refs))
                     }
                 }
             }
@@ -394,7 +395,7 @@ pub(crate) fn compile_node(
 
         // Column reference: return just that variable with all chunks.
         Expr::Column(name) => {
-            Ok(DatasetSelection::all_for_vars(vec![name.to_string()]))
+            Ok(dataset_all_for_vars(vec![name.to_string()]))
         }
 
         // Aggregations: collect referenced variables, return with all chunks.
@@ -413,9 +414,9 @@ pub(crate) fn compile_node(
             refs.sort();
             refs.dedup();
             if refs.is_empty() {
-                Ok(ctx.all())
+                Ok(DatasetSelection::NoSelectionMade)
             } else {
-                Ok(DatasetSelection::all_for_vars(refs))
+                Ok(dataset_all_for_vars(refs))
             }
         }
 
@@ -427,9 +428,9 @@ pub(crate) fn compile_node(
             refs.sort();
             refs.dedup();
             if refs.is_empty() {
-                Ok(ctx.all())
+                Ok(DatasetSelection::NoSelectionMade)
             } else {
-                Ok(DatasetSelection::all_for_vars(refs))
+                Ok(dataset_all_for_vars(refs))
             }
         }
 
@@ -440,15 +441,15 @@ pub(crate) fn compile_node(
         Expr::Field(names) => {
             let vars: Vec<String> = names.iter().map(|n| n.to_string()).collect();
             if vars.is_empty() {
-                Ok(ctx.all())
+                Ok(DatasetSelection::NoSelectionMade)
             } else {
-                Ok(DatasetSelection::all_for_vars(vars))
+                Ok(dataset_all_for_vars(vars))
             }
         }
 
         // These don't reference specific columns, return all conservatively.
         Expr::Element | Expr::Len | Expr::SubPlan(_, _) | Expr::DataTypeFunction(_) => {
-            Ok(ctx.all())
+            Ok(DatasetSelection::NoSelectionMade)
         }
         
         // StructEval is complex, return all conservatively with referenced vars.

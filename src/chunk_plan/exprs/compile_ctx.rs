@@ -1,6 +1,7 @@
 use super::errors::CoordIndexResolver;
 use crate::chunk_plan::prelude::ZarrDatasetMeta;
 use crate::chunk_plan::indexing::selection::DatasetSelection;
+use crate::chunk_plan::indexing::selection::dataset_all_for_vars;
 
 pub(crate) struct CompileCtx<'a> {
     pub(crate) meta: &'a ZarrDatasetMeta,
@@ -13,7 +14,7 @@ pub(crate) struct CompileCtx<'a> {
 impl CompileCtx<'_> {
     /// Conservative “select all” for the currently selected variables.
     pub(crate) fn all(&self) -> DatasetSelection {
-        DatasetSelection::all_for_vars(self.vars.to_vec())
+        dataset_all_for_vars(self.vars.to_vec())
     }
 }
 

@@ -4,6 +4,7 @@ use super::errors::CompileError;
 use super::expr_utils::expr_to_col_name;
 use super::literals::strip_wrappers;
 use crate::chunk_plan::prelude::*;
+use super::SetOperations;
 use crate::chunk_plan::indexing::selection::DatasetSelection;
 
 pub(super) fn compile_is_in(
@@ -19,11 +20,11 @@ pub(super) fn compile_is_in(
     let expr = &input[0];
     let list = &input[1];
     let Some(col) = expr_to_col_name(expr) else {
-        return Ok(ctx.all());
+        return Ok(DatasetSelection::NoSelectionMade);
     };
 
     let Expr::Literal(list_lit) = strip_wrappers(list) else {
-        return Ok(ctx.all());
+        return Ok(DatasetSelection::NoSelectionMade);
     };
 
     let (dtype, values): (polars::prelude::DataType, Vec<AnyValue<'static>>) =
@@ -31,7 +32,7 @@ pub(super) fn compile_is_in(
             LiteralValue::Series(s) => {
                 let series = &**s;
                 if series.len() > 4096 {
-                    return Ok(ctx.all());
+                    return Ok(DatasetSelection::NoSelectionMade);
                 }
                 (
                     series.dtype().clone(),
@@ -43,7 +44,7 @@ pub(super) fn compile_is_in(
                 match av {
                     AnyValue::List(series) => {
                         if series.len() > 4096 {
-                            return Ok(ctx.all());
+                            return Ok(DatasetSelection::NoSelectionMade);
                         }
                         (
                             series.dtype().clone(),
@@ -52,24 +53,24 @@ pub(super) fn compile_is_in(
                     }
                     AnyValue::Array(series, _size) => {
                         if series.len() > 4096 {
-                            return Ok(ctx.all());
+                            return Ok(DatasetSelection::NoSelectionMade);
                         }
                         (
                             series.dtype().clone(),
                             series.iter().map(|av| av.into_static()).collect(),
                         )
                     }
-                    _ => return Ok(ctx.all()),
+                    _ => return Ok(DatasetSelection::NoSelectionMade),
                 }
             }
-            _ => return Ok(ctx.all()),
+            _ => return Ok(DatasetSelection::NoSelectionMade),
         };
 
     let mut out: Option<DatasetSelection> = None;
     for av in values {
         if matches!(av, AnyValue::Null) {
             // Null membership semantics depend on `nulls_equal`; we avoid constraining.
-            return Ok(ctx.all());
+            return Ok(DatasetSelection::NoSelectionMade);
         }
 
         let lit = LiteralValue::Scalar(Scalar::new(dtype.clone(), av));
@@ -82,7 +83,7 @@ pub(super) fn compile_is_in(
         .unwrap_or_else(|_| ctx.all());
 
         if node == ctx.all() {
-            return Ok(ctx.all());
+            return Ok(DatasetSelection::NoSelectionMade);
         }
         out = Some(match out.take() {
             None => node,

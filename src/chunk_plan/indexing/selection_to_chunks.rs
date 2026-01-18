@@ -6,7 +6,7 @@ use crate::chunk_plan::exprs::errors::CompileError;
 use super::selection::{DataArraySelection, DatasetSelection, HyperRectangleSelection, RangeList};
 use super::types::DimChunkRange;
 use crate::meta::ZarrDatasetMeta;
-
+use super::selection::SetOperations;
 
 fn chunk_ranges_for_range_list(
     ranges: &RangeList,
@@ -127,12 +127,12 @@ fn project_dim_range(selection: &DatasetSelection, dim: &str) -> RangeList {
 }
 
 fn add_dim_coords(selection: &DatasetSelection, meta: &ZarrDatasetMeta) -> DatasetSelection {
-    if selection.0.is_empty() {
+    if selection.is_empty() {
         return selection.clone();
     }
     let mut out = selection.clone();
     for dim in &meta.dims {
-        if out.0.contains_key(dim) {
+        if out.contains_dim(dim) {
             continue;
         }
         let Some(arr) = meta.arrays.get(dim) else {
@@ -151,7 +151,7 @@ fn add_dim_coords(selection: &DatasetSelection, meta: &ZarrDatasetMeta) -> Datas
             DataArraySelection(vec![HyperRectangleSelection::all().with_dim(dim.clone(), rl)])
         };
         if !da.is_empty() {
-            out.0.insert(dim.clone(), da);
+            out.insert_dim(dim.to_string(), da);
         }
     }
     out

@@ -5,6 +5,7 @@ use super::literals::{literal_to_scalar, reverse_operator, strip_wrappers};
 use crate::chunk_plan::prelude::*;
 use crate::chunk_plan::indexing::selection::{DataArraySelection, DatasetSelection, HyperRectangleSelection, RangeList};
 use crate::chunk_plan::indexing::types::{BoundKind, ValueRange};
+use crate::chunk_plan::indexing::selection::dataset_for_vars_with_selection;
 
 pub(super) fn compile_value_range_to_dataset_selection(
     col: &str,
@@ -40,7 +41,7 @@ pub(super) fn compile_value_range_to_dataset_selection(
                 })?
             } else {
                 // We have a coord array, but it may be non-monotonic / non-1D. Don't constrain.
-                return Ok(DatasetSelection::for_vars_with_selection(
+                return Ok(dataset_for_vars_with_selection(
                     ctx.vars.to_vec(),
                     DataArraySelection::all(),
                 ));
@@ -59,7 +60,7 @@ pub(super) fn compile_value_range_to_dataset_selection(
 
     let rect = HyperRectangleSelection::all().with_dim(col.to_string(), RangeList::from_index_range(idx_range));
     let sel = DataArraySelection(vec![rect]);
-    Ok(DatasetSelection::for_vars_with_selection(
+    Ok(dataset_for_vars_with_selection(
         ctx.vars.to_vec(),
         sel,
     ))

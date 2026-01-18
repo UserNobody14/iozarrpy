@@ -5,6 +5,7 @@ use super::compile_ctx::CompileCtx;
 use super::errors::CompileError;
 use super::literals::{literal_anyvalue, strip_wrappers};
 use crate::chunk_plan::prelude::*;
+use super::SetOperations;
 use crate::chunk_plan::indexing::selection::DatasetSelection;
 
 pub(super) fn compile_boolean_function(
@@ -24,9 +25,9 @@ pub(super) fn compile_boolean_function(
             if let Expr::Literal(lit) = strip_wrappers(arg) {
                 return match literal_anyvalue(lit) {
                     Some(AnyValue::Boolean(true)) => Ok(DatasetSelection::empty()),
-                    Some(AnyValue::Boolean(false)) => Ok(ctx.all()),
+                    Some(AnyValue::Boolean(false)) => Ok(DatasetSelection::NoSelectionMade),
                     Some(AnyValue::Null) => Ok(DatasetSelection::empty()),
-                    _ => Ok(ctx.all()),
+                    _ => Ok(DatasetSelection::NoSelectionMade),
                 };
             }
 
@@ -35,10 +36,10 @@ pub(super) fn compile_boolean_function(
             let inner =
                 compile_node(arg, ctx)
                     .unwrap_or_else(|_| ctx.all());
-            if inner.0.is_empty() {
-                Ok(ctx.all())
+            if inner.is_empty() {
+                Ok(DatasetSelection::NoSelectionMade)
             } else {
-                Ok(ctx.all())
+                Ok(DatasetSelection::NoSelectionMade)
             }
         }
         BooleanFunction::IsNull | BooleanFunction::IsNotNull => {
@@ -63,7 +64,7 @@ pub(super) fn compile_boolean_function(
                     DatasetSelection::empty()
                 });
             }
-            Ok(ctx.all())
+            Ok(DatasetSelection::NoSelectionMade)
         }
         BooleanFunction::IsBetween { .. } => {
             compile_is_between(input, ctx)
@@ -75,11 +76,10 @@ pub(super) fn compile_boolean_function(
             for e in input {
                 let sel = compile_node(e, ctx)
                     .unwrap_or_else(|_| ctx.all());
-                // If any side is unconstrainable, OR becomes unconstrainable.
-                if sel == ctx.all() {
-                    return Ok(ctx.all());
-                }
                 acc = acc.union(&sel);
+                if acc.is_empty() {
+                    break;
+                }
             }
             Ok(acc)
         }
@@ -90,14 +90,14 @@ pub(super) fn compile_boolean_function(
                 let sel = compile_node(e, ctx)
                     .unwrap_or_else(|_| ctx.all());
                 acc = acc.intersect(&sel);
-                if acc.0.is_empty() {
+                if acc.is_empty() {
                     break;
                 }
             }
             Ok(acc)
         }
         _ => {
-            Ok(ctx.all())
+            Ok(DatasetSelection::NoSelectionMade)
         }
     }
 }
