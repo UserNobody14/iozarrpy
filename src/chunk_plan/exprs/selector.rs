@@ -60,10 +60,69 @@ pub(super) fn compile_selector(
             let vars = names.iter().map(|s| s.to_string()).collect::<Vec<_>>();
             Ok(DatasetSelection::all_for_vars(vars))
         }
-        Selector::ByIndex { .. }
-        | Selector::Matches(_)
-        | Selector::ByDType(_)
-        | Selector::Wildcard => Ok(ctx.all()),
+        Selector::Matches(pattern) => {
+            // Filter data variables that match the regex pattern
+            // Use meta.data_vars to exclude dimension coordinates
+            // Use simple string matching since we don't want to add a regex dependency
+            let pattern_str = pattern.as_str();
+            // Handle common regex patterns: ^prefix, suffix$, or exact match
+            let matching_vars: Vec<String> = ctx.meta.data_vars.iter()
+                .filter(|v| {
+                    // Simple pattern matching for common cases
+                    if pattern_str.starts_with('^') && pattern_str.ends_with('$') {
+                        // Exact match with regex anchors
+                        let inner = &pattern_str[1..pattern_str.len()-1];
+                        v.as_str() == inner
+                    } else if pattern_str.starts_with('^') {
+                        // Prefix match
+                        let prefix = &pattern_str[1..];
+                        // Handle .* at the end
+                        let prefix = prefix.trim_end_matches(".*").trim_end_matches("$");
+                        v.starts_with(prefix)
+                    } else if pattern_str.ends_with('$') {
+                        // Suffix match
+                        let suffix = &pattern_str[..pattern_str.len()-1];
+                        v.ends_with(suffix)
+                    } else {
+                        // Contains match
+                        v.contains(pattern_str)
+                    }
+                })
+                .cloned()
+                .collect();
+            if matching_vars.is_empty() {
+                Ok(DatasetSelection::empty())
+            } else {
+                Ok(DatasetSelection::all_for_vars(matching_vars))
+            }
+        }
+        Selector::ByDType(dtype_selector) => {
+            // Filter data variables by their Polars dtype from zarr array metadata.
+            // Use meta.data_vars (not ctx.vars) to exclude dimension coordinates.
+            // The DataTypeSelector has a matches() method that checks if a dtype matches.
+            let matching_vars: Vec<String> = ctx.meta.data_vars.iter()
+                .filter(|v| {
+                    // Look up the array metadata for this variable
+                    if let Some(array_meta) = ctx.meta.arrays.get(*v) {
+                        dtype_selector.matches(&array_meta.polars_dtype)
+                    } else {
+                        // If we can't find the array, conservatively include it
+                        true
+                    }
+                })
+                .cloned()
+                .collect();
+            if matching_vars.is_empty() {
+                Ok(DatasetSelection::empty())
+            } else {
+                Ok(DatasetSelection::all_for_vars(matching_vars))
+            }
+        }
+        Selector::ByIndex { .. } => Ok(ctx.all()),
+        Selector::Wildcard => {
+            // Wildcard selects all data variables
+            Ok(DatasetSelection::all_for_vars(ctx.meta.data_vars.clone()))
+        }
     }
 }
 

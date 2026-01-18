@@ -35,6 +35,8 @@ pub async fn load_dataset_meta_from_opened_async(
     let mut coord_candidates = BTreeMap::new();
     let mut primary_dims: Option<Vec<String>> = None;
     let mut max_ndim = 0usize;
+    // Collect auxiliary coordinates from "coordinates" attribute (CF convention)
+    let mut aux_coords: BTreeSet<String> = BTreeSet::new();
 
     for (path, md) in nodes {
         let NodeMetadata::Array(array_md) = md else {
@@ -67,6 +69,15 @@ pub async fn load_dataset_meta_from_opened_async(
             coord_candidates.insert(leaf.clone(), (shape.clone(), dt));
         }
 
+        // Parse "coordinates" attribute (CF convention) to identify auxiliary coords
+        if let Some(attrs) = array.attributes().get("coordinates") {
+            if let Some(coord_str) = attrs.as_str() {
+                for coord_name in coord_str.split_whitespace() {
+                    aux_coords.insert(coord_name.to_string());
+                }
+            }
+        }
+
         let polars_dtype =
             zarr_dtype_to_polars(array.data_type().identifier(), time_encoding.as_ref());
 
@@ -95,19 +106,26 @@ pub async fn load_dataset_meta_from_opened_async(
 
     let dims: Vec<String> = primary_dims.unwrap_or(dims_ordered);
 
-    let mut coords: Vec<String> = Vec::new();
+    // Collect dimension coordinate arrays (1D arrays matching their dimension name)
+    let mut coords: BTreeSet<String> = BTreeSet::new();
     for dim in &dims {
         if let Some((shape, _dtype)) = coord_candidates.get(dim)
             && shape.len() == 1
         {
-            coords.push(dim.clone());
+            coords.insert(dim.clone());
         }
     }
 
-    let coord_set: BTreeSet<&str> = coords.iter().map(|s| s.as_str()).collect();
+    // Add auxiliary coordinates (only those that exist as arrays)
+    for aux in &aux_coords {
+        if arrays.contains_key(aux) {
+            coords.insert(aux.clone());
+        }
+    }
+
     let data_vars: Vec<String> = arrays
         .keys()
-        .filter(|k| !coord_set.contains(k.as_str()))
+        .filter(|k| !coords.contains(*k))
         .cloned()
         .collect();
 

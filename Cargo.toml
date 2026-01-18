@@ -125,3 +125,24 @@ serde_json = "1.0.145"
 chrono = { version = "0.4", features = ["clock", "std"] }
 futures = "0.3.31"
 pyo3-async-runtimes = { version = "0.27.0", features = ["tokio-runtime"] }
+
+
+[profile.release]
+lto = "fat"
+codegen-units = 16
+
+# Some crates don't change as much but benefit more from
+# more expensive optimization passes, so we selectively
+# decrease codegen-units in some cases.
+# [profile.release.package.ruff_python_parser]
+# codegen-units = 1
+# [profile.release.package.ruff_python_ast]
+# codegen-units = 1
+# [profile.release.package.salsa]
+# codegen-units = 1
+
+# Profile to build a minimally sized binary
+[profile.minimal-size]
+inherits = "release"
+opt-level = "z"
+codegen-units = 1
