@@ -13,3 +13,4 @@ pub mod interpolate_selection_nd;
 
 pub(crate) use errors::{CompileError, CoordIndexResolver, ResolveError};
 pub(crate) use compile_ctx::CompileCtx;
+pub(crate) use compile_node::{collect_column_refs, collect_selector_refs};

@@ -1,3 +1,5 @@
+use regex::Regex;
+
 use super::compile_node::compile_node;
 use super::compile_ctx::CompileCtx;
 use super::errors::CompileError;
@@ -63,31 +65,11 @@ pub(super) fn compile_selector(
         Selector::Matches(pattern) => {
             // Filter data variables that match the regex pattern
             // Use meta.data_vars to exclude dimension coordinates
-            // Use simple string matching since we don't want to add a regex dependency
-            let pattern_str = pattern.as_str();
-            // Handle common regex patterns: ^prefix, suffix$, or exact match
+            let re = Regex::new(pattern.as_str()).map_err(|e| {
+                CompileError::Unsupported(format!("invalid regex pattern '{}': {}", pattern, e))
+            })?;
             let matching_vars: Vec<String> = ctx.meta.data_vars.iter()
-                .filter(|v| {
-                    // Simple pattern matching for common cases
-                    if pattern_str.starts_with('^') && pattern_str.ends_with('$') {
-                        // Exact match with regex anchors
-                        let inner = &pattern_str[1..pattern_str.len()-1];
-                        v.as_str() == inner
-                    } else if pattern_str.starts_with('^') {
-                        // Prefix match
-                        let prefix = &pattern_str[1..];
-                        // Handle .* at the end
-                        let prefix = prefix.trim_end_matches(".*").trim_end_matches("$");
-                        v.starts_with(prefix)
-                    } else if pattern_str.ends_with('$') {
-                        // Suffix match
-                        let suffix = &pattern_str[..pattern_str.len()-1];
-                        v.ends_with(suffix)
-                    } else {
-                        // Contains match
-                        v.contains(pattern_str)
-                    }
-                })
+                .filter(|v| re.is_match(v))
                 .cloned()
                 .collect();
             if matching_vars.is_empty() {

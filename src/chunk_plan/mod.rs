@@ -11,6 +11,8 @@ pub(crate) use compile_entry::{
     compile_expr_to_chunk_plan, compile_expr_to_dataset_selection, PlannerStats,
 };
 pub(crate) use exprs::errors::CompileError;
+#[allow(unused_imports)]
+pub(crate) use exprs::{collect_column_refs, collect_selector_refs};
 pub(crate) use indexing::plan::{ChunkIndexIter, ChunkPlan};
 pub(crate) use indexing::types::ChunkId;
 #[allow(unused_imports)]

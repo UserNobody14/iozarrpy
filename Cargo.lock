@@ -2593,6 +2593,8 @@ dependencies = [
  "pyo3",
  "pyo3-async-runtimes",
  "pyo3-polars",
+ "regex",
+ "regex-syntax",
  "serde_json",
  "tokio",
  "url",
