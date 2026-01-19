@@ -35,7 +35,7 @@ pub(super) fn compile_boolean_function(
             // Otherwise we can't represent complements with current plan nodes.
             let inner =
                 compile_node(arg, ctx)
-                    .unwrap_or_else(|_| ctx.all());
+                    .unwrap_or_else(|_| DatasetSelection::NoSelectionMade);
             if inner.is_empty() {
                 Ok(DatasetSelection::NoSelectionMade)
             } else {
@@ -59,7 +59,7 @@ pub(super) fn compile_boolean_function(
                     _ => unreachable!(),
                 };
                 return Ok(if keep {
-                    ctx.all()
+                    DatasetSelection::NoSelectionMade
                 } else {
                     DatasetSelection::empty()
                 });
@@ -75,7 +75,7 @@ pub(super) fn compile_boolean_function(
             let mut acc = DatasetSelection::empty();
             for e in input {
                 let sel = compile_node(e, ctx)
-                    .unwrap_or_else(|_| ctx.all());
+                    .unwrap_or_else(|_| DatasetSelection::NoSelectionMade);
                 acc = acc.union(&sel);
                 if acc.is_empty() {
                     break;
@@ -85,10 +85,10 @@ pub(super) fn compile_boolean_function(
         }
         BooleanFunction::AllHorizontal => {
             // AND across all input expressions.
-            let mut acc = ctx.all();
+            let mut acc = DatasetSelection::NoSelectionMade;
             for e in input {
                 let sel = compile_node(e, ctx)
-                    .unwrap_or_else(|_| ctx.all());
+                    .unwrap_or_else(|_| DatasetSelection::NoSelectionMade);
                 acc = acc.intersect(&sel);
                 if acc.is_empty() {
                     break;

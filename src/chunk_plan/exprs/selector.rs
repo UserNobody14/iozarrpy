@@ -1,6 +1,5 @@
 use regex::Regex;
 
-use super::compile_node::compile_node;
 use super::compile_ctx::CompileCtx;
 use super::errors::CompileError;
 use crate::chunk_plan::prelude::*;
@@ -14,45 +13,45 @@ pub(super) fn compile_selector(
 ) -> Result<DatasetSelection, CompileError> {
     match selector {
         Selector::Union(left, right) => {
-            let left_node = compile_node(
-                left.as_ref().clone().as_expr(),
+            let left_node = compile_selector(
+                left.as_ref(),
                 ctx,
             )?;
-            let right_node = compile_node(
-                right.as_ref().clone().as_expr(),
+            let right_node = compile_selector(
+                right.as_ref(),
                 ctx,
             )?;
             Ok(left_node.union(&right_node))
         }
         Selector::Difference(left, right) => {
-            let left_node = compile_node(
-                left.as_ref().clone().as_expr(),
+            let left_node = compile_selector(
+                left.as_ref(),
                 ctx,
             )?;
-            let right_node = compile_node(
-                right.as_ref().clone().as_expr(),
+            let right_node = compile_selector(
+                right.as_ref(),
                 ctx,
             )?;
             Ok(left_node.difference(&right_node))
         }
         Selector::ExclusiveOr(left, right) => {
-            let left_node = compile_node(
-                left.as_ref().clone().as_expr(),
+            let left_node = compile_selector(
+                left.as_ref(),
                 ctx,
             )?;
-            let right_node = compile_node(
-                right.as_ref().clone().as_expr(),
+            let right_node = compile_selector(
+                right.as_ref(),
                 ctx,
             )?;
             Ok(left_node.exclusive_or(&right_node))
         }
         Selector::Intersect(left, right) => {
-            let left_node = compile_node(
-                left.as_ref().clone().as_expr(),
+            let left_node = compile_selector(
+                left.as_ref(),
                 ctx,
             )?;
-            let right_node = compile_node(
-                right.as_ref().clone().as_expr(),
+            let right_node = compile_selector(
+                right.as_ref(),
                 ctx,
             )?;
             Ok(left_node.intersect(&right_node))

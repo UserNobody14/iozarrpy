@@ -1,6 +1,5 @@
 use crate::chunk_plan::prelude::*;
-use crate::chunk_plan::indexing::plan::ChunkPlanNode;
-use crate::chunk_plan::indexing::types::{CoordScalar, DimChunkRange, IndexRange};
+use crate::chunk_plan::indexing::types::CoordScalar;
 
 pub(crate) fn apply_time_encoding(raw: i64, te: Option<&TimeEncoding>) -> CoordScalar {
     if let Some(enc) = te {
@@ -196,102 +195,5 @@ pub(super) fn reverse_operator(op: Operator) -> Operator {
         Operator::Lt => Operator::Gt,
         Operator::LtEq => Operator::GtEq,
         _ => op,
-    }
-}
-
-#[allow(dead_code)]
-pub(super) fn chunk_ranges_for_index_range(
-    idx: IndexRange,
-    chunk_size: u64,
-    grid_dim: u64,
-) -> Option<DimChunkRange> {
-    if idx.is_empty() {
-        return None;
-    }
-    let chunk_start = idx.start / chunk_size;
-    let last = idx.end_exclusive.saturating_sub(1);
-    let chunk_end = last / chunk_size;
-    if chunk_start >= grid_dim {
-        return None;
-    }
-    let end = chunk_end.min(grid_dim.saturating_sub(1));
-    Some(DimChunkRange {
-        start_chunk: chunk_start,
-        end_chunk_inclusive: end,
-    })
-}
-
-#[allow(dead_code)]
-pub(super) fn rect_all_dims(grid_shape: &[u64]) -> Vec<DimChunkRange> {
-    grid_shape
-        .iter()
-        .map(|&g| DimChunkRange {
-            start_chunk: 0,
-            end_chunk_inclusive: g.saturating_sub(1),
-        })
-        .collect()
-}
-
-#[allow(dead_code)]
-pub(super) fn and_nodes(a: ChunkPlanNode, b: ChunkPlanNode) -> ChunkPlanNode {
-    match (a, b) {
-        (ChunkPlanNode::Empty, _) | (_, ChunkPlanNode::Empty) => ChunkPlanNode::Empty,
-        (ChunkPlanNode::AllChunks, x) | (x, ChunkPlanNode::AllChunks) => x,
-        (ChunkPlanNode::Explicit(xs), ChunkPlanNode::Explicit(ys)) => {
-            // Exact set intersection on explicit chunk coords.
-            let set: std::collections::BTreeSet<Vec<u64>> = ys.into_iter().collect();
-            ChunkPlanNode::Explicit(xs.into_iter().filter(|v| set.contains(v)).collect())
-        }
-        (ChunkPlanNode::Explicit(xs), _) | (_, ChunkPlanNode::Explicit(xs)) => {
-            // Conservative: we don't have enough info to intersect Explicit with Rect/Union
-            // without chunk grid context, so keep the explicit set.
-            ChunkPlanNode::Explicit(xs)
-        }
-        (ChunkPlanNode::Union(xs), y) => {
-            ChunkPlanNode::Union(xs.into_iter().map(|x| and_nodes(x, y.clone())).collect())
-        }
-        (x, ChunkPlanNode::Union(ys)) => {
-            ChunkPlanNode::Union(ys.into_iter().map(|y| and_nodes(x.clone(), y)).collect())
-        }
-        (ChunkPlanNode::Rect(a), ChunkPlanNode::Rect(b)) => {
-            if a.len() != b.len() {
-                return ChunkPlanNode::Empty;
-            }
-            let mut out = Vec::with_capacity(a.len());
-            for i in 0..a.len() {
-                let Some(r) = a[i].intersect(&b[i]) else {
-                    return ChunkPlanNode::Empty;
-                };
-                out.push(r);
-            }
-            ChunkPlanNode::Rect(out)
-        }
-    }
-}
-
-#[allow(dead_code)]
-pub(super) fn or_nodes(a: ChunkPlanNode, b: ChunkPlanNode) -> ChunkPlanNode {
-    match (a, b) {
-        (ChunkPlanNode::Empty, x) | (x, ChunkPlanNode::Empty) => x,
-        (ChunkPlanNode::AllChunks, _) | (_, ChunkPlanNode::AllChunks) => ChunkPlanNode::AllChunks,
-        (ChunkPlanNode::Explicit(mut xs), ChunkPlanNode::Explicit(ys)) => {
-            xs.extend(ys);
-            ChunkPlanNode::Explicit(xs)
-        }
-        (ChunkPlanNode::Explicit(xs), y) => ChunkPlanNode::Union(vec![ChunkPlanNode::Explicit(xs), y]),
-        (x, ChunkPlanNode::Explicit(ys)) => ChunkPlanNode::Union(vec![x, ChunkPlanNode::Explicit(ys)]),
-        (ChunkPlanNode::Union(mut xs), ChunkPlanNode::Union(ys)) => {
-            xs.extend(ys);
-            ChunkPlanNode::Union(xs)
-        }
-        (ChunkPlanNode::Union(mut xs), y) => {
-            xs.push(y);
-            ChunkPlanNode::Union(xs)
-        }
-        (x, ChunkPlanNode::Union(mut ys)) => {
-            ys.insert(0, x);
-            ChunkPlanNode::Union(ys)
-        }
-        (x, y) => ChunkPlanNode::Union(vec![x, y]),
     }
 }

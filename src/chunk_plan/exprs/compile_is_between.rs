@@ -37,14 +37,14 @@ pub(super) fn compile_is_between(
         low_lit,
         ctx,
     )
-    .unwrap_or_else(|_| ctx.all());
+    .unwrap_or_else(|_| DatasetSelection::NoSelectionMade);
     let b = compile_cmp_to_dataset_selection(
         col,
         Operator::LtEq,
         high_lit,
         ctx,
     )
-    .unwrap_or_else(|_| ctx.all());
+    .unwrap_or_else(|_| DatasetSelection::NoSelectionMade);
     Ok(a.intersect(&b))
 }
 

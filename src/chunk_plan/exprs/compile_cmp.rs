@@ -120,15 +120,15 @@ pub(super) fn try_expr_to_value_range(
     let (col, lit, op_eff) = if let (Expr::Column(name), Expr::Literal(lit)) =
         (strip_wrappers(left), strip_wrappers(right))
     {
-        (name.to_string(), lit.clone(), *op)
+        (name.to_string(), lit, *op)
     } else if let (Expr::Literal(lit), Expr::Column(name)) = (strip_wrappers(left), strip_wrappers(right)) {
-        (name.to_string(), lit.clone(), reverse_operator(*op))
+        (name.to_string(), lit, reverse_operator(*op))
     } else {
         return None;
     };
 
     let time_encoding = meta.arrays.get(col.as_str()).and_then(|a| a.time_encoding.as_ref());
-    let scalar = literal_to_scalar(&lit, time_encoding)?;
+    let scalar = literal_to_scalar(lit, time_encoding)?;
 
     let mut vr = ValueRange::default();
     match op_eff {

@@ -94,8 +94,8 @@ pub(crate) fn collect_selector_refs(sel: &Selector, out: &mut Vec<String>) {
             }
         }
         Selector::Union(a, b) | Selector::Intersect(a, b) | Selector::Difference(a, b) | Selector::ExclusiveOr(a, b) => {
-            collect_column_refs(&a.as_ref().clone().as_expr(), out);
-            collect_column_refs(&b.as_ref().clone().as_expr(), out);
+            collect_selector_refs(&a.as_ref(), out);
+            collect_selector_refs(&b.as_ref(), out);
         }
         // For Wildcard, ByDType, ByIndex, Matches - we can't determine columns statically
         _ => {}
@@ -110,7 +110,7 @@ fn all_for_referenced_vars(expr: &Expr, ctx: &CompileCtx<'_>) -> DatasetSelectio
     refs.dedup();
     
     if refs.is_empty() {
-        ctx.all()
+        DatasetSelection::NoSelectionMade
     } else {
         dataset_all_for_vars(refs)
     }
@@ -199,7 +199,7 @@ pub(crate) fn compile_node(
                                 ctx,
                             )?;
                             let b = compile_node(
-                                input[0].clone(),
+                                &input[0],
                                 ctx,
                             )?;
                             return Ok(a.difference(&b));
@@ -212,7 +212,7 @@ pub(crate) fn compile_node(
                                 ctx,
                             )?;
                             let b = compile_node(
-                                input[0].clone(),
+                                &input[0],
                                 ctx,
                             )?;
                             return Ok(a.difference(&b));
