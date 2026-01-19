@@ -35,9 +35,5 @@ pub(crate) trait CoordIndexResolver {
         dim: &str,
         range: &ValueRange,
     ) -> Result<Option<IndexRange>, ResolveError>;
-
-    fn coord_read_count(&self) -> u64 {
-        0
-    }
 }
 

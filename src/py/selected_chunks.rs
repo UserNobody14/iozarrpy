@@ -5,7 +5,7 @@ use pyo3::types::PyAny;
 use zarrs::array::Array;
 
 use crate::chunk_plan::{
-    compile_expr_to_chunk_plan_lazy, compile_expr_to_dataset_selection_lazy,
+    compile_expr_to_chunk_plan, compile_expr_to_dataset_selection,
     plan_dataset_chunk_indices, ChunkPlan,
 };
 use crate::meta::open_and_load_dataset_meta;
@@ -40,7 +40,7 @@ pub(crate) fn selected_chunks(
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
 
     let (plan, _stats) =
-        compile_expr_to_chunk_plan_lazy(&expr, &meta, opened.store.clone(), primary_var)
+        compile_expr_to_chunk_plan(&expr, &meta, opened.store.clone(), primary_var)
             .unwrap_or_else(|_| {
                 let grid_shape = primary.chunk_grid().grid_shape().to_vec();
                 (
@@ -103,7 +103,7 @@ pub(crate) fn _selected_chunks_debug(
     let primary = Array::open(opened.store.clone(), &primary_meta.path)
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
 
-    let (plan, stats) = compile_expr_to_chunk_plan_lazy(&expr, &meta, opened.store.clone(), primary_var)
+    let (plan, stats) = compile_expr_to_chunk_plan(&expr, &meta, opened.store.clone(), primary_var)
         .map_err(|e| match e {
             crate::chunk_plan::CompileError::Unsupported(e) => {
                 PyErr::new::<pyo3::exceptions::PyValueError, _>(e)
@@ -163,7 +163,7 @@ pub(crate) fn _selected_variables_debug(
 
     let parsed_expr = extract_expr(expr)?;
 
-    let (selection, stats) = compile_expr_to_dataset_selection_lazy(
+    let (selection, stats) = compile_expr_to_dataset_selection(
         &parsed_expr,
         &meta,
         opened.store.clone(),

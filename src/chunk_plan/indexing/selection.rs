@@ -17,10 +17,6 @@ pub (crate) enum DatasetSelection {
 }
 
 impl DatasetSelection {
-    pub(crate) fn empty() -> Self {
-        Self::Empty
-    }
-
     pub(crate) fn vars(&self) -> impl Iterator<Item = (&str, &DataArraySelection)> {
         match self {
             Self::Selection(selection) => Box::new(selection.iter().map(|(k, v)| (k.as_str(), v)).collect::<Vec<_>>().into_iter()),
@@ -47,24 +43,6 @@ impl DatasetSelection {
         }
     }
 
-}
-pub(crate) fn dataset_all_for_vars(vars: impl IntoIterator<Item = String>) -> DatasetSelection {
-    let mut m = BTreeMap::new();
-    for v in vars {
-        m.insert(v, DataArraySelection::all());
-    }
-    DatasetSelection::Selection(m)
-}
-
-pub(crate) fn dataset_for_vars_with_selection(
-    vars: impl IntoIterator<Item = String>,
-    sel: DataArraySelection,
-) -> DatasetSelection {
-    let mut m = BTreeMap::new();
-    for v in vars {
-        m.insert(v, sel.clone());
-    }
-    DatasetSelection::Selection(m)
 }
 
 /// Selection for a single array, expressed as a disjunction (OR) of hyper-rectangles.
@@ -151,14 +129,6 @@ pub(crate) struct ScalarRange {
     pub(crate) end: Option<(u64, BoundKind)>,
 }
 
-impl ScalarRange {
-    pub(crate) fn all() -> Self {
-        Self {
-            start: None,
-            end: None,
-        }
-    }
-}
 
 /// A list of half-open index ranges.
 ///
@@ -193,17 +163,6 @@ impl RangeList {
 
     pub(crate) fn ranges(&self) -> &[super::types::IndexRange] {
         &self.ranges
-    }
-
-    pub(crate) fn from_scalar_ranges(ranges: impl IntoIterator<Item = ScalarRange>) -> Self {
-        let mut out = Self::empty();
-        for r in ranges {
-            if let Some(ir) = scalar_range_to_index_range(r) {
-                out.ranges.push(ir);
-            }
-        }
-        out.normalize();
-        out
     }
 
     pub(crate) fn from_index_range(r: super::types::IndexRange) -> Self {
@@ -253,12 +212,6 @@ pub trait SetOperations {
     fn difference(&self, other: &Self) -> Self;
     fn exclusive_or(&self, other: &Self) -> Self;
     fn is_empty(&self) -> bool;
-    fn is_subset(&self, other: &Self) -> bool;
-    fn is_superset(&self, other: &Self) -> bool;
-    fn is_disjoint(&self, other: &Self) -> bool;
-    fn is_equal(&self, other: &Self) -> bool;
-    fn is_not_equal(&self, other: &Self) -> bool;
-    fn is_subset_of(&self, other: &Self) -> bool;
 }
 
 impl SetOperations for RangeList {
@@ -356,30 +309,6 @@ impl SetOperations for RangeList {
 
     fn is_empty(&self) -> bool {
         self.ranges.is_empty()
-    }
-    
-    fn is_subset(&self, other: &RangeList) -> bool {
-        self.ranges.iter().all(|r| other.ranges.contains(r))
-    }
-
-    fn is_superset(&self, other: &RangeList) -> bool {
-        other.is_subset(self)
-    }
-    
-    fn is_disjoint(&self, other: &RangeList) -> bool {
-        self.ranges.iter().all(|r| !other.ranges.contains(r))
-    }
-
-    fn is_equal(&self, other: &RangeList) -> bool {
-        self.is_subset_of(other) && other.is_subset_of(self)
-    }
-    
-    fn is_not_equal(&self, other: &RangeList) -> bool {
-        !self.is_equal(other)
-    }
-
-    fn is_subset_of(&self, other: &RangeList) -> bool {
-        self.ranges.iter().all(|r| other.ranges.contains(r))
     }
 }
 
@@ -494,47 +423,6 @@ impl SetOperations for DatasetSelection {
         match self {
             Self::Selection(s) => s.is_empty(),
             Self::NoSelectionMade | Self::Empty => true,
-        }
-    }
-
-    fn is_equal(&self, other: &DatasetSelection) -> bool {
-        self.is_subset_of(other) && other.is_subset_of(self)
-    }
-    
-    fn is_not_equal(&self, other: &DatasetSelection) -> bool {
-        !self.is_equal(other)
-    }
-
-    fn is_subset_of(&self, other: &DatasetSelection) -> bool {
-        match (self, other) {
-            (Self::Selection(s), Self::Selection(o)) => s.iter().all(|(k, a)| o.get(k).map_or(false, |b| a.is_subset(b))),
-            (Self::NoSelectionMade, _) => true,
-            (_, Self::NoSelectionMade) => false,
-            (Self::Empty, _) => true,
-            (_, Self::Empty) => false,
-        }
-    }
-
-    fn is_superset(&self, other: &DatasetSelection) -> bool {
-        other.is_subset(self)
-    }
-
-    fn is_disjoint(&self, other: &DatasetSelection) -> bool {
-        match (self, other) {
-            (Self::Selection(s), Self::Selection(o)) => s.iter().all(|(k, a)| o.get(k).map_or(true, |b| a.is_disjoint(b))),
-            (Self::NoSelectionMade, _) => true,
-            (_, Self::NoSelectionMade) => false,
-            (Self::Empty, _) => true,
-            (_, Self::Empty) => false,
-        }
-    }
-    fn is_subset(&self, other: &DatasetSelection) -> bool {
-        match (self, other) {
-            (Self::Selection(s), Self::Selection(o)) => s.iter().all(|(k, a)| o.get(k).map_or(false, |b| a.is_subset(b))),
-            (Self::NoSelectionMade, _) => true,
-            (_, Self::NoSelectionMade) => false,
-            (Self::Empty, _) => true,
-            (_, Self::Empty) => false,
         }
     }
 }
@@ -690,46 +578,6 @@ impl SetOperations for DataArraySelection {
     fn exclusive_or(&self, other: &DataArraySelection) -> DataArraySelection {
         self.difference(other).union(&other.difference(self))
     }
-
-    fn is_subset(&self, other: &DataArraySelection) -> bool {
-        self.0.iter().all(|a| other.0.contains(a))
-    }
-
-    fn is_superset(&self, other: &DataArraySelection) -> bool {
-        other.is_subset(self)
-    }
-
-    fn is_disjoint(&self, other: &DataArraySelection) -> bool {
-        self.0.iter().all(|a| !other.0.contains(a))
-    }
-
-    fn is_equal(&self, other: &DataArraySelection) -> bool {
-        self.is_subset_of(other) && other.is_subset_of(self)
-    }
-
-    fn is_not_equal(&self, other: &DataArraySelection) -> bool {
-        !self.is_equal(other)
-    }
-
-    fn is_subset_of(&self, other: &DataArraySelection) -> bool {
-        self.0.iter().all(|a| other.0.contains(a))
-    }
-}
-
-
-fn scalar_range_to_index_range(r: ScalarRange) -> Option<super::types::IndexRange> {
-    let start = match r.start {
-        None => 0,
-        Some((v, BoundKind::Inclusive)) => v,
-        Some((v, BoundKind::Exclusive)) => v.saturating_add(1),
-    };
-    let end_exclusive = match r.end {
-        None => u64::MAX,
-        Some((v, BoundKind::Exclusive)) => v,
-        Some((v, BoundKind::Inclusive)) => v.saturating_add(1),
-    };
-    let out = super::types::IndexRange { start, end_exclusive };
-    if out.is_empty() { None } else { Some(out) }
 }
 
 #[cfg(test)]
@@ -755,15 +603,6 @@ mod tests {
                 IndexRange { start: 20, end_exclusive: 21 },
             ]
         );
-    }
-
-    #[test]
-    fn scalar_range_inclusive_exclusive_normalizes() {
-        let rl = RangeList::from_scalar_ranges([ScalarRange {
-            start: Some((10, BoundKind::Exclusive)),
-            end: Some((20, BoundKind::Inclusive)),
-        }]);
-        assert_eq!(rl.ranges(), &[IndexRange { start: 11, end_exclusive: 21 }]);
     }
 
     #[test]

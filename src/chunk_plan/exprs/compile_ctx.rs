@@ -1,16 +1,6 @@
-use super::errors::CoordIndexResolver;
-use crate::chunk_plan::prelude::ZarrDatasetMeta;
+//! Compilation context for lazy chunk planning.
 
-/// Compilation context for the eager (blocking) compilation path.
-///
-/// Contains a resolver that performs immediate value-to-index resolution.
-pub(crate) struct CompileCtx<'a> {
-    pub(crate) meta: &'a ZarrDatasetMeta,
-    pub(crate) dims: &'a [String],
-    pub(crate) dim_lengths: &'a [u64],
-    pub(crate) vars: &'a [String],
-    pub(crate) resolver: &'a mut dyn CoordIndexResolver,
-}
+use crate::chunk_plan::prelude::ZarrDatasetMeta;
 
 /// Compilation context for the lazy compilation path.
 ///

@@ -366,32 +366,6 @@ impl SetOperations for LazyDimConstraint {
     fn is_empty(&self) -> bool {
         LazyDimConstraint::is_empty(self)
     }
-
-    fn is_subset(&self, _other: &Self) -> bool {
-        // Can't determine without resolution
-        false
-    }
-
-    fn is_superset(&self, other: &Self) -> bool {
-        other.is_subset(self)
-    }
-
-    fn is_disjoint(&self, _other: &Self) -> bool {
-        // Can't determine without resolution
-        false
-    }
-
-    fn is_equal(&self, other: &Self) -> bool {
-        self == other
-    }
-
-    fn is_not_equal(&self, other: &Self) -> bool {
-        self != other
-    }
-
-    fn is_subset_of(&self, other: &Self) -> bool {
-        self.is_subset(other)
-    }
 }
 
 impl SetOperations for LazyArraySelection {
@@ -466,30 +440,6 @@ impl SetOperations for LazyArraySelection {
 
     fn is_empty(&self) -> bool {
         LazyArraySelection::is_empty(self)
-    }
-
-    fn is_subset(&self, _other: &Self) -> bool {
-        false
-    }
-
-    fn is_superset(&self, other: &Self) -> bool {
-        other.is_subset(self)
-    }
-
-    fn is_disjoint(&self, _other: &Self) -> bool {
-        false
-    }
-
-    fn is_equal(&self, other: &Self) -> bool {
-        self == other
-    }
-
-    fn is_not_equal(&self, other: &Self) -> bool {
-        self != other
-    }
-
-    fn is_subset_of(&self, other: &Self) -> bool {
-        self.is_subset(other)
     }
 }
 
@@ -566,30 +516,6 @@ impl SetOperations for LazyDatasetSelection {
 
     fn is_empty(&self) -> bool {
         matches!(self, Self::Empty)
-    }
-
-    fn is_subset(&self, _other: &Self) -> bool {
-        false
-    }
-
-    fn is_superset(&self, other: &Self) -> bool {
-        other.is_subset(self)
-    }
-
-    fn is_disjoint(&self, _other: &Self) -> bool {
-        false
-    }
-
-    fn is_equal(&self, other: &Self) -> bool {
-        self == other
-    }
-
-    fn is_not_equal(&self, other: &Self) -> bool {
-        self != other
-    }
-
-    fn is_subset_of(&self, other: &Self) -> bool {
-        self.is_subset(other)
     }
 }
 

@@ -1,19 +1,26 @@
-use crate::chunk_plan::exprs::errors::ResolveError;
+//! Synchronous monotonic coordinate resolver.
+//!
+//! Resolves value ranges to index ranges using binary search on coordinate arrays,
+//! assuming the coordinate is monotonically increasing or decreasing.
+
+use crate::chunk_plan::exprs::errors::{CoordIndexResolver, ResolveError};
 use crate::chunk_plan::exprs::literals;
 use crate::chunk_plan::prelude::*;
-use super::types::CoordScalar;
+use super::types::{BoundKind, CoordScalar, IndexRange, ValueRange};
+use super::resolver_traits::{HashMapCache, ResolutionCache, ResolutionRequest, SyncCoordResolver};
 
+/// Synchronous coordinate resolver that uses binary search on monotonic coordinates.
 pub(crate) struct MonotonicCoordResolver<'a> {
-    pub(super) meta: &'a ZarrDatasetMeta,
+    meta: &'a ZarrDatasetMeta,
     store: zarrs::storage::ReadableWritableListableStorage,
     coord_arrays:
         BTreeMap<String, Array<dyn zarrs::storage::ReadableWritableListableStorageTraits>>,
-    pub(super) read_count: Arc<AtomicU64>,
+    read_count: Arc<AtomicU64>,
     monotonic_cache: BTreeMap<String, Option<MonotonicDirection>>,
 }
 
 #[derive(Debug, Clone, Copy)]
-pub(super) enum MonotonicDirection {
+enum MonotonicDirection {
     Increasing,
     Decreasing,
 }
@@ -30,6 +37,10 @@ impl<'a> MonotonicCoordResolver<'a> {
             read_count: Arc::new(AtomicU64::new(0)),
             monotonic_cache: BTreeMap::new(),
         }
+    }
+
+    pub(crate) fn coord_read_count(&self) -> u64 {
+        self.read_count.load(Ordering::Relaxed)
     }
 
     fn coord_array(
@@ -53,7 +64,7 @@ impl<'a> MonotonicCoordResolver<'a> {
         }
     }
 
-    pub(super) fn scalar_at(&mut self, dim: &str, idx: u64) -> Result<CoordScalar, ResolveError> {
+    fn scalar_at(&mut self, dim: &str, idx: u64) -> Result<CoordScalar, ResolveError> {
         let meta = self
             .meta
             .arrays
@@ -144,7 +155,7 @@ impl<'a> MonotonicCoordResolver<'a> {
         }
     }
 
-    pub(super) fn ensure_monotonic(&mut self, dim: &str) -> Result<Option<MonotonicDirection>, ResolveError> {
+    fn ensure_monotonic(&mut self, dim: &str) -> Result<Option<MonotonicDirection>, ResolveError> {
         if let Some(cached) = self.monotonic_cache.get(dim) {
             return Ok(*cached);
         }
@@ -222,4 +233,181 @@ impl<'a> MonotonicCoordResolver<'a> {
         Ok(Some(dir))
     }
 
+    // ========================================================================
+    // Binary search bounds
+    // ========================================================================
+
+    fn lower_bound(
+        &mut self,
+        dim: &str,
+        target: &CoordScalar,
+        strict: bool,
+        dir: MonotonicDirection,
+        n: u64,
+    ) -> Result<u64, ResolveError> {
+        // For increasing: first idx with value > target (strict) or >= target (!strict).
+        // For decreasing: first idx with value < target (strict) or <= target (!strict).
+        let mut lo = 0u64;
+        let mut hi = n;
+        while lo < hi {
+            let mid = lo + (hi - lo) / 2;
+            let v = self.scalar_at(dim, mid)?;
+            let cmp = v.partial_cmp(target);
+            let go_left = match (dir, strict, cmp) {
+                (
+                    MonotonicDirection::Increasing,
+                    false,
+                    Some(std::cmp::Ordering::Greater | std::cmp::Ordering::Equal),
+                ) => true,
+                (MonotonicDirection::Increasing, true, Some(std::cmp::Ordering::Greater)) => true,
+                (
+                    MonotonicDirection::Decreasing,
+                    false,
+                    Some(std::cmp::Ordering::Less | std::cmp::Ordering::Equal),
+                ) => true,
+                (MonotonicDirection::Decreasing, true, Some(std::cmp::Ordering::Less)) => true,
+                _ => false,
+            };
+            if go_left {
+                hi = mid;
+            } else {
+                lo = mid + 1;
+            }
+        }
+        Ok(lo)
+    }
+
+    fn upper_bound(
+        &mut self,
+        dim: &str,
+        target: &CoordScalar,
+        strict: bool,
+        dir: MonotonicDirection,
+        n: u64,
+    ) -> Result<u64, ResolveError> {
+        // Return end_exclusive for max bound:
+        // We want end_exclusive such that values satisfy value < max (Exclusive) or <= max (Inclusive).
+        // So compute first idx that violates that.
+        let mut lo = 0u64;
+        let mut hi = n;
+        while lo < hi {
+            let mid = lo + (hi - lo) / 2;
+            let v = self.scalar_at(dim, mid)?;
+            let cmp = v.partial_cmp(target);
+            let go_left = match (dir, strict, cmp) {
+                (
+                    MonotonicDirection::Increasing,
+                    true,
+                    Some(std::cmp::Ordering::Greater | std::cmp::Ordering::Equal),
+                ) => true, // >= max
+                (MonotonicDirection::Increasing, false, Some(std::cmp::Ordering::Greater)) => true, // > max
+                (
+                    MonotonicDirection::Decreasing,
+                    true,
+                    Some(std::cmp::Ordering::Less | std::cmp::Ordering::Equal),
+                ) => true,
+                (MonotonicDirection::Decreasing, false, Some(std::cmp::Ordering::Less)) => true,
+                _ => false,
+            };
+            if go_left {
+                hi = mid;
+            } else {
+                lo = mid + 1;
+            }
+        }
+        Ok(lo)
+    }
+}
+
+// ============================================================================
+// CoordIndexResolver trait implementation
+// ============================================================================
+
+impl CoordIndexResolver for MonotonicCoordResolver<'_> {
+    fn index_range_for_value_range(
+        &mut self,
+        dim: &str,
+        range: &ValueRange,
+    ) -> Result<Option<IndexRange>, ResolveError> {
+        let Some(meta) = self.meta.arrays.get(dim) else {
+            return Ok(None);
+        };
+        if meta.shape.len() != 1 {
+            return Ok(None);
+        }
+        let n = meta.shape[0];
+        if n == 0 {
+            return Ok(Some(IndexRange {
+                start: 0,
+                end_exclusive: 0,
+            }));
+        }
+
+        let Some(dir) = self.ensure_monotonic(dim)? else {
+            return Ok(None);
+        };
+
+        // Equality is treated as a tiny closed range in index space using two bounds.
+        if let Some(eq) = &range.eq {
+            let start = self.lower_bound(dim, eq, false, dir, n)?;
+            let end_excl = self.upper_bound(dim, eq, false, dir, n)?;
+            let out = IndexRange {
+                start,
+                end_exclusive: end_excl,
+            };
+            return Ok(Some(out));
+        }
+
+        let start = if let Some((v, bk)) = &range.min {
+            let strict = *bk == BoundKind::Exclusive;
+            self.lower_bound(dim, v, strict, dir, n)?
+        } else {
+            0
+        };
+        let end_exclusive = if let Some((v, bk)) = &range.max {
+            let strict = *bk == BoundKind::Exclusive;
+            self.upper_bound(dim, v, strict, dir, n)?
+        } else {
+            n
+        };
+
+        Ok(Some(IndexRange {
+            start,
+            end_exclusive,
+        }))
+    }
+}
+
+// ============================================================================
+// SyncCoordResolver trait implementation for batched resolution
+// ============================================================================
+
+impl SyncCoordResolver for MonotonicCoordResolver<'_> {
+    fn resolve_batch<'a>(
+        &'a mut self,
+        requests: &[ResolutionRequest],
+        _meta: &ZarrDatasetMeta,
+    ) -> Box<dyn ResolutionCache + 'a> {
+        let mut cache = HashMapCache::new();
+
+        for request in requests {
+            let dim = request.dim.as_ref();
+            let vr = &request.value_range;
+
+            // Use the CoordIndexResolver implementation
+            let result = self.index_range_for_value_range(dim, vr);
+
+            match result {
+                Ok(idx_range) => {
+                    cache.insert(request.clone(), idx_range);
+                }
+                Err(_) => {
+                    // Resolution failed - store None
+                    cache.insert(request.clone(), None);
+                }
+            }
+        }
+
+        Box::new(cache)
+    }
 }
