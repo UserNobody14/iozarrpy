@@ -44,7 +44,10 @@ def _bench_xarray_to_polars(path: str) -> pl.DataFrame:
     # Force real IO every iteration (avoid reusing an already-open dataset).
     ds = xr.open_zarr(path, consolidated=False)
     try:
-        pdf = ds[["geopotential_height"]].to_dataframe().reset_index()
+        pdf = ds.sel(
+            y=slice(3, 10),
+            x=slice(4, 12),
+        )[["geopotential_height"]].to_dataframe().reset_index()
     finally:
         ds.close()
     df = pl.from_pandas(pdf)
