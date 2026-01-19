@@ -36,42 +36,25 @@ pub(crate) async fn scan_zarr_df_async(
             .await
             .map_err(to_py_err)?;
 
-    // Compile chunk plan off-thread using the existing (sync) planner.
-    // This keeps behavior identical to the current predicate pushdown planning.
-    let zarr_url_plan = zarr_url.clone();
-    let meta_plan = meta.clone();
-    let expr_plan = expr.clone();
-    let primary_var_plan = primary_var.to_string();
-    let (plan, _stats) = tokio::task::spawn_blocking(move || -> Result<(ChunkPlan, crate::chunk_plan::PlannerStats), PyErr> {
-        let opened_sync = open_store(&zarr_url_plan).map_err(to_py_err)?;
-        match compile_expr_to_chunk_plan(
-            &expr_plan,
-            &meta_plan,
-            opened_sync.store.clone(),
-            &primary_var_plan,
-        ) {
-            Ok(x) => Ok(x),
-            Err(_) => {
-                // Fall back to scanning all chunks if planning fails.
-                let arr = Array::open(
-                    opened_sync.store.clone(),
-                    &meta_plan.arrays[&primary_var_plan].path,
-                )
-                .map_err(to_py_err)?;
-                let grid_shape = arr.chunk_grid().grid_shape().to_vec();
-                Ok((
-                    ChunkPlan::all(grid_shape),
-                    crate::chunk_plan::PlannerStats { coord_reads: 0 },
-                ))
-            }
-        }
-    })
+    // Compile chunk plan using truly async I/O (concurrent coordinate resolution).
+    let (plan, _stats) = match compile_expr_to_chunk_plan_async(
+        &expr,
+        &meta,
+        opened_async.store.clone(),
+        primary_var,
+    )
     .await
-    .map_err(|e| {
-        PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
-            "chunk planner join error: {e}"
-        ))
-    })??;
+    {
+        Ok(x) => x,
+        Err(_) => {
+            // Fall back to scanning all chunks if planning fails.
+            let grid_shape = primary.chunk_grid().grid_shape().to_vec();
+            (
+                ChunkPlan::all(grid_shape),
+                crate::chunk_plan::PlannerStats { coord_reads: 0 },
+            )
+        }
+    };
 
     let indices: Vec<Vec<u64>> = plan.into_index_iter().collect();
 

@@ -2,7 +2,7 @@ use pyo3::prelude::*;
 use pyo3::types::PyAny;
 use zarrs::array::Array;
 
-use crate::chunk_plan::{compile_expr_to_chunk_plan, ChunkPlan};
+use crate::chunk_plan::{compile_expr_to_chunk_plan_lazy, ChunkPlan};
 
 use super::{panic_to_py_err, to_py_err, ZarrSource};
 
@@ -19,9 +19,9 @@ impl ZarrSource {
         }))
         .map_err(|e| panic_to_py_err(e, "panic while converting predicate Expr"))??;
 
-        // Compile Expr -> candidate-chunk plan (no full-grid scans).
+        // Compile Expr -> candidate-chunk plan using lazy compilation (batched I/O).
         let compiled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            compile_expr_to_chunk_plan(&expr, &self.meta, self.store.clone(), &self.vars[0])
+            compile_expr_to_chunk_plan_lazy(&expr, &self.meta, self.store.clone(), &self.vars[0])
         }))
         .map_err(|e| panic_to_py_err(e, "panic while compiling predicate chunk plan"))?;
 

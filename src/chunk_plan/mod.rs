@@ -6,19 +6,22 @@ mod compile_entry;
 mod indexing;
 mod exprs;
 
-#[allow(unused_imports)]
-pub(crate) use compile_entry::{
-    compile_expr_to_chunk_plan, compile_expr_to_dataset_selection, PlannerStats,
-};
 pub(crate) use exprs::errors::CompileError;
-#[allow(unused_imports)]
-pub(crate) use exprs::{collect_column_refs, collect_selector_refs};
 pub(crate) use indexing::plan::{ChunkIndexIter, ChunkPlan};
 pub(crate) use indexing::types::ChunkId;
-#[allow(unused_imports)]
-pub(crate) use indexing::selection::{
-    SetOperations, DataArraySelection, DatasetSelection, HyperRectangleSelection, RangeList, ScalarRange,
+
+pub(crate) use compile_entry::{
+    compile_expr_to_chunk_plan, compile_expr_to_dataset_selection, PlannerStats,
+    // Lazy compilation entry points
+    compile_expr_to_chunk_plan_lazy, compile_expr_to_dataset_selection_lazy,
+    compile_expr_to_lazy_selection, resolve_lazy_selection_sync,
+    // Async entry points
+    compile_expr_to_chunk_plan_async, compile_expr_to_dataset_selection_async,
 };
-#[allow(unused_imports)]
+
 pub(crate) use indexing::selection_to_chunks::plan_dataset_chunk_indices;
 
+// Lazy selection types and resolver traits for advanced usage
+pub(crate) use indexing::lazy_selection::LazyDatasetSelection;
+pub(crate) use indexing::resolver_traits::{AsyncCoordResolver, SyncCoordResolver};
+pub(crate) use indexing::monotonic_async::AsyncMonotonicResolver;

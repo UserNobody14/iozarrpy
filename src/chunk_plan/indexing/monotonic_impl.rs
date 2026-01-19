@@ -2,6 +2,7 @@ use crate::chunk_plan::exprs::errors::{CoordIndexResolver, ResolveError};
 use super::monotonic_scalar::MonotonicCoordResolver;
 use crate::chunk_plan::prelude::*;
 use super::types::{BoundKind, IndexRange, ValueRange};
+use super::resolver_traits::{HashMapCache, ResolutionCache, ResolutionRequest, SyncCoordResolver};
 
 impl CoordIndexResolver for MonotonicCoordResolver<'_> {
     fn index_range_for_value_range(
@@ -63,3 +64,37 @@ impl CoordIndexResolver for MonotonicCoordResolver<'_> {
     }
 }
 
+
+// ============================================================================
+// SyncCoordResolver implementation for batched resolution
+// ============================================================================
+
+impl SyncCoordResolver for MonotonicCoordResolver<'_> {
+    fn resolve_batch<'a>(
+        &'a mut self,
+        requests: &[ResolutionRequest],
+        _meta: &ZarrDatasetMeta,
+    ) -> Box<dyn ResolutionCache + 'a> {
+        let mut cache = HashMapCache::new();
+
+        for request in requests {
+            let dim = request.dim.as_ref();
+            let vr = &request.value_range;
+
+            // Use the existing CoordIndexResolver implementation
+            let result = self.index_range_for_value_range(dim, vr);
+
+            match result {
+                Ok(idx_range) => {
+                    cache.insert(request.clone(), idx_range);
+                }
+                Err(_) => {
+                    // Resolution failed - store None
+                    cache.insert(request.clone(), None);
+                }
+            }
+        }
+
+        Box::new(cache)
+    }
+}

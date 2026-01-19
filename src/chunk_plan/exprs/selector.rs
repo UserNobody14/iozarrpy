@@ -107,21 +107,3 @@ pub(super) fn compile_selector(
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use crate::chunk_plan::exprs::errors::CoordIndexResolver;
-    use crate::chunk_plan::indexing::types::{IndexRange, ValueRange};
-    use crate::chunk_plan::exprs::errors::ResolveError;
-
-    struct DummyResolver;
-    impl CoordIndexResolver for DummyResolver {
-        fn index_range_for_value_range(
-            &mut self,
-            _dim: &str,
-            _range: &ValueRange,
-        ) -> Result<Option<IndexRange>, ResolveError> {
-            Ok(None)
-        }
-    }
-
-}

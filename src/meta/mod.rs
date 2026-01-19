@@ -7,4 +7,4 @@ mod types;
 
 pub use load_async::open_and_load_dataset_meta_async;
 pub use load_sync::open_and_load_dataset_meta;
-pub use types::{TimeEncoding, ZarrDatasetMeta};
+pub use types::{TimeEncoding, ZarrArrayMeta, ZarrDatasetMeta};

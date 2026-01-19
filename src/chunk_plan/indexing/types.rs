@@ -5,13 +5,15 @@ pub(crate) struct ChunkId {
     pub(crate) shape: Vec<u64>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+use std::hash::{Hash, Hasher};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum BoundKind {
     Inclusive,
     Exclusive,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub(crate) enum CoordScalar {
     I64(i64),
     U64(u64),
@@ -21,6 +23,34 @@ pub(crate) enum CoordScalar {
     /// Nanoseconds duration.
     DurationNs(i64),
     // Reserved for future: String/Binary/Categorical/etc.
+}
+
+impl PartialEq for CoordScalar {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (CoordScalar::I64(a), CoordScalar::I64(b)) => a == b,
+            (CoordScalar::U64(a), CoordScalar::U64(b)) => a == b,
+            (CoordScalar::F64(a), CoordScalar::F64(b)) => a.to_bits() == b.to_bits(),
+            (CoordScalar::DatetimeNs(a), CoordScalar::DatetimeNs(b)) => a == b,
+            (CoordScalar::DurationNs(a), CoordScalar::DurationNs(b)) => a == b,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for CoordScalar {}
+
+impl Hash for CoordScalar {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        std::mem::discriminant(self).hash(state);
+        match self {
+            CoordScalar::I64(v) => v.hash(state),
+            CoordScalar::U64(v) => v.hash(state),
+            CoordScalar::F64(v) => v.to_bits().hash(state),
+            CoordScalar::DatetimeNs(v) => v.hash(state),
+            CoordScalar::DurationNs(v) => v.hash(state),
+        }
+    }
 }
 
 impl CoordScalar {
@@ -44,7 +74,7 @@ impl CoordScalar {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 pub(crate) struct ValueRange {
     pub(crate) min: Option<(CoordScalar, BoundKind)>,
     pub(crate) max: Option<(CoordScalar, BoundKind)>,
@@ -153,7 +183,7 @@ fn pick_tighter_max(
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct IndexRange {
     pub(crate) start: u64,
     pub(crate) end_exclusive: u64,

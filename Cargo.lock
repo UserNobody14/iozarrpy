@@ -2586,6 +2586,7 @@ checksum = "69cdb34c158ceb288df11e18b4bd39de994f6657d83847bdffdbd7f346754b0f"
 name = "rainbear"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "chrono",
  "futures",
  "polars",
@@ -2596,6 +2597,7 @@ dependencies = [
  "regex",
  "regex-syntax",
  "serde_json",
+ "smallvec",
  "tokio",
  "url",
  "zarrs",

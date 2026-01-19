@@ -1,4 +1,5 @@
 pub mod compile_node;
+pub mod compile_node_lazy;
 pub mod compile_ctx;
 pub mod compile_boolean;
 pub mod compile_cmp;
@@ -12,5 +13,6 @@ pub mod interpolate_selection_nd;
 
 pub (crate) use crate::chunk_plan::indexing::selection::SetOperations;
 pub(crate) use errors::{CompileError, CoordIndexResolver, ResolveError};
-pub(crate) use compile_ctx::CompileCtx;
+pub(crate) use compile_ctx::{CompileCtx, LazyCompileCtx};
 pub(crate) use compile_node::{collect_column_refs, collect_selector_refs};
+pub(crate) use compile_node_lazy::compile_node_lazy;

@@ -8,7 +8,7 @@ pub(crate) use pyo3_polars::error::PyPolarsErr;
 pub(crate) use zarrs::array::Array;
 // (moved to `reader::retrieve_*`)
 
-pub(crate) use crate::chunk_plan::{compile_expr_to_chunk_plan, ChunkPlan};
+pub(crate) use crate::chunk_plan::{compile_expr_to_chunk_plan_async, ChunkPlan};
 pub(crate) use crate::reader::{
     checked_chunk_len, compute_strides, compute_var_chunk_info_async, retrieve_1d_subset_async,
     retrieve_chunk_async, ColumnData,
