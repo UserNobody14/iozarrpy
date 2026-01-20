@@ -116,5 +116,41 @@ impl ColumnData {
             ColumnData::F64(v) => Series::new(name.into(), v),
         }
     }
+
+    /// Extend this ColumnData with another. Panics if types don't match.
+    pub(crate) fn extend(&mut self, other: ColumnData) {
+        match (self, other) {
+            (ColumnData::Bool(a), ColumnData::Bool(b)) => a.extend(b),
+            (ColumnData::I8(a), ColumnData::I8(b)) => a.extend(b),
+            (ColumnData::I16(a), ColumnData::I16(b)) => a.extend(b),
+            (ColumnData::I32(a), ColumnData::I32(b)) => a.extend(b),
+            (ColumnData::I64(a), ColumnData::I64(b)) => a.extend(b),
+            (ColumnData::U8(a), ColumnData::U8(b)) => a.extend(b),
+            (ColumnData::U16(a), ColumnData::U16(b)) => a.extend(b),
+            (ColumnData::U32(a), ColumnData::U32(b)) => a.extend(b),
+            (ColumnData::U64(a), ColumnData::U64(b)) => a.extend(b),
+            (ColumnData::F32(a), ColumnData::F32(b)) => a.extend(b),
+            (ColumnData::F64(a), ColumnData::F64(b)) => a.extend(b),
+            _ => panic!("ColumnData::extend type mismatch"),
+        }
+    }
+
+    /// Create an empty ColumnData matching the given zarr dtype identifier.
+    pub(crate) fn empty_for_dtype(dtype_id: &str) -> Option<Self> {
+        match dtype_id {
+            "bool" => Some(ColumnData::Bool(Vec::new())),
+            "int8" => Some(ColumnData::I8(Vec::new())),
+            "int16" => Some(ColumnData::I16(Vec::new())),
+            "int32" => Some(ColumnData::I32(Vec::new())),
+            "int64" => Some(ColumnData::I64(Vec::new())),
+            "uint8" => Some(ColumnData::U8(Vec::new())),
+            "uint16" => Some(ColumnData::U16(Vec::new())),
+            "uint32" => Some(ColumnData::U32(Vec::new())),
+            "uint64" => Some(ColumnData::U64(Vec::new())),
+            "float32" => Some(ColumnData::F32(Vec::new())),
+            "float64" => Some(ColumnData::F64(Vec::new())),
+            _ => None,
+        }
+    }
 }
 

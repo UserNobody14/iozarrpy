@@ -2,6 +2,9 @@
 //!
 //! Resolves value ranges to index ranges using binary search on coordinate arrays,
 //! assuming the coordinate is monotonically increasing or decreasing.
+//!
+//! Uses chunk-level caching for efficient I/O: entire chunks are fetched and cached
+//! rather than individual scalar values.
 
 use crate::chunk_plan::exprs::errors::{CoordIndexResolver, ResolveError};
 use crate::chunk_plan::exprs::literals;
@@ -9,13 +12,39 @@ use crate::chunk_plan::prelude::*;
 use super::types::{BoundKind, CoordScalar, IndexRange, ValueRange};
 use super::resolver_traits::{HashMapCache, ResolutionCache, ResolutionRequest, SyncCoordResolver};
 
+/// Cached chunk data for a coordinate array.
+///
+/// Stores decoded scalar values for efficient lookup.
+#[derive(Debug)]
+enum ChunkData {
+    F64(Vec<f64>),
+    I64(Vec<i64>),
+    U64(Vec<u64>),
+}
+
+impl ChunkData {
+    fn get(&self, offset: usize, te: Option<&crate::meta::TimeEncoding>) -> Option<CoordScalar> {
+        match self {
+            ChunkData::F64(v) => v.get(offset).copied().map(CoordScalar::F64),
+            ChunkData::I64(v) => v.get(offset).copied().map(|raw| literals::apply_time_encoding(raw, te)),
+            ChunkData::U64(v) => v.get(offset).copied().map(CoordScalar::U64),
+        }
+    }
+}
+
 /// Synchronous coordinate resolver that uses binary search on monotonic coordinates.
+///
+/// Features chunk-level caching: when a value is requested, the entire containing
+/// chunk is fetched and cached, making subsequent reads from the same chunk instant.
 pub(crate) struct MonotonicCoordResolver<'a> {
     meta: &'a ZarrDatasetMeta,
     store: zarrs::storage::ReadableWritableListableStorage,
     coord_arrays:
         BTreeMap<String, Array<dyn zarrs::storage::ReadableWritableListableStorageTraits>>,
-    read_count: Arc<AtomicU64>,
+    /// Chunk cache: (dim, chunk_idx) -> decoded chunk data
+    chunk_cache: BTreeMap<(String, u64), ChunkData>,
+    /// Number of chunk reads (I/O operations)
+    chunk_read_count: Arc<AtomicU64>,
     monotonic_cache: BTreeMap<String, Option<MonotonicDirection>>,
 }
 
@@ -34,13 +63,14 @@ impl<'a> MonotonicCoordResolver<'a> {
             meta,
             store,
             coord_arrays: BTreeMap::new(),
-            read_count: Arc::new(AtomicU64::new(0)),
+            chunk_cache: BTreeMap::new(),
+            chunk_read_count: Arc::new(AtomicU64::new(0)),
             monotonic_cache: BTreeMap::new(),
         }
     }
 
     pub(crate) fn coord_read_count(&self) -> u64 {
-        self.read_count.load(Ordering::Relaxed)
+        self.chunk_read_count.load(Ordering::Relaxed)
     }
 
     fn coord_array(
@@ -64,6 +94,124 @@ impl<'a> MonotonicCoordResolver<'a> {
         }
     }
 
+    /// Get the chunk size for a 1D coordinate array.
+    fn chunk_size(&mut self, dim: &str) -> Result<u64, ResolveError> {
+        let arr = self.coord_array(dim)?;
+        let chunk_shape = arr
+            .chunk_shape(&[0])
+            .map_err(|e| ResolveError::Zarr(e.to_string()))?;
+        Ok(chunk_shape.first().map(|nz| nz.get()).unwrap_or(1))
+    }
+
+    /// Load a chunk and cache it.
+    fn load_chunk(&mut self, dim: &str, chunk_idx: u64) -> Result<(), ResolveError> {
+        let cache_key = (dim.to_string(), chunk_idx);
+        if self.chunk_cache.contains_key(&cache_key) {
+            return Ok(());
+        }
+
+        let _meta = self
+            .meta
+            .arrays
+            .get(dim)
+            .ok_or_else(|| ResolveError::MissingCoord(dim.to_string()))?;
+
+        // Increment counter before borrowing array
+        self.chunk_read_count.fetch_add(1, Ordering::Relaxed);
+
+        let arr = self.coord_array(dim)?;
+        let id = arr.data_type().identifier();
+        let chunk_indices = vec![chunk_idx];
+
+        let data = match id {
+            "float64" => {
+                let values = arr
+                    .retrieve_chunk::<Vec<f64>>(&chunk_indices)
+                    .map_err(|e| ResolveError::Zarr(e.to_string()))?;
+                ChunkData::F64(values)
+            }
+            "float32" => {
+                let values: Vec<f64> = arr
+                    .retrieve_chunk::<Vec<f32>>(&chunk_indices)
+                    .map_err(|e| ResolveError::Zarr(e.to_string()))?
+                    .into_iter()
+                    .map(|v| v as f64)
+                    .collect();
+                ChunkData::F64(values)
+            }
+            "int64" => {
+                let values = arr
+                    .retrieve_chunk::<Vec<i64>>(&chunk_indices)
+                    .map_err(|e| ResolveError::Zarr(e.to_string()))?;
+                ChunkData::I64(values)
+            }
+            "int32" => {
+                let values: Vec<i64> = arr
+                    .retrieve_chunk::<Vec<i32>>(&chunk_indices)
+                    .map_err(|e| ResolveError::Zarr(e.to_string()))?
+                    .into_iter()
+                    .map(|v| v as i64)
+                    .collect();
+                ChunkData::I64(values)
+            }
+            "int16" => {
+                let values: Vec<i64> = arr
+                    .retrieve_chunk::<Vec<i16>>(&chunk_indices)
+                    .map_err(|e| ResolveError::Zarr(e.to_string()))?
+                    .into_iter()
+                    .map(|v| v as i64)
+                    .collect();
+                ChunkData::I64(values)
+            }
+            "int8" => {
+                let values: Vec<i64> = arr
+                    .retrieve_chunk::<Vec<i8>>(&chunk_indices)
+                    .map_err(|e| ResolveError::Zarr(e.to_string()))?
+                    .into_iter()
+                    .map(|v| v as i64)
+                    .collect();
+                ChunkData::I64(values)
+            }
+            "uint64" => {
+                let values = arr
+                    .retrieve_chunk::<Vec<u64>>(&chunk_indices)
+                    .map_err(|e| ResolveError::Zarr(e.to_string()))?;
+                ChunkData::U64(values)
+            }
+            "uint32" => {
+                let values: Vec<u64> = arr
+                    .retrieve_chunk::<Vec<u32>>(&chunk_indices)
+                    .map_err(|e| ResolveError::Zarr(e.to_string()))?
+                    .into_iter()
+                    .map(|v| v as u64)
+                    .collect();
+                ChunkData::U64(values)
+            }
+            "uint16" => {
+                let values: Vec<u64> = arr
+                    .retrieve_chunk::<Vec<u16>>(&chunk_indices)
+                    .map_err(|e| ResolveError::Zarr(e.to_string()))?
+                    .into_iter()
+                    .map(|v| v as u64)
+                    .collect();
+                ChunkData::U64(values)
+            }
+            "uint8" => {
+                let values: Vec<u64> = arr
+                    .retrieve_chunk::<Vec<u8>>(&chunk_indices)
+                    .map_err(|e| ResolveError::Zarr(e.to_string()))?
+                    .into_iter()
+                    .map(|v| v as u64)
+                    .collect();
+                ChunkData::U64(values)
+            }
+            other => return Err(ResolveError::UnsupportedCoordDtype(other.to_string())),
+        };
+
+        self.chunk_cache.insert(cache_key, data);
+        Ok(())
+    }
+
     fn scalar_at(&mut self, dim: &str, idx: u64) -> Result<CoordScalar, ResolveError> {
         let meta = self
             .meta
@@ -77,82 +225,21 @@ impl<'a> MonotonicCoordResolver<'a> {
             return Err(ResolveError::OutOfBounds);
         }
 
-        self.read_count.fetch_add(1, Ordering::Relaxed);
-        let arr = self.coord_array(dim)?;
-        let subset = ArraySubset::new_with_ranges(&[idx..(idx + 1)]);
-        let id = arr.data_type().identifier();
+        let chunk_size = self.chunk_size(dim)?;
+        let chunk_idx = idx / chunk_size;
+        let offset_in_chunk = (idx % chunk_size) as usize;
 
+        // Ensure chunk is loaded
+        self.load_chunk(dim, chunk_idx)?;
+
+        // Get value from cache
+        let cache_key = (dim.to_string(), chunk_idx);
         let te = meta.time_encoding.as_ref();
-        match id {
-            "float64" => {
-                let v = arr
-                    .retrieve_array_subset::<Vec<f64>>(&subset)
-                    .map_err(|e| ResolveError::Zarr(e.to_string()))?[0];
-                Ok(CoordScalar::F64(v))
-            }
-            "float32" => {
-                let v = arr
-                    .retrieve_array_subset::<Vec<f32>>(&subset)
-                    .map_err(|e| ResolveError::Zarr(e.to_string()))?[0]
-                    as f64;
-                Ok(CoordScalar::F64(v))
-            }
-            "int64" => {
-                let raw = arr
-                    .retrieve_array_subset::<Vec<i64>>(&subset)
-                    .map_err(|e| ResolveError::Zarr(e.to_string()))?[0];
-                Ok(literals::apply_time_encoding(raw, te))
-            }
-            "int32" => {
-                let raw = arr
-                    .retrieve_array_subset::<Vec<i32>>(&subset)
-                    .map_err(|e| ResolveError::Zarr(e.to_string()))?[0]
-                    as i64;
-                Ok(literals::apply_time_encoding(raw, te))
-            }
-            "int16" => {
-                let raw = arr
-                    .retrieve_array_subset::<Vec<i16>>(&subset)
-                    .map_err(|e| ResolveError::Zarr(e.to_string()))?[0]
-                    as i64;
-                Ok(literals::apply_time_encoding(raw, te))
-            }
-            "int8" => {
-                let raw = arr
-                    .retrieve_array_subset::<Vec<i8>>(&subset)
-                    .map_err(|e| ResolveError::Zarr(e.to_string()))?[0]
-                    as i64;
-                Ok(literals::apply_time_encoding(raw, te))
-            }
-            "uint64" => {
-                let v = arr
-                    .retrieve_array_subset::<Vec<u64>>(&subset)
-                    .map_err(|e| ResolveError::Zarr(e.to_string()))?[0];
-                Ok(CoordScalar::U64(v))
-            }
-            "uint32" => {
-                let v = arr
-                    .retrieve_array_subset::<Vec<u32>>(&subset)
-                    .map_err(|e| ResolveError::Zarr(e.to_string()))?[0]
-                    as u64;
-                Ok(CoordScalar::U64(v))
-            }
-            "uint16" => {
-                let v = arr
-                    .retrieve_array_subset::<Vec<u16>>(&subset)
-                    .map_err(|e| ResolveError::Zarr(e.to_string()))?[0]
-                    as u64;
-                Ok(CoordScalar::U64(v))
-            }
-            "uint8" => {
-                let v = arr
-                    .retrieve_array_subset::<Vec<u8>>(&subset)
-                    .map_err(|e| ResolveError::Zarr(e.to_string()))?[0]
-                    as u64;
-                Ok(CoordScalar::U64(v))
-            }
-            other => Err(ResolveError::UnsupportedCoordDtype(other.to_string())),
-        }
+        
+        self.chunk_cache
+            .get(&cache_key)
+            .and_then(|data| data.get(offset_in_chunk, te))
+            .ok_or(ResolveError::OutOfBounds)
     }
 
     fn ensure_monotonic(&mut self, dim: &str) -> Result<Option<MonotonicDirection>, ResolveError> {
@@ -174,8 +261,7 @@ impl<'a> MonotonicCoordResolver<'a> {
             return Ok(Some(MonotonicDirection::Increasing));
         }
 
-        // Cheap monotonic heuristic: sample a few points, including around a chunk boundary.
-        // This is conservative: if we can't confirm, we return None (no binary-search pruning).
+        // Check monotonicity by sampling first, last, and a few points around chunk boundaries.
         let first = self.scalar_at(dim, 0)?;
         let last = self.scalar_at(dim, n - 1)?;
         let dir = match first.partial_cmp(&last) {
@@ -189,17 +275,11 @@ impl<'a> MonotonicCoordResolver<'a> {
             }
         };
 
-        let arr = self.coord_array(dim)?;
-        let reg_chunk = arr
-            .chunk_shape(&[0])
-            .map_err(|e| ResolveError::Zarr(e.to_string()))?
-            .get(0)
-            .map(|nz| nz.get())
-            .unwrap_or(1);
+        let chunk_size = self.chunk_size(dim)?;
         let mut sample_idxs = [
             0u64,
-            (reg_chunk.saturating_sub(1)).min(n - 1),
-            (reg_chunk).min(n - 1),
+            (chunk_size.saturating_sub(1)).min(n - 1),
+            chunk_size.min(n - 1),
             (n / 2).min(n - 1),
             n - 1,
         ];
@@ -245,8 +325,6 @@ impl<'a> MonotonicCoordResolver<'a> {
         dir: MonotonicDirection,
         n: u64,
     ) -> Result<u64, ResolveError> {
-        // For increasing: first idx with value > target (strict) or >= target (!strict).
-        // For decreasing: first idx with value < target (strict) or <= target (!strict).
         let mut lo = 0u64;
         let mut hi = n;
         while lo < hi {
@@ -285,9 +363,6 @@ impl<'a> MonotonicCoordResolver<'a> {
         dir: MonotonicDirection,
         n: u64,
     ) -> Result<u64, ResolveError> {
-        // Return end_exclusive for max bound:
-        // We want end_exclusive such that values satisfy value < max (Exclusive) or <= max (Inclusive).
-        // So compute first idx that violates that.
         let mut lo = 0u64;
         let mut hi = n;
         while lo < hi {
@@ -299,8 +374,8 @@ impl<'a> MonotonicCoordResolver<'a> {
                     MonotonicDirection::Increasing,
                     true,
                     Some(std::cmp::Ordering::Greater | std::cmp::Ordering::Equal),
-                ) => true, // >= max
-                (MonotonicDirection::Increasing, false, Some(std::cmp::Ordering::Greater)) => true, // > max
+                ) => true,
+                (MonotonicDirection::Increasing, false, Some(std::cmp::Ordering::Greater)) => true,
                 (
                     MonotonicDirection::Decreasing,
                     true,
@@ -394,7 +469,6 @@ impl SyncCoordResolver for MonotonicCoordResolver<'_> {
             let dim = request.dim.as_ref();
             let vr = &request.value_range;
 
-            // Use the CoordIndexResolver implementation
             let result = self.index_range_for_value_range(dim, vr);
 
             match result {
@@ -402,7 +476,6 @@ impl SyncCoordResolver for MonotonicCoordResolver<'_> {
                     cache.insert(request.clone(), idx_range);
                 }
                 Err(_) => {
-                    // Resolution failed - store None
                     cache.insert(request.clone(), None);
                 }
             }
