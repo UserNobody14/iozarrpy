@@ -36,3 +36,7 @@ pub(crate) use indexing::selection_to_chunks::plan_dataset_chunk_indices;
 pub(crate) use indexing::lazy_selection::LazyDatasetSelection;
 pub(crate) use indexing::resolver_traits::{AsyncCoordResolver, SyncCoordResolver};
 pub(crate) use indexing::monotonic_async::AsyncMonotonicResolver;
+
+// Debug utilities - expose additional internal types
+pub(crate) use indexing::lazy_materialize::collect_requests_with_meta;
+pub(crate) use indexing::selection::DatasetSelection;

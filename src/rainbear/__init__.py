@@ -38,21 +38,18 @@ def scan_zarr(
         if with_columns is not None:
             src.set_with_columns(with_columns)
 
-        # Set predicate for constraint extraction (chunk pruning).
-        # The Rust side uses constraints to skip chunks but doesn't apply
-        # the full predicate filter - we do that here in Python.
-        if predicate is not None and os.environ.get("RAINBEAR_PREDICATE_PUSHDOWN", "1") == "1":
-            if os.environ.get("RAINBEAR_DEBUG_PREDICATE") == "1":
-                print(
-                    f"[rainbear] predicate pushed down: type={type(predicate)!r} repr={predicate!r}",
-                    file=sys.stderr,
-                    flush=True,
-                )
-            try:
+        if os.environ.get("RAINBEAR_DEBUG_PREDICATE") == "1":
+            print(
+                f"[rainbear] predicate pushed down: type={type(predicate)!r} repr={predicate!r}",
+                file=sys.stderr,
+                flush=True,
+            )
+        try:
+            if predicate is not None:
                 src.try_set_predicate(predicate)
-            except Exception as e:
-                print(f"[rainbear] constraint extraction failed: {e}", file=sys.stderr, flush=True)
-                raise e
+        except Exception as e:
+            print(f"[rainbear] constraint extraction failed: {e}", file=sys.stderr, flush=True)
+            raise e
 
         while (out := src.next()) is not None:
             # Always apply predicate in Python for correctness

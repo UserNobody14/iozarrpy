@@ -270,13 +270,15 @@ impl DimResolver {
         };
 
         // Sample a few more points to verify
-        let samples = [
+        // Note: samples must be sorted in ascending order!
+        let mut samples = [
             0u64,
             self.chunk_size.saturating_sub(1).min(self.n - 1),
             self.chunk_size.min(self.n - 1),
             (self.n / 2).min(self.n - 1),
             self.n - 1,
         ];
+        samples.sort();
 
         let mut prev: Option<CoordScalar> = None;
         for &i in &samples {

@@ -139,6 +139,15 @@ pub(super) fn literal_to_scalar(
                     let _ = time_encoding;
                     Some(CoordScalar::DatetimeNs(ns))
                 }
+                AnyValue::DatetimeOwned(value, time_unit, _) => {
+                    let ns = match time_unit {
+                        polars::prelude::TimeUnit::Nanoseconds => value,
+                        polars::prelude::TimeUnit::Microseconds => value * 1_000,
+                        polars::prelude::TimeUnit::Milliseconds => value * 1_000_000,
+                    };
+                    let _ = time_encoding;
+                    Some(CoordScalar::DatetimeNs(ns))
+                }
                 AnyValue::Date(days) => {
                     let ns = days as i64 * 86400 * 1_000_000_000;
                     let _ = time_encoding;

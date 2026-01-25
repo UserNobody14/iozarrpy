@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -11,17 +10,6 @@ import pytest
 from zarr.codecs import BloscCodec, BloscShuffle
 
 OUTPUT_DIR = Path(__file__).resolve().parent / "output-datasets"
-
-
-@pytest.fixture(scope="session", autouse=True)
-def _rainbear_safe_mode() -> None:
-    """Keep the test runner alive even if predicate pushdown has native issues.
-
-    Pushdown is an optimization; correctness is still ensured because `rainbear.scan_zarr`
-    applies the full predicate in Python.
-    """
-    os.environ.setdefault("RAINBEAR_PREDICATE_PUSHDOWN", "0")
-
 
 @pytest.fixture
 def output_dir() -> Path:
