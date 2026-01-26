@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use smallvec::SmallVec;
 
-use super::selection::RangeList;
+use super::selection::{RangeList, Emptyable};
 use super::types::ValueRange;
 
 /// A per-dimension constraint in value-space (deferred resolution).
@@ -265,6 +265,14 @@ pub(crate) fn lazy_dataset_for_vars_with_selection(
 
 use super::selection::SetOperations;
 
+impl Emptyable for LazyDimConstraint {
+    fn empty() -> Self {
+        LazyDimConstraint::Empty
+    }
+    fn is_empty(&self) -> bool {
+        LazyDimConstraint::is_empty(self)
+    }
+}
 impl SetOperations for LazyDimConstraint {
     fn union(&self, other: &Self) -> Self {
         // Union of constraints: the less restrictive one wins
@@ -363,11 +371,16 @@ impl SetOperations for LazyDimConstraint {
         self.difference(other).union(&other.difference(self))
     }
 
-    fn is_empty(&self) -> bool {
-        LazyDimConstraint::is_empty(self)
-    }
 }
 
+impl Emptyable for LazyArraySelection {
+    fn empty() -> Self {
+        LazyArraySelection::empty()
+    }
+    fn is_empty(&self) -> bool {
+        LazyArraySelection::is_empty(self)
+    }
+}
 impl SetOperations for LazyArraySelection {
     fn union(&self, other: &Self) -> Self {
         if self.is_empty() {
@@ -438,11 +451,16 @@ impl SetOperations for LazyArraySelection {
         self.difference(other).union(&other.difference(self))
     }
 
-    fn is_empty(&self) -> bool {
-        LazyArraySelection::is_empty(self)
-    }
 }
 
+impl Emptyable for LazyDatasetSelection {
+    fn empty() -> Self {
+        LazyDatasetSelection::empty()
+    }
+    fn is_empty(&self) -> bool {
+        matches!(self, Self::Empty)
+    }
+}
 impl SetOperations for LazyDatasetSelection {
     fn union(&self, other: &Self) -> Self {
         match (self, other) {
@@ -514,9 +532,6 @@ impl SetOperations for LazyDatasetSelection {
         self.difference(other).union(&other.difference(self))
     }
 
-    fn is_empty(&self) -> bool {
-        matches!(self, Self::Empty)
-    }
 }
 
 /// Intersect two lazy hyper-rectangles.

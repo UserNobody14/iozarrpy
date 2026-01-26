@@ -12,8 +12,8 @@ use tokio::sync::RwLock;
 
 use super::resolver_traits::{AsyncCoordResolver, HashMapCache, ResolutionCache, ResolutionRequest};
 use super::types::{BoundKind, CoordScalar, IndexRange, ValueRange};
-use crate::chunk_plan::exprs::literals;
 use crate::meta::ZarrDatasetMeta;
+use crate::chunk_plan::exprs;
 
 use zarrs::array::Array;
 
@@ -29,7 +29,7 @@ impl ChunkData {
     fn get(&self, offset: usize, te: Option<&crate::meta::TimeEncoding>) -> Option<CoordScalar> {
         match self {
             ChunkData::F64(v) => v.get(offset).copied().map(CoordScalar::F64),
-            ChunkData::I64(v) => v.get(offset).copied().map(|raw| literals::apply_time_encoding(raw, te)),
+            ChunkData::I64(v) => v.get(offset).copied().map(|raw| exprs::apply_time_encoding(raw, te)),
             ChunkData::U64(v) => v.get(offset).copied().map(CoordScalar::U64),
         }
     }

@@ -5,40 +5,106 @@ use super::types::BoundKind;
 /// Dataset-level selection: variable name -> selection on that variable.
 ///
 /// This is intended to be a pure index-selection representation (no chunking info).
-#[derive(Debug, Clone, PartialEq, Eq)]
 // pub(crate) struct DatasetSelection(pub(crate) BTreeMap<String, DataArraySelection>);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RealSelection(BTreeMap<String, DataArraySelection>);
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub (crate) enum DatasetSelection {
     /// If no selection was made:
     NoSelectionMade,
     /// If everything has been excluded
     Empty,
     /// Standard selection:
-    Selection(BTreeMap<String, DataArraySelection>),
+    Selection(RealSelection),
 }
 
-impl DatasetSelection {
-    pub(crate) fn vars(&self) -> impl Iterator<Item = (&str, &DataArraySelection)> {
+pub trait DSelection {
+    fn vars(&self) -> impl Iterator<Item = (&str, &DataArraySelection)>;
+    fn contains_dim(&self, dim: &str) -> bool;
+    fn insert_dim(&mut self, dim: String, da: DataArraySelection);
+}
+
+impl From<BTreeMap<String, DataArraySelection>> for RealSelection {
+    fn from(map: BTreeMap<String, DataArraySelection>) -> Self {
+        RealSelection(map)
+    }
+}
+
+impl RealSelection {
+    pub(crate) fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub(crate) fn get(&self, var: &str) -> Option<&DataArraySelection> {
+        self.0.get(var)
+    }
+}
+
+
+// impl DSelection for EmptySelection {
+//     fn vars(&self) -> impl Iterator<Item = (&str, &DataArraySelection)> {
+//         Box::new(Vec::new().into_iter())
+//     }
+//     fn contains_dim(&self, dim: &str) -> bool {
+//         false
+//     }
+//     fn insert_dim(&mut self, dim: String, da: DataArraySelection) {
+//         // no-op
+//     }
+// }
+
+// impl DSelection for NoSelection {
+//     fn vars(&self) -> impl Iterator<Item = (&str, &DataArraySelection)> {
+//         Box::new(Vec::new().into_iter())
+//     }
+//     fn contains_dim(&self, dim: &str) -> bool {
+//         false
+//     }
+//     fn insert_dim(&mut self, dim: String, da: DataArraySelection) {
+//         // no-op
+//     }
+// }
+
+impl DSelection for RealSelection {
+    fn vars(&self) -> impl Iterator<Item = (&str, &DataArraySelection)> {
+        Box::new(self.0.iter().map(|(k, v)| (k.as_str(), v)))
+    }
+    fn contains_dim(&self, dim: &str) -> bool {
+        self.0.contains_key(dim)
+    }
+    fn insert_dim(&mut self, dim: String, da: DataArraySelection) {
+        self.0.insert(dim, da);
+    }
+}
+
+impl DSelection for DatasetSelection {
+    fn vars(&self) -> impl Iterator<Item = (&str, &DataArraySelection)> {
         match self {
-            Self::Selection(selection) => Box::new(selection.iter().map(|(k, v)| (k.as_str(), v)).collect::<Vec<_>>().into_iter()),
-            Self::NoSelectionMade | Self::Empty => Box::new(Vec::new().into_iter()),
+            Self::Selection(selection) => Box::new(selection.vars()) as Box<dyn Iterator<Item = (&str, &DataArraySelection)>>,
+            Self::NoSelectionMade => Box::new(std::iter::empty()),
+            Self::Empty => Box::new(std::iter::empty()),
+        }
+    }
+    fn contains_dim(&self, dim: &str) -> bool {
+        match self {
+            Self::Selection(selection) => selection.contains_dim(dim),
+            Self::NoSelectionMade => false,
+            Self::Empty => false,
         }
     }
 
-    pub(crate) fn contains_dim(&self, dim: &str) -> bool {
-        match self {
-            Self::Selection(selection) => selection.contains_key(dim),
-            Self::NoSelectionMade | Self::Empty => false,
-        }
-    }
-
-    pub(crate) fn insert_dim(&mut self, dim: String, da: DataArraySelection) {
+    fn insert_dim(&mut self, dim: String, da: DataArraySelection) {
         match self {
             Self::Selection(selection) => {
-                let _ = selection.insert(dim, da);
+                let _ = selection.0.insert(dim, da);
             }
-            Self::NoSelectionMade | Self::Empty => {
-                *self = Self::Selection(BTreeMap::new());
+            Self::NoSelectionMade => {
+                *self = Self::Selection(RealSelection(BTreeMap::new()));
                 self.insert_dim(dim, da);
+            }
+            Self::Empty => {
+                // no-op
             }
         }
     }
@@ -71,13 +137,20 @@ pub(crate) struct HyperRectangleSelection {
     empty: bool,
 }
 
-impl HyperRectangleSelection {
-    pub(crate) fn empty() -> Self {
+impl Emptyable for HyperRectangleSelection {
+    fn empty() -> Self {
         Self {
             dims: BTreeMap::new(),
             empty: true,
         }
     }
+
+    fn is_empty(&self) -> bool {
+        self.empty || self.dims.values().any(|r| r.is_empty())
+    }
+}
+
+impl HyperRectangleSelection {
 
     pub(crate) fn all() -> Self {
         Self {
@@ -86,9 +159,7 @@ impl HyperRectangleSelection {
         }
     }
 
-    pub(crate) fn is_empty(&self) -> bool {
-        self.empty || self.dims.values().any(|r| r.is_empty())
-    }
+
 
     pub(crate) fn get_dim(&self, dim: &str) -> Option<&RangeList> {
         self.dims.get(dim)
@@ -120,16 +191,6 @@ impl HyperRectangleSelection {
 
 }
 
-/// A scalar range using inclusive/exclusive endpoints.
-///
-/// Internally we normalize these ranges into half-open `[start, end_exclusive)` ranges.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct ScalarRange {
-    pub(crate) start: Option<(u64, BoundKind)>,
-    pub(crate) end: Option<(u64, BoundKind)>,
-}
-
-
 /// A list of half-open index ranges.
 ///
 /// Invariants (after `normalize()`):
@@ -142,9 +203,6 @@ pub(crate) struct RangeList {
 }
 
 impl RangeList {
-    pub(crate) fn empty() -> Self {
-        Self { ranges: Vec::new() }
-    }
 
     pub(crate) fn all() -> Self {
         // Represent “all indices” as a single unbounded-ish range. Planning later clamps to
@@ -155,10 +213,6 @@ impl RangeList {
                 end_exclusive: u64::MAX,
             }],
         }
-    }
-
-    pub(crate) fn is_empty(&self) -> bool {
-        self.ranges.is_empty()
     }
 
     pub(crate) fn ranges(&self) -> &[super::types::IndexRange] {
@@ -205,17 +259,30 @@ impl RangeList {
     }
 }
 
+pub trait Emptyable {
+    fn empty() -> Self;
+    fn is_empty(&self) -> bool;
+}
+
 /// Operations for sets of selections.
-pub trait SetOperations {
+pub trait SetOperations: Emptyable {
     fn union(&self, other: &Self) -> Self;
     fn intersect(&self, other: &Self) -> Self;
     fn difference(&self, other: &Self) -> Self;
     fn exclusive_or(&self, other: &Self) -> Self;
-    fn is_empty(&self) -> bool;
 }
 
+impl Emptyable for RangeList {
+    fn empty() -> Self {
+        Self { ranges: Vec::new() }
+    }
+    fn is_empty(&self) -> bool {
+        self.ranges.is_empty()
+    }
+    
+}
 impl SetOperations for RangeList {
-    fn union(&self, other: &RangeList) -> RangeList {
+    fn union(&self, other: &Self) -> Self {
         if self.is_empty() {
             return other.clone();
         }
@@ -234,7 +301,7 @@ impl SetOperations for RangeList {
         out
     }
 
-    fn intersect(&self, other: &RangeList) -> RangeList {
+    fn intersect(&self, other: &Self) -> Self {
         let mut out = RangeList::empty();
         let mut i = 0usize;
         let mut j = 0usize;
@@ -259,7 +326,7 @@ impl SetOperations for RangeList {
         out
     }
 
-    fn difference(&self, other: &RangeList) -> RangeList {
+    fn difference(&self, other: &Self) -> Self {
         if self.is_empty() || other.is_empty() {
             return self.clone();
         }
@@ -307,28 +374,109 @@ impl SetOperations for RangeList {
         self.difference(other).union(&other.difference(self))
     }
 
+}
+
+
+impl Emptyable for RealSelection {
+    /// TODO: slightly wrong since we would need the actual list of all vars for an empty (?)
+    fn empty() -> Self {
+        Self(BTreeMap::new())
+    }
     fn is_empty(&self) -> bool {
-        self.ranges.is_empty()
+        self.0.is_empty()
     }
 }
 
+impl SetOperations for RealSelection {
+    fn union(&self, other: &Self) -> Self {
+        let (s, o) = (self.0.clone(), other.0.clone());
+        if s.is_empty() {
+            return other.clone();
+        }
+        if o.is_empty() {
+            return self.clone();
+        }
+        let mut out = s.clone();
+        for (k, v) in o {
+            out.entry(k.clone())
+                .and_modify(|cur| *cur = cur.union(&v))
+                .or_insert_with(|| v.clone());
+        }
+        RealSelection(out)
+    }
+    fn intersect(&self, other: &Self) -> Self {
+        let (s, o) = (self.0.clone(), other.0.clone());
+        let mut out = BTreeMap::new();
+        for (k, a) in s {
+            if let Some(b) = o.get(&k) {
+                let sel = a.intersect(b);
+                if !sel.is_empty() {
+                    out.insert(k.clone(), sel);
+                }
+            }
+        }
+        RealSelection(out).into()
+    }
+    fn difference(&self, other: &Self) -> Self {
+        let (s, o) = (self.0.clone(), other.0.clone());
+        let mut out = BTreeMap::new();
+        for (k, a) in s {
+            if let Some(b) = o.get(&k) {
+                let sel = a.difference(b);
+                if !sel.is_empty() {
+                    out.insert(k.clone(), sel);
+                }
+            } else {
+                // Key only in self: keep it (we're subtracting nothing)
+                out.insert(k.clone(), a.clone());
+            }
+        }
+        RealSelection(out).into()
+    }
+    fn exclusive_or(&self, other: &Self) -> Self {
+        let (s, o) = (self.0.clone(), other.0.clone());
+        let mut out = BTreeMap::new();
+        // Keys in self
+        for (k, a) in s.iter() {
+            if let Some(b) = o.get(k) {
+                let sel = a.exclusive_or(b);
+                if !sel.is_empty() {
+                    out.insert(k.clone(), sel);
+                }
+            } else {
+                // Key only in self: include it
+                out.insert(k.clone(), a.clone());
+            }
+        }
+        // Keys only in other
+        for (k, b) in o {
+            if !&s.contains_key(&k) {
+                out.insert(k.clone(), b.clone());
+            }
+        }
+        RealSelection(out).into()
+    }
+
+}
+
+impl Emptyable for DatasetSelection {
+    fn empty() -> Self {
+        Self::Empty
+    }
+    fn is_empty(&self) -> bool {
+        match self {
+            Self::Selection(s) => s.is_empty(),
+            Self::NoSelectionMade | Self::Empty => true,
+        }
+    }
+}
+
+
 impl SetOperations for DatasetSelection {
-    fn union(&self, other: &DatasetSelection) -> DatasetSelection {
+    fn union(&self, other: &Self) -> Self {
         match (self, other) {
             (Self::Selection(s), Self::Selection(o)) => {
-                if s.is_empty() {
-                    return other.clone();
-                }
-                if o.is_empty() {
-                    return self.clone();
-                }
-                let mut out = s.clone();
-                for (k, v) in o {
-                    out.entry(k.clone())
-                        .and_modify(|cur| *cur = cur.union(v))
-                        .or_insert_with(|| v.clone());
-                }
-                DatasetSelection::Selection(out)
+                Self::Selection(s.union(o))
             },
             // NoSelectionMade means "all chunks" - union with all is all
             (Self::NoSelectionMade, _) | (_, Self::NoSelectionMade) => Self::NoSelectionMade,
@@ -341,16 +489,7 @@ impl SetOperations for DatasetSelection {
     fn intersect(&self, other: &DatasetSelection) -> DatasetSelection {
         match (self, other) {
             (Self::Selection(s), Self::Selection(o)) => {
-                let mut out = BTreeMap::new();
-                for (k, a) in s {
-                    if let Some(b) = o.get(k) {
-                        let sel = a.intersect(b);
-                        if !sel.is_empty() {
-                            out.insert(k.clone(), sel);
-                        }
-                    }
-                }
-                DatasetSelection::Selection(out)
+                Self::Selection(s.intersect(o))
             }
             (Self::NoSelectionMade, _) => other.clone(),
             (_, Self::NoSelectionMade) => self.clone(),
@@ -362,19 +501,7 @@ impl SetOperations for DatasetSelection {
     fn difference(&self, other: &DatasetSelection) -> DatasetSelection {
         match (self, other) {
             (Self::Selection(s), Self::Selection(o)) => {
-                let mut out = BTreeMap::new();
-                for (k, a) in s {
-                    if let Some(b) = o.get(k) {
-                        let sel = a.difference(b);
-                        if !sel.is_empty() {
-                            out.insert(k.clone(), sel);
-                        }
-                    } else {
-                        // Key only in self: keep it (we're subtracting nothing)
-                        out.insert(k.clone(), a.clone());
-                    }
-                }
-                DatasetSelection::Selection(out)
+                Self::Selection(s.difference(o))
             }
             // NoSelectionMade - X = can't represent complement, stay conservative
             (Self::NoSelectionMade, _) => Self::NoSelectionMade,
@@ -390,26 +517,8 @@ impl SetOperations for DatasetSelection {
     fn exclusive_or(&self, other: &DatasetSelection) -> DatasetSelection {
         match (self, other) {
             (Self::Selection(s), Self::Selection(o)) => {
-                let mut out = BTreeMap::new();
-                // Keys in self
-                for (k, a) in s {
-                    if let Some(b) = o.get(k) {
-                        let sel = a.exclusive_or(b);
-                        if !sel.is_empty() {
-                            out.insert(k.clone(), sel);
-                        }
-                    } else {
-                        // Key only in self: include it
-                        out.insert(k.clone(), a.clone());
-                    }
-                }
-                // Keys only in other
-                for (k, b) in o {
-                    if !s.contains_key(k) {
-                        out.insert(k.clone(), b.clone());
-                    }
-                }
-                DatasetSelection::Selection(out)
+
+                Self::Selection(s.exclusive_or(o))
             }
             // NoSelectionMade XOR X = can't represent complement, stay conservative
             (Self::NoSelectionMade, _) | (_, Self::NoSelectionMade) => Self::NoSelectionMade,
@@ -419,19 +528,20 @@ impl SetOperations for DatasetSelection {
         }
     }
 
-    fn is_empty(&self) -> bool {
-        match self {
-            Self::Selection(s) => s.is_empty(),
-            Self::NoSelectionMade | Self::Empty => true,
-        }
-    }
 }
 
-impl SetOperations for DataArraySelection {
 
+impl Emptyable for DataArraySelection {
+    fn empty() -> Self {
+        Self::empty()
+    }
     fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
+}
+
+
+impl SetOperations for DataArraySelection {
 
     fn union(&self, other: &DataArraySelection) -> DataArraySelection {
         if self.is_empty() {

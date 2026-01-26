@@ -2,11 +2,11 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use zarrs::array::Array;
 
-use crate::chunk_plan::exprs::errors::CompileError;
-use super::selection::{DataArraySelection, DatasetSelection, HyperRectangleSelection, RangeList};
-use super::types::DimChunkRange;
+use crate::chunk_plan::CompileError;
+use super::{DataArraySelection, Emptyable, DatasetSelection, HyperRectangleSelection, RangeList, DSelection};
+use super::DimChunkRange;
 use crate::meta::ZarrDatasetMeta;
-use super::selection::SetOperations;
+use super::SetOperations;
 
 fn chunk_ranges_for_range_list(
     ranges: &RangeList,

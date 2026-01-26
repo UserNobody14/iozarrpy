@@ -6,8 +6,9 @@ use zarrs::array::Array;
 
 use crate::chunk_plan::{
     compile_expr_to_chunk_plan, compile_expr_to_dataset_selection,
-    plan_dataset_chunk_indices, ChunkPlan,
+    plan_dataset_chunk_indices, ChunkPlan
 };
+use crate::chunk_plan::DSelection;
 use crate::meta::open_and_load_dataset_meta;
 use crate::py::expr_extract::extract_expr;
 

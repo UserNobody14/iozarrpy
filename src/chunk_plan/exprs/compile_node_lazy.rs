@@ -7,7 +7,7 @@ use super::compile_ctx::LazyCompileCtx;
 use super::errors::CompileError;
 use super::literals::{col_lit, literal_anyvalue, literal_to_scalar, reverse_operator, strip_wrappers};
 use super::compile_node::{collect_column_refs, collect_selector_refs};
-use super::SetOperations;
+use super::{SetOperations, Emptyable};
 use crate::chunk_plan::prelude::*;
 use crate::chunk_plan::indexing::lazy_selection::{
     LazyArraySelection, LazyDatasetSelection, LazyDimConstraint, LazyHyperRectangle,

@@ -8,9 +8,10 @@
 //!
 //! This enables efficient I/O batching and concurrent resolution for async stores.
 
-use crate::chunk_plan::exprs::compile_node_lazy::compile_node_lazy;
-use crate::chunk_plan::exprs::compile_ctx::LazyCompileCtx;
-use crate::chunk_plan::exprs::errors::CompileError;
+use crate::chunk_plan::exprs::compile_node_lazy;
+use crate::chunk_plan::exprs::LazyCompileCtx;
+use crate::chunk_plan::exprs::CompileError;
+use crate::chunk_plan::indexing::DataArraySelection;
 use crate::chunk_plan::indexing::monotonic_scalar::MonotonicCoordResolver;
 use crate::chunk_plan::indexing::plan::{ChunkPlan, ChunkPlanNode};
 use crate::chunk_plan::prelude::*;

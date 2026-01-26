@@ -3,7 +3,8 @@
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyDict};
 use pyo3_async_runtimes::tokio::future_into_py;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
+use crate::chunk_plan::DataArraySelection;
 
 use crate::chunk_plan::{
     collect_requests_with_meta, compile_expr_to_lazy_selection, resolve_lazy_selection_sync,

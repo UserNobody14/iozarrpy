@@ -14,7 +14,7 @@ use super::lazy_selection::{
 };
 use super::resolver_traits::{ResolutionCache, ResolutionError, ResolutionRequest};
 use super::selection::{
-    DataArraySelection, DatasetSelection, HyperRectangleSelection, RangeList, SetOperations,
+    DataArraySelection, DatasetSelection, HyperRectangleSelection, RangeList, SetOperations, Emptyable,
 };
 use super::types::{IndexRange, ValueRange};
 
@@ -104,7 +104,7 @@ pub(crate) fn materialize(
             if out.is_empty() {
                 Ok(DatasetSelection::Empty)
             } else {
-                Ok(DatasetSelection::Selection(out))
+                Ok(DatasetSelection::Selection(out.into()))
             }
         }
     }
@@ -267,42 +267,6 @@ fn materialize_constraint(
             Ok(result)
         }
     }
-}
-
-/// Helper to materialize with dimension length clamping.
-#[allow(dead_code)]
-pub(crate) fn materialize_with_dim_lengths(
-    selection: &LazyDatasetSelection,
-    cache: &dyn ResolutionCache,
-    dim_lengths: &BTreeMap<String, u64>,
-) -> Result<DatasetSelection, ResolutionError> {
-    let mut base = materialize(selection, cache)?;
-
-    // Clamp all range lists to their dimension lengths
-    if let DatasetSelection::Selection(ref mut sel) = base {
-        for array_sel in sel.values_mut() {
-            for rect in &mut array_sel.0 {
-                // Collect updates first to avoid borrow conflict
-                let updates: Vec<_> = rect
-                    .dims()
-                    .filter_map(|(dim_name, range_list)| {
-                        dim_lengths.get(dim_name).map(|&len| {
-                            (dim_name.to_string(), range_list.clamp_to_len(len))
-                        })
-                    })
-                    .collect();
-
-                // Apply updates
-                let mut new_rect = rect.clone();
-                for (dim_name, clamped) in updates {
-                    new_rect = new_rect.with_dim(dim_name, clamped);
-                }
-                *rect = new_rect;
-            }
-        }
-    }
-
-    Ok(base)
 }
 
 // ============================================================================
