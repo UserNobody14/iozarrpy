@@ -2386,6 +2386,8 @@ version = "0.27.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ab53c047fcd1a1d2a8820fe84f05d6be69e9526be40cb03b73f86b6b03e6d87d"
 dependencies = [
+ "chrono",
+ "indexmap",
  "indoc",
  "libc",
  "memoffset",
@@ -2452,6 +2454,29 @@ dependencies = [
  "pyo3-build-config",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "pyo3-object_store"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a8b80a3a9af26abe307d2c01c13da487166c5c8ac5ac301a4d8e3c270e58ab50"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "chrono",
+ "futures",
+ "http",
+ "humantime",
+ "itertools",
+ "object_store",
+ "percent-encoding",
+ "pyo3",
+ "pyo3-async-runtimes",
+ "serde",
+ "thiserror 1.0.69",
+ "tokio",
+ "url",
 ]
 
 [[package]]
@@ -2593,6 +2618,7 @@ dependencies = [
  "polars-lazy",
  "pyo3",
  "pyo3-async-runtimes",
+ "pyo3-object_store",
  "pyo3-polars",
  "regex",
  "regex-syntax",

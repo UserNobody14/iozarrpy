@@ -3,7 +3,7 @@ use super::open_arrays::open_arrays_async;
 use super::prelude::*;
 
 pub(crate) async fn scan_zarr_df_async(
-    zarr_url: String,
+    store_input: StoreInput,
     expr: Expr,
     variables: Option<Vec<String>>,
     max_concurrency: Option<usize>,
@@ -11,7 +11,7 @@ pub(crate) async fn scan_zarr_df_async(
 ) -> Result<DataFrame, PyErr> {
     // Async open + async meta traversal.
     let (opened_async, meta) =
-        open_and_load_dataset_meta_async(&zarr_url).await.map_err(to_py_err)?;
+        open_and_load_dataset_meta_from_input_async(store_input).await.map_err(to_py_err)?;
 
     let vars = variables.unwrap_or_else(|| meta.data_vars.clone());
     if vars.is_empty() {

@@ -5,18 +5,19 @@ use pyo3_polars::PySchema;
 use zarrs::array::Array;
 
 use crate::chunk_plan::ChunkPlan;
+use crate::store::StoreInput;
 
 use super::{DEFAULT_BATCH_SIZE, ZarrSource};
 
 impl ZarrSource {
     pub(super) fn new_impl(
-        zarr_url: String,
+        store_input: StoreInput,
         batch_size: Option<usize>,
         n_rows: Option<usize>,
         variables: Option<Vec<String>>,
         max_chunks_to_read: Option<usize>,
     ) -> PyResult<Self> {
-        let (opened, meta) = crate::meta::open_and_load_dataset_meta(&zarr_url)
+        let (opened, meta) = crate::meta::open_and_load_dataset_meta_from_input(store_input)
             .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
 
         let store = opened.store.clone();

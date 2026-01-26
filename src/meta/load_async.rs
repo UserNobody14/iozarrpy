@@ -7,12 +7,21 @@ use crate::meta::dims::{default_dims, dims_for_array, leaf_name};
 use crate::meta::dtype::zarr_dtype_to_polars;
 use crate::meta::time_encoding::extract_time_encoding;
 use crate::meta::types::{ZarrArrayMeta, ZarrDatasetMeta};
-use crate::store::{open_store_async, AsyncOpenedStore};
+use crate::store::{open_store_async, AsyncOpenedStore, StoreInput};
 
 pub async fn open_and_load_dataset_meta_async(
     zarr_url: &str,
 ) -> Result<(AsyncOpenedStore, ZarrDatasetMeta), String> {
     let opened = open_store_async(zarr_url)?;
+    let meta = load_dataset_meta_from_opened_async(&opened).await?;
+    Ok((opened, meta))
+}
+
+/// Open and load dataset metadata from a StoreInput (URL string or ObjectStore instance).
+pub async fn open_and_load_dataset_meta_from_input_async(
+    store_input: StoreInput,
+) -> Result<(AsyncOpenedStore, ZarrDatasetMeta), String> {
+    let opened = store_input.open_async()?;
     let meta = load_dataset_meta_from_opened_async(&opened).await?;
     Ok((opened, meta))
 }

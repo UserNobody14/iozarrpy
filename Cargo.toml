@@ -129,6 +129,7 @@ regex = "1.9"
 regex-syntax = "0.8.5"
 smallvec = "1.13"
 async-trait = "0.1"
+pyo3-object_store = "0.8"
 
 [profile.release]
 lto = "fat"

@@ -6,6 +6,7 @@ use url::Url;
 use zarrs::storage::storage_adapter::async_to_sync::AsyncToSyncStorageAdapter;
 use zarrs::storage::{AsyncReadableWritableListableStorage, ReadableWritableListableStorage};
 use zarrs_object_store::object_store;
+use zarrs_object_store::object_store::ObjectStore;
 use zarrs_object_store::AsyncObjectStore;
 
 use crate::store::adapters::TokioBlockOn;
@@ -14,6 +15,35 @@ pub struct OpenedStore {
     pub store: ReadableWritableListableStorage,
     /// Root node path to pass to zarrs open functions (always starts with `/`).
     pub root: String,
+}
+
+/// Create a sync store from an already-constructed `Arc<dyn ObjectStore>`.
+///
+/// This is used when the user passes an obstore instance directly instead of a URL.
+pub fn open_store_from_object_store(
+    store: Arc<dyn ObjectStore>,
+    prefix: Option<String>,
+) -> Result<OpenedStore, String> {
+    let async_store: AsyncReadableWritableListableStorage = Arc::new(AsyncObjectStore::new(store));
+    let rt = Arc::new(
+        Runtime::new().map_err(|e| format!("failed to create tokio runtime: {e}"))?,
+    );
+    let sync_store = AsyncToSyncStorageAdapter::new(async_store, TokioBlockOn(rt));
+
+    let root = prefix
+        .map(|p| {
+            if p.starts_with('/') {
+                p
+            } else {
+                format!("/{p}")
+            }
+        })
+        .unwrap_or_else(|| "/".to_string());
+
+    Ok(OpenedStore {
+        store: Arc::new(sync_store),
+        root,
+    })
 }
 
 /// Open a Zarr store from a URL or filesystem path.

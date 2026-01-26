@@ -5,6 +5,7 @@ use url::Url;
 use zarrs::storage::storage_adapter::sync_to_async::SyncToAsyncStorageAdapter;
 use zarrs::storage::{AsyncReadableWritableListableStorage, ReadableWritableListableStorage};
 use zarrs_object_store::object_store;
+use zarrs_object_store::object_store::ObjectStore;
 use zarrs_object_store::AsyncObjectStore;
 
 use crate::store::adapters::TokioSpawnBlocking;
@@ -13,6 +14,29 @@ pub struct AsyncOpenedStore {
     pub store: AsyncReadableWritableListableStorage,
     /// Root node path to pass to zarrs open functions (always starts with `/`).
     pub root: String,
+}
+
+/// Create an async store from an already-constructed `Arc<dyn ObjectStore>`.
+///
+/// This is used when the user passes an obstore instance directly instead of a URL.
+pub fn open_store_from_object_store_async(
+    store: Arc<dyn ObjectStore>,
+    prefix: Option<String>,
+) -> AsyncOpenedStore {
+    let async_store: AsyncReadableWritableListableStorage = Arc::new(AsyncObjectStore::new(store));
+    let root = prefix
+        .map(|p| {
+            if p.starts_with('/') {
+                p
+            } else {
+                format!("/{p}")
+            }
+        })
+        .unwrap_or_else(|| "/".to_string());
+    AsyncOpenedStore {
+        store: async_store,
+        root,
+    }
 }
 
 /// Async-first store opener.

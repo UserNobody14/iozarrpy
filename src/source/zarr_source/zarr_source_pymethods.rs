@@ -2,20 +2,24 @@ use pyo3::prelude::*;
 use pyo3::types::PyAny;
 use pyo3_polars::{PyDataFrame, PySchema};
 
+use crate::store::StoreInput;
+
 use super::ZarrSource;
 
 #[pymethods]
 impl ZarrSource {
     #[new]
-    #[pyo3(signature = (zarr_url, batch_size, n_rows, variables=None, max_chunks_to_read=None))]
+    #[pyo3(signature = (store, batch_size, n_rows, variables=None, max_chunks_to_read=None, prefix=None))]
     fn new(
-        zarr_url: String,
+        store: &Bound<'_, PyAny>,
         batch_size: Option<usize>,
         n_rows: Option<usize>,
         variables: Option<Vec<String>>,
         max_chunks_to_read: Option<usize>,
+        prefix: Option<String>,
     ) -> PyResult<Self> {
-        Self::new_impl(zarr_url, batch_size, n_rows, variables, max_chunks_to_read)
+        let store_input = StoreInput::from_py(store, prefix)?;
+        Self::new_impl(store_input, batch_size, n_rows, variables, max_chunks_to_read)
     }
 
     fn schema(&self) -> PySchema {
