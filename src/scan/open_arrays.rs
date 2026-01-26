@@ -1,6 +1,6 @@
 use super::prelude::*;
 
-pub(super) async fn open_arrays_async(
+pub(crate) async fn open_arrays_async(
     store: zarrs::storage::AsyncReadableWritableListableStorage,
     meta: &ZarrDatasetMeta,
     vars: &[IStr],

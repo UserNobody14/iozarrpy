@@ -141,6 +141,103 @@ class ZarrSource:
     def next(self) -> pl.DataFrame | None: ...
 
 
+class ZarrBackend:
+    """Zarr backend with persistent caching across scans.
+    
+    The backend owns the store and caches coordinate array chunks and metadata
+    across multiple scan operations, making repeated queries more efficient.
+    
+    Examples:
+        >>> # Create a backend from URL
+        >>> backend = ZarrBackend.from_url("s3://bucket/dataset.zarr")
+        >>> 
+        >>> # Async scan with caching
+        >>> df1 = await backend.scan_zarr_async(pl.col("time") > datetime(2024, 1, 1))
+        >>> df2 = await backend.scan_zarr_async(pl.col("time") > datetime(2024, 6, 1))  # Uses cached coords
+        >>>
+        >>> # Check cache statistics
+        >>> stats = await backend.cache_stats()
+        >>> print(f"Cached {stats['coord_entries']} coordinate chunks")
+    """
+    
+    @staticmethod
+    def from_url(url: str, max_cache_entries: int = 0) -> ZarrBackend:
+        """Create a backend from a URL string.
+        
+        Args:
+            url: URL to the zarr store (e.g., "s3://bucket/path.zarr")
+            max_cache_entries: Maximum cached coord chunks (0 = unlimited)
+        """
+        ...
+    
+    @staticmethod
+    def from_store(
+        store: ObjectStore,
+        prefix: str | None = None,
+        max_cache_entries: int = 0,
+    ) -> ZarrBackend:
+        """Create a backend from an ObjectStore instance.
+        
+        Args:
+            store: ObjectStore instance (from rainbear.store or obstore)
+            prefix: Optional path prefix within the store
+            max_cache_entries: Maximum cached coord chunks (0 = unlimited)
+        """
+        ...
+    
+    def scan_zarr_async(
+        self,
+        predicate: pl.Expr,
+        variables: list[str] | None = None,
+        max_concurrency: int | None = None,
+        with_columns: list[str] | None = None,
+    ) -> Any:
+        """Async scan the zarr store and return a DataFrame.
+        
+        Uses the backend's cached coordinates for efficient predicate pushdown.
+        
+        Args:
+            predicate: Polars expression for filtering
+            variables: Optional list of variable names to read
+            max_concurrency: Maximum concurrent chunk reads
+            with_columns: Optional list of columns to include
+        
+        Returns:
+            An awaitable that resolves to a pl.DataFrame
+        """
+        ...
+    
+    def schema(self, variables: list[str] | None = None) -> Any:
+        """Get the schema for the zarr dataset.
+        
+        Args:
+            variables: Optional list of variable names to include
+        """
+        ...
+    
+    def root(self) -> str:
+        """Get the store root path."""
+        ...
+    
+    def clear_coord_cache(self) -> Any:
+        """Clear the coordinate cache (async)."""
+        ...
+    
+    def clear_all_caches(self) -> Any:
+        """Clear all caches - metadata and coordinates (async)."""
+        ...
+    
+    def cache_stats(self) -> Any:
+        """Get cache statistics (async).
+        
+        Returns:
+            An awaitable that resolves to a dict with:
+            - coord_entries: Number of cached coordinate chunks
+            - has_metadata: Whether metadata is cached
+        """
+        ...
+
+
 # Store module - provides ObjectStore builders with full connection pooling
 class store:
     """Object store builders for S3, GCS, Azure, HTTP, and local filesystem.

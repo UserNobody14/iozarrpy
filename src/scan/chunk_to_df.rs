@@ -1,6 +1,6 @@
 use super::prelude::*;
 
-pub(super) async fn chunk_to_df(
+pub(crate) async fn chunk_to_df(
     idx: Vec<u64>,
     primary: Arc<Array<dyn zarrs::storage::AsyncReadableWritableListableStorageTraits>>,
     meta: Arc<ZarrDatasetMeta>,

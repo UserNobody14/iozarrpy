@@ -26,6 +26,7 @@ pub(crate) fn init_module(m: &Bound<PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(scan_zarr_async, m)?)?;
 
     m.add_class::<crate::source::ZarrSource>()?;
+    m.add_class::<crate::backend::PyZarrBackend>()?;
 
     Ok(())
 }
