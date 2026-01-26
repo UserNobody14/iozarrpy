@@ -8,7 +8,6 @@ authors = [
 ]
 requires-python = ">=3.12"
 dependencies = [
-    "cartopy>=0.25.0",
     "polars==1.37.1",
 ]
 license = { file = "LICENSE" }
@@ -41,6 +40,9 @@ build-backend = "maturin"
 
 [dependency-groups]
 dev = [
+    "cartopy>=0.25.0",
+    "fsspec>=2026.1.0",
+    "xarray[complete]>=2025.12.0",
     "maturin>=1.10.2",
     "pytest>=8.0",
     "pytest-asyncio>=0.23.0",
@@ -53,6 +55,7 @@ dev = [
     "pytest-benchmark>=5.2.3",
     # Needed for FFI-plugin planning tests and for real-world Expr shapes.
     "interpolars>=0.1.0",
+    "gcsfs>=2026.1.0",
 ]
 
 build = [
