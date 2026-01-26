@@ -1,6 +1,7 @@
 use super::chunk_to_df::chunk_to_df;
 use super::open_arrays::open_arrays_async;
 use super::prelude::*;
+use crate::IntoIStr;
 
 pub(crate) async fn scan_zarr_df_async(
     store_input: StoreInput,
@@ -13,7 +14,10 @@ pub(crate) async fn scan_zarr_df_async(
     let (opened_async, meta) =
         open_and_load_dataset_meta_from_input_async(store_input).await.map_err(to_py_err)?;
 
-    let vars = variables.unwrap_or_else(|| meta.data_vars.clone());
+    // Convert from Python String to IStr at the boundary
+    let vars: Vec<IStr> = variables
+        .map(|v| v.into_iter().map(|s| s.istr()).collect())
+        .unwrap_or_else(|| meta.data_vars.clone());
     if vars.is_empty() {
         return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
             "no variables found/selected",
@@ -24,8 +28,8 @@ pub(crate) async fn scan_zarr_df_async(
     let primary_meta = meta.arrays.get(primary_var).ok_or_else(|| {
         PyErr::new::<pyo3::exceptions::PyValueError, _>("unknown primary variable")
     })?;
-    let dims = if !primary_meta.dims.is_empty() {
-        primary_meta.dims.clone()
+    let dims: Vec<IStr> = if !primary_meta.dims.is_empty() {
+        primary_meta.dims.iter().cloned().collect()
     } else {
         meta.dims.clone()
     };
@@ -41,7 +45,7 @@ pub(crate) async fn scan_zarr_df_async(
         &expr,
         &meta,
         opened_async.store.clone(),
-        primary_var,
+        primary_var.as_ref(),
     )
     .await
     {
@@ -68,7 +72,10 @@ pub(crate) async fn scan_zarr_df_async(
     let vars = Arc::new(vars);
     let var_arrays = Arc::new(var_arrays);
     let coord_arrays = Arc::new(coord_arrays);
-    let with_columns = Arc::new(with_columns);
+    // Convert with_columns to IStr
+    let with_columns: Arc<Option<BTreeSet<IStr>>> = Arc::new(
+        with_columns.map(|s| s.into_iter().map(|c| c.istr()).collect())
+    );
 
     let mut futs = FuturesUnordered::new();
     for idx in indices {

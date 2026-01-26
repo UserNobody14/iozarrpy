@@ -3,6 +3,7 @@ use pyo3::types::PyAny;
 use zarrs::array::Array;
 
 use crate::chunk_plan::{compile_expr_to_chunk_plan, ChunkPlan};
+use crate::IntoIStr;
 
 use super::{panic_to_py_err, to_py_err, ZarrSource};
 
@@ -21,7 +22,7 @@ impl ZarrSource {
 
         // Compile Expr -> candidate-chunk plan.
         let compiled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            compile_expr_to_chunk_plan(&expr, &self.meta, self.store.clone(), &self.vars[0])
+            compile_expr_to_chunk_plan(&expr, &self.meta, self.store.clone(), self.vars[0].as_ref())
         }))
         .map_err(|e| panic_to_py_err(e, "panic while compiling predicate chunk plan"))?;
 
@@ -35,7 +36,7 @@ impl ZarrSource {
             Err(_) => {
                 // Fall back to scanning all chunks if planning fails.
                 let primary_path = self.meta.arrays[&self.vars[0]].path.clone();
-                let primary = Array::open(self.store.clone(), &primary_path).map_err(to_py_err)?;
+                let primary = Array::open(self.store.clone(), primary_path.as_ref()).map_err(to_py_err)?;
                 let grid_shape = primary.chunk_grid().grid_shape().to_vec();
                 self.primary_grid_shape = grid_shape.clone();
                 self.chunk_iter = ChunkPlan::all(grid_shape).into_index_iter();
@@ -49,7 +50,7 @@ impl ZarrSource {
     }
 
     pub(super) fn set_with_columns_impl(&mut self, columns: Vec<String>) {
-        self.with_columns = Some(columns.into_iter().collect());
+        self.with_columns = Some(columns.into_iter().map(|s| s.istr()).collect());
     }
 }
 

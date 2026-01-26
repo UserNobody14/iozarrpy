@@ -1,3 +1,4 @@
+use crate::{IntoIStr, IStr};
 use crate::chunk_plan::prelude::*;
 use crate::chunk_plan::indexing::types::CoordScalar;
 
@@ -177,11 +178,11 @@ pub(super) fn literal_to_scalar(
     }
 }
 
-pub(super) fn col_lit(col_side: &Expr, lit_side: &Expr) -> Option<(String, LiteralValue)> {
+pub(super) fn col_lit(col_side: &Expr, lit_side: &Expr) -> Option<(IStr, LiteralValue)> {
     let col_side = strip_wrappers(col_side);
     let lit_side = strip_wrappers(lit_side);
     if let (Expr::Column(name), Expr::Literal(lit)) = (col_side, lit_side) {
-        Some((name.to_string(), lit.clone()))
+        Some((name.to_string().istr(), lit.clone()))
     } else {
         None
     }

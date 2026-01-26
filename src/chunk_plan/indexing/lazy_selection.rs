@@ -12,6 +12,7 @@ use smallvec::SmallVec;
 use super::selection::{ArraySubsetList, Emptyable};
 use super::types::ValueRange;
 use std::ops::Range;
+use crate::{IStr, IntoIStr};
 
 /// A per-dimension constraint in value-space (deferred resolution).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -50,7 +51,7 @@ impl LazyDimConstraint {
 /// Missing dimension keys mean "all indices along that dimension".
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct LazyHyperRectangle {
-    dims: BTreeMap<Arc<str>, LazyDimConstraint>,
+    dims: BTreeMap<IStr, LazyDimConstraint>,
     empty: bool,
 }
 
@@ -79,16 +80,16 @@ impl LazyHyperRectangle {
 
     /// Get constraint for a specific dimension.
     pub(crate) fn get_dim(&self, dim: &str) -> Option<&LazyDimConstraint> {
-        self.dims.get(dim)
+        self.dims.get(&dim.istr())
     }
 
     /// Iterate over all dimension constraints.
-    pub(crate) fn dims(&self) -> impl Iterator<Item = (&Arc<str>, &LazyDimConstraint)> {
+    pub(crate) fn dims(&self) -> impl Iterator<Item = (&IStr, &LazyDimConstraint)> {
         self.dims.iter()
     }
 
     /// Add a constraint to a dimension.
-    pub(crate) fn with_dim(mut self, dim: Arc<str>, constraint: LazyDimConstraint) -> Self {
+    pub(crate) fn with_dim(mut self, dim: IStr, constraint: LazyDimConstraint) -> Self {
         if constraint.is_empty() {
             self.empty = true;
             self.dims.clear();
@@ -102,11 +103,11 @@ impl LazyHyperRectangle {
 
     /// Add a constraint from a string dimension name.
     pub(crate) fn with_dim_str(self, dim: &str, constraint: LazyDimConstraint) -> Self {
-        self.with_dim(Arc::from(dim), constraint)
+        self.with_dim(dim.istr(), constraint)
     }
 
     /// Create a rectangle from a map of constraints.
-    pub(crate) fn with_dims(constraints: BTreeMap<Arc<str>, LazyDimConstraint>) -> Self {
+    pub(crate) fn with_dims(constraints: BTreeMap<IStr, LazyDimConstraint>) -> Self {
         let empty = constraints.values().any(|c| c.is_empty());
         Self { dims: constraints, empty }
     }
@@ -177,7 +178,7 @@ pub(crate) enum LazyDatasetSelection {
     /// Everything has been excluded.
     Empty,
     /// Standard selection mapping variables to their selections.
-    Selection(BTreeMap<String, LazyArraySelection>),
+    Selection(BTreeMap<IStr, LazyArraySelection>),
 }
 
 impl Default for LazyDatasetSelection {
@@ -200,7 +201,7 @@ impl LazyDatasetSelection {
     /// Iterate over variables and their selections.
     pub(crate) fn vars(&self) -> impl Iterator<Item = (&str, &LazyArraySelection)> {
         match self {
-            Self::Selection(sel) => Box::new(sel.iter().map(|(k, v)| (k.as_str(), v)))
+            Self::Selection(sel) => Box::new(sel.iter().map(|(k, v)| (k.as_ref(), v)))
                 as Box<dyn Iterator<Item = _>>,
             Self::NoSelectionMade | Self::Empty => Box::new(std::iter::empty()),
         }
@@ -209,7 +210,7 @@ impl LazyDatasetSelection {
 }
 
 /// Create a lazy dataset selection for the given variables with all indices selected.
-pub(crate) fn lazy_dataset_all_for_vars(vars: impl IntoIterator<Item = String>) -> LazyDatasetSelection {
+pub(crate) fn lazy_dataset_all_for_vars(vars: impl IntoIterator<Item = IStr>) -> LazyDatasetSelection {
     let mut m = BTreeMap::new();
     for v in vars {
         m.insert(v, LazyArraySelection::all());
@@ -219,7 +220,7 @@ pub(crate) fn lazy_dataset_all_for_vars(vars: impl IntoIterator<Item = String>) 
 
 /// Create a lazy dataset selection for the given variables with the specified selection.
 pub(crate) fn lazy_dataset_for_vars_with_selection(
-    vars: impl IntoIterator<Item = String>,
+    vars: impl IntoIterator<Item = IStr>,
     sel: LazyArraySelection,
 ) -> LazyDatasetSelection {
     let mut m = BTreeMap::new();
@@ -536,7 +537,7 @@ fn intersect_lazy_rectangles(a: &LazyHyperRectangle, b: &LazyHyperRectangle) -> 
     let mut result = LazyHyperRectangle::all();
 
     // Collect all dimension names from both rectangles
-    let all_dims: std::collections::BTreeSet<&Arc<str>> =
+    let all_dims: std::collections::BTreeSet<&IStr> =
         a.dims.keys().chain(b.dims.keys()).collect();
 
     for dim in all_dims {

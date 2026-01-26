@@ -1,6 +1,7 @@
 //! Compilation context for lazy chunk planning.
 
 use crate::chunk_plan::prelude::ZarrDatasetMeta;
+use crate::IStr;
 
 /// Compilation context for the lazy compilation path.
 ///
@@ -8,18 +9,18 @@ use crate::chunk_plan::prelude::ZarrDatasetMeta;
 /// and resolved in a separate batch phase.
 pub(crate) struct LazyCompileCtx<'a> {
     pub(crate) meta: &'a ZarrDatasetMeta,
-    pub(crate) dims: &'a [String],
+    pub(crate) dims: &'a [IStr],
     pub(crate) dim_lengths: &'a [u64],
-    pub(crate) vars: &'a [String],
+    pub(crate) vars: &'a [IStr],
 }
 
 impl<'a> LazyCompileCtx<'a> {
     /// Create a new lazy compilation context.
     pub(crate) fn new(
         meta: &'a ZarrDatasetMeta,
-        dims: &'a [String],
+        dims: &'a [IStr],
         dim_lengths: &'a [u64],
-        vars: &'a [String],
+        vars: &'a [IStr],
     ) -> Self {
         Self {
             meta,
@@ -31,7 +32,7 @@ impl<'a> LazyCompileCtx<'a> {
 
     /// Get the index of a dimension by name.
     pub(crate) fn dim_index(&self, dim: &str) -> Option<usize> {
-        self.dims.iter().position(|d| d == dim)
+        self.dims.iter().position(|d| <IStr as AsRef<str>>::as_ref(d) == dim)
     }
 
     /// Get the length of a dimension by index.
@@ -41,6 +42,6 @@ impl<'a> LazyCompileCtx<'a> {
 
     /// Check if a column is a dimension.
     pub(crate) fn is_dimension(&self, col: &str) -> bool {
-        self.dims.contains(&col.to_string())
+        self.dims.iter().any(|d| <IStr as AsRef<str>>::as_ref(d) == col)
     }
 }

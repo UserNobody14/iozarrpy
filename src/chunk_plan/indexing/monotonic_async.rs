@@ -14,6 +14,7 @@ use super::resolver_traits::{AsyncCoordResolver, HashMapCache, ResolutionCache, 
 use super::types::{BoundKind, CoordScalar, IndexRange, ValueRange};
 use crate::meta::ZarrDatasetMeta;
 use crate::chunk_plan::exprs;
+use crate::IStr;
 
 use zarrs::array::Array;
 
@@ -60,7 +61,7 @@ impl AsyncCoordResolver for AsyncMonotonicResolver {
         let mut cache = HashMapCache::new();
 
         // Group requests by dimension to minimize array opens
-        let mut by_dim: BTreeMap<Arc<str>, Vec<(ResolutionRequest, ValueRange)>> = BTreeMap::new();
+        let mut by_dim: BTreeMap<IStr, Vec<(ResolutionRequest, ValueRange)>> = BTreeMap::new();
         for req in requests {
             by_dim
                 .entry(req.dim.clone())
@@ -386,7 +387,7 @@ impl DimResolver {
 
 /// Resolve all requests for a single dimension.
 async fn resolve_dimension_async(
-    dim: &str,
+    dim: &IStr,
     requests: Vec<(ResolutionRequest, ValueRange)>,
     meta: &ZarrDatasetMeta,
     store: zarrs::storage::AsyncReadableWritableListableStorage,

@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+use smallvec::SmallVec;
 use zarrs::array::Array;
 use zarrs::hierarchy::NodeMetadata;
 
@@ -8,6 +9,7 @@ use crate::meta::dtype::zarr_dtype_to_polars;
 use crate::meta::time_encoding::extract_time_encoding;
 use crate::meta::types::{ZarrArrayMeta, ZarrDatasetMeta};
 use crate::store::{open_store_async, AsyncOpenedStore, StoreInput};
+use crate::{IStr, IntoIStr};
 
 pub async fn open_and_load_dataset_meta_async(
     zarr_url: &str,
@@ -37,25 +39,25 @@ pub async fn load_dataset_meta_from_opened_async(
         .map_err(to_string_err)?;
     let nodes = group.async_traverse().await.map_err(to_string_err)?;
 
-    let mut arrays: BTreeMap<String, ZarrArrayMeta> = BTreeMap::new();
-    let mut seen_names: BTreeMap<String, usize> = BTreeMap::new();
-    let mut dims_seen: BTreeSet<String> = BTreeSet::new();
-    let mut dims_ordered: Vec<String> = Vec::new();
-    let mut coord_candidates = BTreeMap::new();
-    let mut primary_dims: Option<Vec<String>> = None;
+    let mut arrays: BTreeMap<IStr, ZarrArrayMeta> = BTreeMap::new();
+    let mut seen_names: BTreeMap<IStr, usize> = BTreeMap::new();
+    let mut dims_seen: BTreeSet<IStr> = BTreeSet::new();
+    let mut dims_ordered: Vec<IStr> = Vec::new();
+    let mut coord_candidates: BTreeMap<IStr, (Vec<u64>, _)> = BTreeMap::new();
+    let mut primary_dims: Option<SmallVec<[IStr; 4]>> = None;
     let mut max_ndim = 0usize;
     // Collect auxiliary coordinates from "coordinates" attribute (CF convention)
-    let mut aux_coords: BTreeSet<String> = BTreeSet::new();
+    let mut aux_coords: BTreeSet<IStr> = BTreeSet::new();
 
     for (path, md) in nodes {
         let NodeMetadata::Array(array_md) = md else {
             continue;
         };
 
-        let path_str = path.as_str().to_string();
-        let leaf = leaf_name(&path_str);
+        let path_str = path.as_str().istr();
+        let leaf = leaf_name(path_str.as_ref());
 
-        let array = Array::new_with_metadata(store.clone(), &path_str, array_md.clone())
+        let array = Array::new_with_metadata(store.clone(), path_str.as_ref(), array_md.clone())
             .map_err(to_string_err)?;
 
         let shape = array.shape().to_vec();
@@ -82,7 +84,7 @@ pub async fn load_dataset_meta_from_opened_async(
         if let Some(attrs) = array.attributes().get("coordinates") {
             if let Some(coord_str) = attrs.as_str() {
                 for coord_name in coord_str.split_whitespace() {
-                    aux_coords.insert(coord_name.to_string());
+                    aux_coords.insert(coord_name.istr());
                 }
             }
         }
@@ -97,7 +99,7 @@ pub async fn load_dataset_meta_from_opened_async(
             }
             Some(n) => {
                 *n += 1;
-                format!("{leaf}__{n}")
+                format!("{leaf}__{n}").istr()
             }
         };
 
@@ -113,10 +115,12 @@ pub async fn load_dataset_meta_from_opened_async(
         );
     }
 
-    let dims: Vec<String> = primary_dims.unwrap_or(dims_ordered);
+    let dims: Vec<IStr> = primary_dims
+        .map(|pd| pd.into_iter().collect())
+        .unwrap_or(dims_ordered);
 
     // Collect dimension coordinate arrays (1D arrays matching their dimension name)
-    let mut coords: BTreeSet<String> = BTreeSet::new();
+    let mut coords: BTreeSet<IStr> = BTreeSet::new();
     for dim in &dims {
         if let Some((shape, _dtype)) = coord_candidates.get(dim)
             && shape.len() == 1
@@ -132,7 +136,7 @@ pub async fn load_dataset_meta_from_opened_async(
         }
     }
 
-    let data_vars: Vec<String> = arrays
+    let data_vars: Vec<IStr> = arrays
         .keys()
         .filter(|k| !coords.contains(*k))
         .cloned()

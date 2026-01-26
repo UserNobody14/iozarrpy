@@ -4,11 +4,11 @@ pub(super) async fn chunk_to_df(
     idx: Vec<u64>,
     primary: Arc<Array<dyn zarrs::storage::AsyncReadableWritableListableStorageTraits>>,
     meta: Arc<ZarrDatasetMeta>,
-    dims: Arc<Vec<String>>,
-    _vars: Arc<Vec<String>>,
-    var_arrays: Arc<Vec<(String, Arc<Array<dyn zarrs::storage::AsyncReadableWritableListableStorageTraits>>)>>,
-    coord_arrays: Arc<Vec<(String, Arc<Array<dyn zarrs::storage::AsyncReadableWritableListableStorageTraits>>)>>,
-    with_columns: Arc<Option<BTreeSet<String>>>,
+    dims: Arc<Vec<IStr>>,
+    _vars: Arc<Vec<IStr>>,
+    var_arrays: Arc<Vec<(IStr, Arc<Array<dyn zarrs::storage::AsyncReadableWritableListableStorageTraits>>)>>,
+    coord_arrays: Arc<Vec<(IStr, Arc<Array<dyn zarrs::storage::AsyncReadableWritableListableStorageTraits>>)>>,
+    with_columns: Arc<Option<BTreeSet<IStr>>>,
 ) -> Result<DataFrame, PyErr> {
     // Compute primary chunk geometry.
     let chunk_shape_nz = primary.chunk_shape(&idx).map_err(to_py_err)?;
@@ -66,7 +66,7 @@ pub(super) async fn chunk_to_df(
             (dim_name, dim_len_usize, coord)
         });
     }
-    let mut coord_slices: std::collections::BTreeMap<String, ColumnData> = Default::default();
+    let mut coord_slices: std::collections::BTreeMap<IStr, ColumnData> = Default::default();
     while let Some((name, expected_len, res)) = coord_reads.next().await {
         let coord = res.map_err(to_py_err)?;
         if coord.len() != expected_len {
@@ -100,12 +100,13 @@ pub(super) async fn chunk_to_df(
         let idx = idx.clone();
         let chunk_shape = chunk_shape.clone();
         var_reads.push(async move {
-            let (var_chunk_indices, var_offsets) = if var_meta.dims.len() == dims.len()
-                && var_meta.dims == *dims
+            let var_meta_dims: Vec<IStr> = var_meta.dims.iter().cloned().collect();
+            let (var_chunk_indices, var_offsets) = if var_meta_dims.len() == dims.len()
+                && var_meta_dims == *dims
             {
                 (idx.clone(), vec![0; dims.len()])
             } else {
-                compute_var_chunk_info_async(&idx, &chunk_shape, &dims, &var_meta.dims, &arr)
+                compute_var_chunk_info_async(&idx, &chunk_shape, &dims, &var_meta_dims, &arr)
                     .map_err(to_py_err)?
             };
 
@@ -127,7 +128,7 @@ pub(super) async fn chunk_to_df(
         });
     }
 
-    let mut var_chunks: Vec<(String, ColumnData, Vec<String>, Vec<u64>, Vec<u64>)> = Vec::new();
+    let mut var_chunks: Vec<(IStr, ColumnData, SmallVec<[IStr; 4]>, Vec<u64>, Vec<u64>)> = Vec::new();
     while let Some(r) = var_reads.next().await {
         var_chunks.push(r?);
     }
@@ -151,6 +152,7 @@ pub(super) async fn chunk_to_df(
             .get(dim_name)
             .and_then(|m| m.time_encoding.as_ref());
 
+        let dim_name_str: &str = dim_name.as_ref();
         if let Some(te) = time_encoding {
             let mut out_i64: Vec<i64> = Vec::with_capacity(keep.len());
             for &row in &keep {
@@ -169,13 +171,13 @@ pub(super) async fn chunk_to_df(
                 out_i64.push(ns);
             }
             let series = if te.is_duration {
-                Series::new(dim_name.into(), &out_i64)
+                Series::new(dim_name_str.into(), &out_i64)
                     .cast(&DataType::Duration(TimeUnit::Nanoseconds))
-                    .unwrap_or_else(|_| Series::new(dim_name.into(), out_i64))
+                    .unwrap_or_else(|_| Series::new(dim_name_str.into(), out_i64))
             } else {
-                Series::new(dim_name.into(), &out_i64)
+                Series::new(dim_name_str.into(), &out_i64)
                     .cast(&DataType::Datetime(TimeUnit::Nanoseconds, None))
-                    .unwrap_or_else(|_| Series::new(dim_name.into(), out_i64))
+                    .unwrap_or_else(|_| Series::new(dim_name_str.into(), out_i64))
             };
             cols.push(series.into());
         } else if let Some(coord) = coord_slices.get(dim_name)
@@ -186,7 +188,7 @@ pub(super) async fn chunk_to_df(
                 let local = (row as u64 / strides[d]) % chunk_shape[d];
                 out_f64.push(coord.get_f64(local as usize).unwrap());
             }
-            cols.push(Series::new(dim_name.into(), out_f64).into());
+            cols.push(Series::new(dim_name_str.into(), out_f64).into());
         } else {
             let mut out_i64: Vec<i64> = Vec::with_capacity(keep.len());
             for &row in &keep {
@@ -201,15 +203,16 @@ pub(super) async fn chunk_to_df(
                     out_i64.push((origin[d] + local) as i64);
                 }
             }
-            cols.push(Series::new(dim_name.into(), out_i64).into());
+            cols.push(Series::new(dim_name_str.into(), out_i64).into());
         }
     }
 
     // Variable columns.
     for (name, data, var_dims, var_chunk_shape, var_offsets) in var_chunks {
-        if var_dims.len() == dims.len() && var_dims == *dims && var_offsets.iter().all(|&o| o == 0)
+        let var_dims_vec: Vec<IStr> = var_dims.iter().cloned().collect();
+        if var_dims_vec.len() == dims.len() && var_dims_vec == *dims && var_offsets.iter().all(|&o| o == 0)
         {
-            cols.push(data.take_indices(&keep).into_series(&name).into());
+            cols.push(data.take_indices(&keep).into_series(name.as_ref()).into());
         } else {
             let dim_mapping: Vec<Option<usize>> = dims
                 .iter()
@@ -230,7 +233,7 @@ pub(super) async fn chunk_to_df(
                     var_idx as usize
                 })
                 .collect();
-            cols.push(data.take_indices(&indices).into_series(&name).into());
+            cols.push(data.take_indices(&indices).into_series(name.as_ref()).into());
         }
     }
 

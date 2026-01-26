@@ -11,6 +11,7 @@ use crate::chunk_plan::exprs::literals;
 use crate::chunk_plan::prelude::*;
 use super::types::{BoundKind, CoordScalar, IndexRange, ValueRange};
 use super::resolver_traits::{HashMapCache, ResolutionCache, ResolutionRequest, SyncCoordResolver};
+use crate::{IStr, IntoIStr};
 
 /// Cached chunk data for a coordinate array.
 ///
@@ -40,12 +41,12 @@ pub(crate) struct MonotonicCoordResolver<'a> {
     meta: &'a ZarrDatasetMeta,
     store: zarrs::storage::ReadableWritableListableStorage,
     coord_arrays:
-        BTreeMap<String, Array<dyn zarrs::storage::ReadableWritableListableStorageTraits>>,
+        BTreeMap<IStr, Array<dyn zarrs::storage::ReadableWritableListableStorageTraits>>,
     /// Chunk cache: (dim, chunk_idx) -> decoded chunk data
-    chunk_cache: BTreeMap<(String, u64), ChunkData>,
+    chunk_cache: BTreeMap<(IStr, u64), ChunkData>,
     /// Number of chunk reads (I/O operations)
     chunk_read_count: Arc<AtomicU64>,
-    monotonic_cache: BTreeMap<String, Option<MonotonicDirection>>,
+    monotonic_cache: BTreeMap<IStr, Option<MonotonicDirection>>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -80,14 +81,15 @@ impl<'a> MonotonicCoordResolver<'a> {
     {
         use std::collections::btree_map::Entry;
 
-        let Some(m) = self.meta.arrays.get(dim) else {
+        let dim_key = dim.istr();
+        let Some(m) = self.meta.arrays.get(&dim_key) else {
             return Err(ResolveError::MissingCoord(dim.to_string()));
         };
 
-        match self.coord_arrays.entry(dim.to_string()) {
+        match self.coord_arrays.entry(dim_key) {
             Entry::Occupied(o) => Ok(&*o.into_mut()),
             Entry::Vacant(v) => {
-                let arr = Array::open(self.store.clone(), &m.path)
+                let arr = Array::open(self.store.clone(), m.path.as_ref())
                     .map_err(|e| ResolveError::Zarr(e.to_string()))?;
                 Ok(&*v.insert(arr))
             }
@@ -105,7 +107,8 @@ impl<'a> MonotonicCoordResolver<'a> {
 
     /// Load a chunk and cache it.
     fn load_chunk(&mut self, dim: &str, chunk_idx: u64) -> Result<(), ResolveError> {
-        let cache_key = (dim.to_string(), chunk_idx);
+        let dim_key = dim.istr();
+        let cache_key = (dim_key.clone(), chunk_idx);
         if self.chunk_cache.contains_key(&cache_key) {
             return Ok(());
         }
@@ -113,7 +116,7 @@ impl<'a> MonotonicCoordResolver<'a> {
         let _meta = self
             .meta
             .arrays
-            .get(dim)
+            .get(&dim_key)
             .ok_or_else(|| ResolveError::MissingCoord(dim.to_string()))?;
 
         // Increment counter before borrowing array
@@ -213,10 +216,11 @@ impl<'a> MonotonicCoordResolver<'a> {
     }
 
     fn scalar_at(&mut self, dim: &str, idx: u64) -> Result<CoordScalar, ResolveError> {
+        let dim_key = dim.istr();
         let meta = self
             .meta
             .arrays
-            .get(dim)
+            .get(&dim_key)
             .ok_or_else(|| ResolveError::MissingCoord(dim.to_string()))?;
         if meta.shape.len() != 1 {
             return Ok(CoordScalar::F64(f64::NAN)); // unsupported for now, will fail comparisons
@@ -233,7 +237,7 @@ impl<'a> MonotonicCoordResolver<'a> {
         self.load_chunk(dim, chunk_idx)?;
 
         // Get value from cache
-        let cache_key = (dim.to_string(), chunk_idx);
+        let cache_key = (dim_key, chunk_idx);
         let te = meta.time_encoding.as_ref();
         
         self.chunk_cache
@@ -243,21 +247,22 @@ impl<'a> MonotonicCoordResolver<'a> {
     }
 
     fn ensure_monotonic(&mut self, dim: &str) -> Result<Option<MonotonicDirection>, ResolveError> {
-        if let Some(cached) = self.monotonic_cache.get(dim) {
+        let dim_key = dim.istr();
+        if let Some(cached) = self.monotonic_cache.get(&dim_key) {
             return Ok(*cached);
         }
-        let Some(meta) = self.meta.arrays.get(dim) else {
-            self.monotonic_cache.insert(dim.to_string(), None);
+        let Some(meta) = self.meta.arrays.get(&dim_key) else {
+            self.monotonic_cache.insert(dim_key, None);
             return Ok(None);
         };
         if meta.shape.len() != 1 {
-            self.monotonic_cache.insert(dim.to_string(), None);
+            self.monotonic_cache.insert(dim_key, None);
             return Ok(None);
         }
         let n = meta.shape[0];
         if n < 2 {
             self.monotonic_cache
-                .insert(dim.to_string(), Some(MonotonicDirection::Increasing));
+                .insert(dim_key, Some(MonotonicDirection::Increasing));
             return Ok(Some(MonotonicDirection::Increasing));
         }
 
@@ -270,7 +275,7 @@ impl<'a> MonotonicCoordResolver<'a> {
             }
             Some(std::cmp::Ordering::Greater) => MonotonicDirection::Decreasing,
             None => {
-                self.monotonic_cache.insert(dim.to_string(), None);
+                self.monotonic_cache.insert(dim_key, None);
                 return Ok(None);
             }
         };
@@ -302,14 +307,14 @@ impl<'a> MonotonicCoordResolver<'a> {
                     _ => false,
                 };
                 if !ok {
-                    self.monotonic_cache.insert(dim.to_string(), None);
+                    self.monotonic_cache.insert(dim_key.clone(), None);
                     return Ok(None);
                 }
             }
             prev = Some(v);
         }
 
-        self.monotonic_cache.insert(dim.to_string(), Some(dir));
+        self.monotonic_cache.insert(dim_key, Some(dir));
         Ok(Some(dir))
     }
 
@@ -404,7 +409,8 @@ impl CoordIndexResolver for MonotonicCoordResolver<'_> {
         dim: &str,
         range: &ValueRange,
     ) -> Result<Option<IndexRange>, ResolveError> {
-        let Some(meta) = self.meta.arrays.get(dim) else {
+        let dim_key = dim.istr();
+        let Some(meta) = self.meta.arrays.get(&dim_key) else {
             return Ok(None);
         };
         if meta.shape.len() != 1 {

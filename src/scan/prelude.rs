@@ -5,7 +5,10 @@ pub(crate) use futures::stream::{FuturesUnordered, StreamExt};
 pub(crate) use polars::prelude::*;
 pub(crate) use pyo3::prelude::*;
 pub(crate) use pyo3_polars::error::PyPolarsErr;
+pub(crate) use smallvec::SmallVec;
 pub(crate) use zarrs::array::Array;
+
+pub(crate) use crate::IStr;
 // (moved to `reader::retrieve_*`)
 
 pub(crate) use crate::chunk_plan::{compile_expr_to_chunk_plan_async, ChunkPlan};

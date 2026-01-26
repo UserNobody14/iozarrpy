@@ -2,12 +2,14 @@ use polars::prelude::*;
 use pyo3::prelude::*;
 use pyo3_polars::error::PyPolarsErr;
 use pyo3_polars::PyDataFrame;
+use smallvec::SmallVec;
 use zarrs::array::Array;
 
 use crate::reader::{
     checked_chunk_len, compute_strides, compute_var_chunk_info, retrieve_1d_subset, retrieve_chunk,
     ColumnData,
 };
+use crate::IStr;
 
 use super::{to_py_err, ZarrSource};
 
@@ -19,7 +21,7 @@ impl ZarrSource {
 
         // Open arrays (cheap-ish metadata, but still avoid reopening per element).
         let primary_path = self.meta.arrays[&self.vars[0]].path.clone();
-        let primary = Array::open(self.store.clone(), &primary_path).map_err(to_py_err)?;
+        let primary = Array::open(self.store.clone(), primary_path.as_ref()).map_err(to_py_err)?;
         let array_shape = primary.shape().to_vec();
 
         // Handle scalar arrays as a single “chunk”
@@ -32,13 +34,13 @@ impl ZarrSource {
 
             let mut cols: Vec<Column> = Vec::new();
             for v in &self.vars {
-                if !self.should_emit(v) {
+                if !self.should_emit(v.as_ref()) {
                     continue;
                 }
                 let path = &self.meta.arrays[v].path;
-                let arr = Array::open(self.store.clone(), path).map_err(to_py_err)?;
+                let arr = Array::open(self.store.clone(), path.as_ref()).map_err(to_py_err)?;
                 let data = retrieve_chunk(&arr, &[]).map_err(to_py_err)?;
-                cols.push(data.slice(0, 1).into_series(v).into());
+                cols.push(data.slice(0, 1).into_series(v.as_ref()).into());
             }
             let df = DataFrame::new(1, cols).map_err(PyPolarsErr::from)?;
             self.n_rows_left = self.n_rows_left.saturating_sub(1);
@@ -127,7 +129,7 @@ impl ZarrSource {
             for (d, dim_name) in self.dims.iter().enumerate() {
                 if let Some(coord_meta) = self.meta.arrays.get(dim_name) {
                     let coord_arr =
-                        Array::open(self.store.clone(), &coord_meta.path).map_err(to_py_err)?;
+                        Array::open(self.store.clone(), coord_meta.path.as_ref()).map_err(to_py_err)?;
                     let dim_start = origin[d];
                     let dim_len = chunk_shape[d];
                     let coord = retrieve_1d_subset(&coord_arr, dim_start, dim_len).map_err(|e| {
@@ -145,20 +147,20 @@ impl ZarrSource {
             // Load chunk data for each requested var once.
             // Store the variable metadata along with the data for proper indexing.
             // For variables with different chunk sizes, we also store the offset within the var chunk.
-            let mut var_chunks: Vec<(String, ColumnData, Vec<String>, Vec<u64>, Vec<u64>)> =
+            let mut var_chunks: Vec<(IStr, ColumnData, SmallVec<[IStr; 4]>, Vec<u64>, Vec<u64>)> =
                 Vec::new();
             for v in &self.vars {
-                if !self.should_emit(v) {
+                if !self.should_emit(v.as_ref()) {
                     continue;
                 }
                 let var_meta = &self.meta.arrays[v];
                 let path = &var_meta.path;
-                let arr = Array::open(self.store.clone(), path).map_err(to_py_err)?;
+                let arr = Array::open(self.store.clone(), path.as_ref()).map_err(to_py_err)?;
 
                 // For variables with different dimensionality or chunk sizes,
                 // compute the correct chunk indices and offsets.
                 let (var_chunk_indices, var_offsets) = if var_meta.dims.len() == self.dims.len()
-                    && var_meta.dims == self.dims
+                    && var_meta.dims.iter().zip(self.dims.iter()).all(|(a, b)| a == b)
                 {
                     // Same dims - use primary chunk indices directly
                     (idx.clone(), vec![0; self.dims.len()])
@@ -208,7 +210,7 @@ impl ZarrSource {
 
             // Dim/coord columns.
             for (d, dim_name) in self.dims.iter().enumerate() {
-                if !self.should_emit(dim_name) {
+                if !self.should_emit(dim_name.as_ref()) {
                     continue;
                 }
 
@@ -242,19 +244,20 @@ impl ZarrSource {
                         out_i64.push(ns);
                     }
 
+                    let dim_name_str: &str = dim_name.as_ref();
                     let series = if te.is_duration {
-                        Series::new(dim_name.into(), &out_i64)
+                        Series::new(dim_name_str.into(), &out_i64)
                             .cast(&polars::prelude::DataType::Duration(
                                 polars::prelude::TimeUnit::Nanoseconds,
                             ))
-                            .unwrap_or_else(|_| Series::new(dim_name.into(), out_i64))
+                            .unwrap_or_else(|_| Series::new(dim_name_str.into(), out_i64))
                     } else {
-                        Series::new(dim_name.into(), &out_i64)
+                        Series::new(dim_name_str.into(), &out_i64)
                             .cast(&polars::prelude::DataType::Datetime(
                                 polars::prelude::TimeUnit::Nanoseconds,
                                 None,
                             ))
-                            .unwrap_or_else(|_| Series::new(dim_name.into(), out_i64))
+                            .unwrap_or_else(|_| Series::new(dim_name_str.into(), out_i64))
                     };
                     cols.push(series.into());
                 } else if let Some(coord) = &coord_slices[d]
@@ -266,7 +269,7 @@ impl ZarrSource {
                         let local = (row as u64 / strides[d]) % chunk_shape[d];
                         out_f64.push(coord.get_f64(local as usize).unwrap());
                     }
-                    cols.push(Series::new(dim_name.into(), out_f64).into());
+                    cols.push(Series::new(<crate::IStr as AsRef<str>>::as_ref(dim_name).into(), out_f64).into());
                 } else {
                     let mut out_i64: Vec<i64> = Vec::with_capacity(keep.len());
                     for &r in &keep {
@@ -282,7 +285,7 @@ impl ZarrSource {
                             out_i64.push((origin[d] + local) as i64);
                         }
                     }
-                    cols.push(Series::new(dim_name.into(), out_i64).into());
+                    cols.push(Series::new(<crate::IStr as AsRef<str>>::as_ref(dim_name).into(), out_i64).into());
                 }
             }
 
@@ -291,13 +294,14 @@ impl ZarrSource {
             // For variables with fewer dimensions or different chunk sizes, we need to compute
             // the correct index by projecting from the primary iteration space.
             for (name, data, var_dims, var_chunk_shape, var_offsets) in var_chunks {
-                if var_dims.len() == self.dims.len()
-                    && var_dims == self.dims
+                let var_dims_vec: Vec<IStr> = var_dims.iter().cloned().collect();
+                if var_dims_vec.len() == self.dims.len()
+                    && var_dims_vec == self.dims
                     && var_offsets.iter().all(|&o| o == 0)
                 {
                     // Same dimensionality and order with zero offsets - direct slice
                     let sliced = data.slice(start, len);
-                    cols.push(sliced.take_indices(&keep).into_series(&name).into());
+                    cols.push(sliced.take_indices(&keep).into_series(name.as_ref()).into());
                 } else {
                     // Different dimensionality or non-zero offsets - need to map indices
                     // Build a mapping from primary dim index to variable dim index
@@ -329,7 +333,7 @@ impl ZarrSource {
                         })
                         .collect();
 
-                    cols.push(data.take_indices(&indices).into_series(&name).into());
+                    cols.push(data.take_indices(&indices).into_series(name.as_ref()).into());
                 }
             }
 

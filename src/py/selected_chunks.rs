@@ -11,6 +11,7 @@ use crate::chunk_plan::{
 use crate::chunk_plan::DSelection;
 use crate::meta::open_and_load_dataset_meta;
 use crate::py::expr_extract::extract_expr;
+use crate::{IStr, IntoIStr};
 
 #[pyfunction]
 #[pyo3(signature = (zarr_url, predicate, variables=None))]
@@ -23,7 +24,10 @@ pub(crate) fn selected_chunks(
     let (opened, meta) = open_and_load_dataset_meta(&zarr_url)
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e))?;
 
-    let vars = variables.unwrap_or_else(|| meta.data_vars.clone());
+    // Convert to IStr at the Python boundary
+    let vars: Vec<IStr> = variables
+        .map(|v| v.into_iter().map(|s| s.istr()).collect())
+        .unwrap_or_else(|| meta.data_vars.clone());
     if vars.is_empty() {
         return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
             "no variables found/selected",
@@ -37,11 +41,11 @@ pub(crate) fn selected_chunks(
         .arrays
         .get(primary_var)
         .ok_or_else(|| PyErr::new::<pyo3::exceptions::PyValueError, _>("unknown primary variable"))?;
-    let primary = Array::open(opened.store.clone(), &primary_meta.path)
+    let primary = Array::open(opened.store.clone(), primary_meta.path.as_ref())
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
 
     let (plan, _stats) =
-        compile_expr_to_chunk_plan(&expr, &meta, opened.store.clone(), primary_var)
+        compile_expr_to_chunk_plan(&expr, &meta, opened.store.clone(), primary_var.as_ref())
             .unwrap_or_else(|_| {
                 let grid_shape = primary.chunk_grid().grid_shape().to_vec();
                 (
@@ -87,7 +91,10 @@ pub(crate) fn _selected_chunks_debug(
     let (opened, meta) = open_and_load_dataset_meta(&zarr_url)
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e))?;
 
-    let vars = variables.unwrap_or_else(|| meta.data_vars.clone());
+    // Convert to IStr at the Python boundary
+    let vars: Vec<IStr> = variables
+        .map(|v| v.into_iter().map(|s| s.istr()).collect())
+        .unwrap_or_else(|| meta.data_vars.clone());
     if vars.is_empty() {
         return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
             "no variables found/selected",
@@ -101,10 +108,10 @@ pub(crate) fn _selected_chunks_debug(
         .arrays
         .get(primary_var)
         .ok_or_else(|| PyErr::new::<pyo3::exceptions::PyValueError, _>("unknown primary variable"))?;
-    let primary = Array::open(opened.store.clone(), &primary_meta.path)
+    let primary = Array::open(opened.store.clone(), primary_meta.path.as_ref())
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
 
-    let (plan, stats) = compile_expr_to_chunk_plan(&expr, &meta, opened.store.clone(), primary_var)
+    let (plan, stats) = compile_expr_to_chunk_plan(&expr, &meta, opened.store.clone(), primary_var.as_ref())
         .map_err(|e| match e {
             crate::chunk_plan::CompileError::Unsupported(e) => {
                 PyErr::new::<pyo3::exceptions::PyValueError, _>(e)
@@ -168,7 +175,7 @@ pub(crate) fn _selected_variables_debug(
         &parsed_expr,
         &meta,
         opened.store.clone(),
-        primary_var,
+        primary_var.as_ref(),
     )
     .map_err(|e| match e {
         crate::chunk_plan::CompileError::Unsupported(e) => {
@@ -179,7 +186,7 @@ pub(crate) fn _selected_variables_debug(
         }
     })?;
 
-    // Get the variable names from the selection
+    // Get the variable names from the selection (convert IStr -> String at Python boundary)
     let inferred_vars: Vec<String> = selection.vars().map(|(k, _)| k.to_string()).collect();
 
     // Plan chunk indices for all variables in the selection
@@ -193,13 +200,13 @@ pub(crate) fn _selected_variables_debug(
             }
         })?;
 
-    // Convert to Python-friendly format
+    // Convert to Python-friendly format (IStr -> String at boundary)
     let mut out: HashMap<String, Vec<Py<PyAny>>> = HashMap::new();
     for (var, indices) in per_var_chunks {
         let Some(var_meta) = meta.arrays.get(&var) else {
             continue;
         };
-        let arr = Array::open(opened.store.clone(), &var_meta.path)
+        let arr = Array::open(opened.store.clone(), var_meta.path.as_ref())
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
 
         let mut var_chunks: Vec<Py<PyAny>> = Vec::new();
@@ -220,7 +227,7 @@ pub(crate) fn _selected_variables_debug(
             d.set_item("shape", &shape)?;
             var_chunks.push(d.into());
         }
-        out.insert(var, var_chunks);
+        out.insert(var.to_string(), var_chunks);
     }
 
     Ok((inferred_vars, out, stats.coord_reads))

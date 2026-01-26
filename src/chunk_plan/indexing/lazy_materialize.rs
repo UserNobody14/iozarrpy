@@ -57,7 +57,7 @@ pub(crate) fn materialize(
 
 fn materialize_array(
     selection: &LazyArraySelection,
-    dims: &[String],
+    dims: &smallvec::SmallVec<[crate::IStr; 4]>,
     shape: Vec<u64>,
     cache: &dyn ResolutionCache,
 ) -> Result<DataArraySelection, ResolutionError> {
@@ -86,7 +86,7 @@ fn materialize_array(
 
 fn materialize_rectangle(
     rect: &LazyHyperRectangle,
-    dims: &[String],
+    dims: &smallvec::SmallVec<[crate::IStr; 4]>,
     shape: Vec<u64>,
     cache: &dyn ResolutionCache,
 ) -> Result<ArraySubsetList, ResolutionError> {
@@ -101,7 +101,7 @@ fn materialize_rectangle(
     ];
 
     for (dim, constraint) in rect.dims() {
-        let dim_idx_option = dims.iter().position(|d| d == dim.as_ref());
+        let dim_idx_option = dims.iter().position(|d| d == dim);
         if let Some(dim_idx) = dim_idx_option {
             let range_list = materialize_constraint_multi(dim, 0..shape[dim_idx], constraint, cache)?;
             if range_list.is_empty() {
@@ -137,7 +137,7 @@ fn materialize_rectangle(
 /// Materialize a constraint returning potentially multiple ranges.
 /// For interpolation points, each point may produce a disjoint range.
 fn materialize_constraint_multi(
-    dim: &Arc<str>,
+    dim: &crate::IStr,
     dim_range: Range<u64>,
     constraint: &LazyDimConstraint,
     cache: &dyn ResolutionCache,
@@ -153,14 +153,14 @@ fn materialize_constraint_multi(
                     max: Some((point.clone(), super::types::BoundKind::Inclusive)),
                     ..Default::default()
                 };
-                let req_max = ResolutionRequest::new(dim.clone(), vr_max);
+                let req_max = ResolutionRequest::new(dim.as_ref(), vr_max);
 
                 // Look up the >= v request (to find right bracket)
                 let vr_min = ValueRange {
                     min: Some((point.clone(), super::types::BoundKind::Inclusive)),
                     ..Default::default()
                 };
-                let req_min = ResolutionRequest::new(dim.clone(), vr_min);
+                let req_min = ResolutionRequest::new(dim.as_ref(), vr_min);
 
                 let left_end = match cache.get(&req_max) {
                     Some(Some(r)) => r.end_exclusive,
@@ -230,7 +230,7 @@ fn merge_ranges(mut ranges: Vec<Range<u64>>) -> Vec<Range<u64>> {
 }
 
 fn materialize_constraint(
-    dim: &Arc<str>,
+    dim: &crate::IStr,
     dim_range: Range<u64>,
     constraint: &LazyDimConstraint,
     cache: &dyn ResolutionCache,
@@ -240,7 +240,7 @@ fn materialize_constraint(
         LazyDimConstraint::Empty => Ok(0..0),
         LazyDimConstraint::Resolved(rl) => Ok(rl.clone()),
         LazyDimConstraint::Unresolved(vr) => {
-            let request = ResolutionRequest::new(dim.clone(), vr.clone());
+            let request = ResolutionRequest::new(dim.as_ref(), vr.clone());
             match cache.get(&request) {
                 Some(Some(idx_range)) => Ok(
                     idx_range.start..idx_range.end_exclusive
@@ -255,7 +255,7 @@ fn materialize_constraint(
         }
         LazyDimConstraint::UnresolvedInterpolation(vr) => {
             // Interpolation needs bracketing indices - expand by 1 on each side.
-            let request = ResolutionRequest::new(dim.clone(), (**vr).clone());
+            let request = ResolutionRequest::new(dim.as_ref(), (**vr).clone());
             match cache.get(&request) {
                 Some(Some(idx_range)) => {
                     // Expand by 1 on each side for interpolation bracketing
@@ -298,7 +298,7 @@ pub(crate) fn collect_requests_with_meta(
     selection: &LazyDatasetSelection,
     meta: &ZarrDatasetMeta,
     dim_lengths: &[u64],
-    dims: &[String],
+    dims: &[crate::IStr],
 ) -> (Vec<ResolutionRequest>, super::resolver_traits::HashMapCache) {
     let mut requests = HashSet::new();
     let mut immediate_cache = super::resolver_traits::HashMapCache::new();
@@ -326,7 +326,7 @@ fn collect_array_requests_with_meta(
     selection: &LazyArraySelection,
     meta: &ZarrDatasetMeta,
     dim_lengths: &[u64],
-    dims: &[String],
+    dims: &[crate::IStr],
     requests: &mut HashSet<ResolutionRequest>,
     immediate_cache: &mut super::resolver_traits::HashMapCache,
 ) {
@@ -354,19 +354,19 @@ fn collect_rectangle_requests_with_meta(
     rect: &LazyHyperRectangle,
     meta: &ZarrDatasetMeta,
     dim_lengths: &[u64],
-    dims: &[String],
+    dims: &[crate::IStr],
     requests: &mut HashSet<ResolutionRequest>,
     immediate_cache: &mut super::resolver_traits::HashMapCache,
 ) {
     for (dim, constraint) in rect.dims() {
         match constraint {
             LazyDimConstraint::Unresolved(vr) => {
-                let request = ResolutionRequest::new(dim.clone(), vr.clone());
+                let request = ResolutionRequest::new(dim.as_ref(), vr.clone());
 
                 // Check if this is an index-only dimension (no coordinate array)
-                if meta.arrays.get(dim.as_ref()).is_none() {
+                if meta.arrays.get(dim).is_none() {
                     // Index-only dimension - resolve immediately
-                    if let Some(dim_idx) = dims.iter().position(|d| d == dim.as_ref()) {
+                    if let Some(dim_idx) = dims.iter().position(|d| d == dim) {
                         if let Some(&dim_len) = dim_lengths.get(dim_idx) {
                             if let Some(idx_range) = index_range_for_index_dim(vr, dim_len) {
                                 immediate_cache.insert(request.clone(), Some(idx_range));
@@ -383,12 +383,12 @@ fn collect_rectangle_requests_with_meta(
             }
             LazyDimConstraint::UnresolvedInterpolation(vr_arc) => {
                 let vr = (**vr_arc).clone();
-                let request = ResolutionRequest::new(dim.clone(), vr.clone());
+                let request = ResolutionRequest::new(dim.as_ref(), vr.clone());
 
                 // Check if this is an index-only dimension (no coordinate array)
-                if meta.arrays.get(dim.as_ref()).is_none() {
+                if meta.arrays.get(dim).is_none() {
                     // Index-only dimension - resolve immediately
-                    if let Some(dim_idx) = dims.iter().position(|d| d == dim.as_ref()) {
+                    if let Some(dim_idx) = dims.iter().position(|d| d == dim) {
                         if let Some(&dim_len) = dim_lengths.get(dim_idx) {
                             if let Some(idx_range) = index_range_for_index_dim(&vr, dim_len) {
                                 immediate_cache.insert(request.clone(), Some(idx_range));
@@ -416,19 +416,19 @@ fn collect_rectangle_requests_with_meta(
                     };
 
                     // Check if this is an index-only dimension
-                    if meta.arrays.get(dim.as_ref()).is_none() {
-                        if let Some(dim_idx) = dims.iter().position(|d| d == dim.as_ref()) {
+                    if meta.arrays.get(dim).is_none() {
+                        if let Some(dim_idx) = dims.iter().position(|d| d == dim) {
                             if let Some(&dim_len) = dim_lengths.get(dim_idx) {
                                 // For index-only dims, resolve immediately
                                 if let Some(r) = index_range_for_index_dim(&vr_max, dim_len) {
                                     immediate_cache.insert(
-                                        ResolutionRequest::new(dim.clone(), vr_max.clone()),
+                                        ResolutionRequest::new(dim.as_ref(), vr_max.clone()),
                                         Some(r),
                                     );
                                 }
                                 if let Some(r) = index_range_for_index_dim(&vr_min, dim_len) {
                                     immediate_cache.insert(
-                                        ResolutionRequest::new(dim.clone(), vr_min.clone()),
+                                        ResolutionRequest::new(dim.as_ref(), vr_min.clone()),
                                         Some(r),
                                     );
                                 }
@@ -437,8 +437,8 @@ fn collect_rectangle_requests_with_meta(
                         }
                     }
 
-                    requests.insert(ResolutionRequest::new(dim.clone(), vr_max));
-                    requests.insert(ResolutionRequest::new(dim.clone(), vr_min));
+                    requests.insert(ResolutionRequest::new(dim.as_ref(), vr_max));
+                    requests.insert(ResolutionRequest::new(dim.as_ref(), vr_min));
                 }
             }
             _ => {}

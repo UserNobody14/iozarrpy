@@ -22,6 +22,7 @@ use crate::chunk_plan::indexing::lazy_materialize::{
 use crate::chunk_plan::indexing::SyncCoordResolver;
 use crate::chunk_plan::indexing::AsyncMonotonicResolver;
 use crate::chunk_plan::indexing::AsyncCoordResolver;
+use crate::{IStr, IntoIStr};
 
 /// Statistics about the planning process.
 pub(crate) struct PlannerStats {
@@ -29,8 +30,8 @@ pub(crate) struct PlannerStats {
     pub(crate) coord_reads: u64,
 }
 
-fn default_vars_for_dataset_selection(meta: &ZarrDatasetMeta) -> Vec<String> {
-    let mut out: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+fn default_vars_for_dataset_selection(meta: &ZarrDatasetMeta) -> Vec<IStr> {
+    let mut out: std::collections::BTreeSet<IStr> = std::collections::BTreeSet::new();
     out.extend(meta.data_vars.iter().cloned());
     // Also include 1D dimension coordinate arrays (e.g. `time`, `x`, `y`) if present.
     for d in &meta.dims {
@@ -55,15 +56,16 @@ pub(crate) fn compile_expr_to_lazy_selection(
     meta: &ZarrDatasetMeta,
     primary_var: &str,
 ) -> Result<LazyDatasetSelection, CompileError> {
-    let Some(primary_meta) = meta.arrays.get(primary_var) else {
+    let primary_key = primary_var.istr();
+    let Some(primary_meta) = meta.arrays.get(&primary_key) else {
         return Err(CompileError::MissingPrimaryDims(format!(
             "primary variable '{}' not found",
             primary_var
         )));
     };
 
-    let dims = if !primary_meta.dims.is_empty() {
-        primary_meta.dims.clone()
+    let dims: Vec<IStr> = if !primary_meta.dims.is_empty() {
+        primary_meta.dims.iter().cloned().collect()
     } else {
         meta.dims.clone()
     };
@@ -93,15 +95,16 @@ pub(crate) fn resolve_lazy_selection_sync(
     store: zarrs::storage::ReadableWritableListableStorage,
     primary_var: &str,
 ) -> Result<(DatasetSelection, PlannerStats), CompileError> {
-    let Some(primary_meta) = meta.arrays.get(primary_var) else {
+    let primary_key = primary_var.istr();
+    let Some(primary_meta) = meta.arrays.get(&primary_key) else {
         return Err(CompileError::MissingPrimaryDims(format!(
             "primary variable '{}' not found",
             primary_var
         )));
     };
 
-    let dims = if !primary_meta.dims.is_empty() {
-        primary_meta.dims.clone()
+    let dims: Vec<IStr> = if !primary_meta.dims.is_empty() {
+        primary_meta.dims.iter().cloned().collect()
     } else {
         meta.dims.clone()
     };
@@ -165,7 +168,8 @@ pub(crate) fn compile_expr_to_chunk_plan(
     store: zarrs::storage::ReadableWritableListableStorage,
     primary_var: &str,
 ) -> Result<(ChunkPlan, PlannerStats), CompileError> {
-    let Some(primary_meta) = meta.arrays.get(primary_var) else {
+    let primary_key = primary_var.istr();
+    let Some(primary_meta) = meta.arrays.get(&primary_key) else {
         return Err(CompileError::MissingPrimaryDims(format!(
             "primary variable '{}' not found",
             primary_var
@@ -175,7 +179,7 @@ pub(crate) fn compile_expr_to_chunk_plan(
     let (selection, stats) =
         compile_expr_to_dataset_selection(expr, meta, store.clone(), primary_var)?;
 
-    let primary = Array::open(store.clone(), &primary_meta.path)
+    let primary = Array::open(store.clone(), primary_meta.path.as_ref())
         .map_err(|e| CompileError::Unsupported(format!("failed to open primary array: {:?}", e)))?;
     let grid_shape = primary.chunk_grid().grid_shape().to_vec();
     let zero = vec![0u64; primary.dimensionality()];
@@ -225,15 +229,16 @@ pub(crate) async fn resolve_lazy_selection_async(
     store: zarrs::storage::AsyncReadableWritableListableStorage,
     primary_var: &str,
 ) -> Result<(DatasetSelection, PlannerStats), CompileError> {
-    let Some(primary_meta) = meta.arrays.get(primary_var) else {
+    let primary_key = primary_var.istr();
+    let Some(primary_meta) = meta.arrays.get(&primary_key) else {
         return Err(CompileError::MissingPrimaryDims(format!(
             "primary variable '{}' not found",
             primary_var
         )));
     };
 
-    let dims = if !primary_meta.dims.is_empty() {
-        primary_meta.dims.clone()
+    let dims: Vec<IStr> = if !primary_meta.dims.is_empty() {
+        primary_meta.dims.iter().cloned().collect()
     } else {
         meta.dims.clone()
     };
@@ -287,7 +292,8 @@ pub(crate) async fn compile_expr_to_chunk_plan_async(
     store: zarrs::storage::AsyncReadableWritableListableStorage,
     primary_var: &str,
 ) -> Result<(ChunkPlan, PlannerStats), CompileError> {
-    let Some(primary_meta) = meta.arrays.get(primary_var) else {
+    let primary_key = primary_var.istr();
+    let Some(primary_meta) = meta.arrays.get(&primary_key) else {
         return Err(CompileError::MissingPrimaryDims(format!(
             "primary variable '{}' not found",
             primary_var
@@ -297,7 +303,7 @@ pub(crate) async fn compile_expr_to_chunk_plan_async(
     let (selection, stats) =
         compile_expr_to_dataset_selection_async(expr, meta, store.clone(), primary_var).await?;
 
-    let primary = Array::async_open(store.clone(), &primary_meta.path)
+    let primary = Array::async_open(store.clone(), primary_meta.path.as_ref())
         .await
         .map_err(|e| CompileError::Unsupported(format!("failed to open primary array: {:?}", e)))?;
     let grid_shape = primary.chunk_grid().grid_shape().to_vec();

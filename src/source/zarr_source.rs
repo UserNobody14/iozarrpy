@@ -5,6 +5,7 @@ use pyo3::prelude::*;
 
 use crate::chunk_plan::ChunkIndexIter;
 use crate::meta::ZarrDatasetMeta;
+use crate::IStr;
 
 pub(super) const DEFAULT_BATCH_SIZE: usize = 10_000;
 
@@ -13,14 +14,14 @@ pub struct ZarrSource {
     meta: ZarrDatasetMeta,
     store: zarrs::storage::ReadableWritableListableStorage,
 
-    dims: Vec<String>,
-    vars: Vec<String>,
+    dims: Vec<IStr>,
+    vars: Vec<IStr>,
 
     batch_size: usize,
     n_rows_left: usize,
 
     predicate: Option<Expr>,
-    with_columns: Option<BTreeSet<String>>,
+    with_columns: Option<BTreeSet<IStr>>,
 
     // Iteration state
     primary_grid_shape: Vec<u64>,
@@ -52,7 +53,7 @@ impl ZarrSource {
     pub(super) fn should_emit(&self, name: &str) -> bool {
         self.with_columns
             .as_ref()
-            .map(|s| s.contains(name))
+            .map(|s| s.iter().any(|c| <IStr as AsRef<str>>::as_ref(c) == name))
             .unwrap_or(true)
     }
 }

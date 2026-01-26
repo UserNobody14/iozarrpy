@@ -3,13 +3,13 @@ use super::prelude::*;
 pub(super) async fn open_arrays_async(
     store: zarrs::storage::AsyncReadableWritableListableStorage,
     meta: &ZarrDatasetMeta,
-    vars: &[String],
-    dims: &[String],
+    vars: &[IStr],
+    dims: &[IStr],
 ) -> Result<
     (
         Arc<Array<dyn zarrs::storage::AsyncReadableWritableListableStorageTraits>>,
-        Vec<(String, Arc<Array<dyn zarrs::storage::AsyncReadableWritableListableStorageTraits>>)>,
-        Vec<(String, Arc<Array<dyn zarrs::storage::AsyncReadableWritableListableStorageTraits>>)>,
+        Vec<(IStr, Arc<Array<dyn zarrs::storage::AsyncReadableWritableListableStorageTraits>>)>,
+        Vec<(IStr, Arc<Array<dyn zarrs::storage::AsyncReadableWritableListableStorageTraits>>)>,
     ),
     String,
 > {
@@ -20,7 +20,7 @@ pub(super) async fn open_arrays_async(
         .path
         .clone();
 
-    let primary = Array::async_open(store.clone(), &primary_path)
+    let primary = Array::async_open(store.clone(), primary_path.as_ref())
         .await
         .map_err(to_string_err)?;
     let primary = Arc::new(primary);
@@ -33,7 +33,7 @@ pub(super) async fn open_arrays_async(
             let d_name = d.clone();
             let st = store.clone();
             coord_futs.push(async move {
-                let arr = Array::async_open(st, &path).await.map_err(to_string_err)?;
+                let arr = Array::async_open(st, path.as_ref()).await.map_err(to_string_err)?;
                 Ok::<_, String>((d_name, Arc::new(arr)))
             });
         }
@@ -48,7 +48,7 @@ pub(super) async fn open_arrays_async(
         let v_name = v.clone();
         let st = store.clone();
         var_futs.push(async move {
-            let arr = Array::async_open(st, &path).await.map_err(to_string_err)?;
+            let arr = Array::async_open(st, path.as_ref()).await.map_err(to_string_err)?;
             Ok::<_, String>((v_name, Arc::new(arr)))
         });
     }

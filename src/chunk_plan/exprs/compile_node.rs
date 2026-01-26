@@ -4,13 +4,14 @@
 //! column references from expressions.
 
 use crate::chunk_plan::prelude::*;
+use crate::{IStr, IntoIStr};
 
 /// Collects all column names referenced in an expression using a simple recursive approach.
 /// This is used for variable inference - determining which columns/variables are explicitly
 /// referenced by an expression.
-pub(crate) fn collect_column_refs(expr: &Expr, out: &mut Vec<String>) {
+pub(crate) fn collect_column_refs(expr: &Expr, out: &mut Vec<IStr>) {
     match expr {
-        Expr::Column(name) => out.push(name.to_string()),
+        Expr::Column(name) => out.push(name.istr()),
         Expr::Alias(inner, _)
         | Expr::KeepName(inner)
         | Expr::Cast { expr: inner, .. }
@@ -68,7 +69,7 @@ pub(crate) fn collect_column_refs(expr: &Expr, out: &mut Vec<String>) {
         Expr::Eval { expr, .. } => collect_column_refs(expr, out),
         Expr::Field(names) => {
             for n in names.iter() {
-                out.push(n.to_string());
+                out.push(n.istr());
             }
         }
         // Literals, Len, etc. don't reference columns
@@ -78,11 +79,11 @@ pub(crate) fn collect_column_refs(expr: &Expr, out: &mut Vec<String>) {
 }
 
 /// Collects column names from a selector expression.
-pub(crate) fn collect_selector_refs(sel: &Selector, out: &mut Vec<String>) {
+pub(crate) fn collect_selector_refs(sel: &Selector, out: &mut Vec<IStr>) {
     match sel {
         Selector::ByName { names, .. } => {
             for n in names.iter() {
-                out.push(n.to_string());
+                out.push(n.istr());
             }
         }
         Selector::Union(a, b) | Selector::Intersect(a, b) | Selector::Difference(a, b) | Selector::ExclusiveOr(a, b) => {

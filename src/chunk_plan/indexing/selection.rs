@@ -1,18 +1,17 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use smallvec::SmallVec;
-use std::ops::Range;
 use zarrs::array_subset::ArraySubset;
 
-use super::types::BoundKind;
+use crate::{IStr, IntoIStr};
 
 /// Dataset-level selection: variable name -> selection on that variable.
 ///
 /// This is intended to be a pure index-selection representation (no chunking info).
-// pub(crate) struct DatasetSelection(pub(crate) BTreeMap<String, DataArraySelection>);
+// pub(crate) struct DatasetSelection(pub(crate) BTreeMap<IStr, DataArraySelection>);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RealSelection(BTreeMap<String, DataArraySelection>);
+pub struct RealSelection(BTreeMap<IStr, DataArraySelection>);
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub (crate) enum DatasetSelection {
     /// If no selection was made:
@@ -25,12 +24,10 @@ pub (crate) enum DatasetSelection {
 
 pub trait DSelection {
     fn vars(&self) -> impl Iterator<Item = (&str, &DataArraySelection)>;
-    fn contains_dim(&self, dim: &str) -> bool;
-    fn insert_dim(&mut self, dim: String, da: DataArraySelection);
 }
 
-impl From<BTreeMap<String, DataArraySelection>> for RealSelection {
-    fn from(map: BTreeMap<String, DataArraySelection>) -> Self {
+impl From<BTreeMap<IStr, DataArraySelection>> for RealSelection {
+    fn from(map: BTreeMap<IStr, DataArraySelection>) -> Self {
         RealSelection(map)
     }
 }
@@ -41,44 +38,13 @@ impl RealSelection {
     }
 
     pub(crate) fn get(&self, var: &str) -> Option<&DataArraySelection> {
-        self.0.get(var)
+        self.0.get(&var.istr())
     }
 }
 
-
-// impl DSelection for EmptySelection {
-//     fn vars(&self) -> impl Iterator<Item = (&str, &DataArraySelection)> {
-//         Box::new(Vec::new().into_iter())
-//     }
-//     fn contains_dim(&self, dim: &str) -> bool {
-//         false
-//     }
-//     fn insert_dim(&mut self, dim: String, da: DataArraySelection) {
-//         // no-op
-//     }
-// }
-
-// impl DSelection for NoSelection {
-//     fn vars(&self) -> impl Iterator<Item = (&str, &DataArraySelection)> {
-//         Box::new(Vec::new().into_iter())
-//     }
-//     fn contains_dim(&self, dim: &str) -> bool {
-//         false
-//     }
-//     fn insert_dim(&mut self, dim: String, da: DataArraySelection) {
-//         // no-op
-//     }
-// }
-
 impl DSelection for RealSelection {
     fn vars(&self) -> impl Iterator<Item = (&str, &DataArraySelection)> {
-        Box::new(self.0.iter().map(|(k, v)| (k.as_str(), v)))
-    }
-    fn contains_dim(&self, dim: &str) -> bool {
-        self.0.contains_key(dim)
-    }
-    fn insert_dim(&mut self, dim: String, da: DataArraySelection) {
-        self.0.insert(dim, da);
+        Box::new(self.0.iter().map(|(k, v)| (k.as_ref(), v)))
     }
 }
 
@@ -90,28 +56,6 @@ impl DSelection for DatasetSelection {
             Self::Empty => Box::new(std::iter::empty()),
         }
     }
-    fn contains_dim(&self, dim: &str) -> bool {
-        match self {
-            Self::Selection(selection) => selection.contains_dim(dim),
-            Self::NoSelectionMade => false,
-            Self::Empty => false,
-        }
-    }
-
-    fn insert_dim(&mut self, dim: String, da: DataArraySelection) {
-        match self {
-            Self::Selection(selection) => {
-                let _ = selection.0.insert(dim, da);
-            }
-            Self::NoSelectionMade => {
-                *self = Self::Selection(RealSelection(BTreeMap::new()));
-                self.insert_dim(dim, da);
-            }
-            Self::Empty => {
-                // no-op
-            }
-        }
-    }
 
 }
 
@@ -120,7 +64,7 @@ impl DSelection for DatasetSelection {
 pub(crate) struct DataArraySelection {
     /// SmallVec of dimension names (each name's position in the vec labels its index)
     /// So if we had [a, b, c], a would be our label for dim 0, b would be 1, c would be 2.
-    dims: SmallVec<[String; 4]>,
+    dims: SmallVec<[IStr; 4]>,
     /// List of associated ArraySubsets
     subsets: ArraySubsetList
 }
@@ -129,20 +73,11 @@ impl DataArraySelection {
     pub(crate) fn subsets_iter(&self) -> impl Iterator<Item = &ArraySubset> {
         self.subsets.0.iter()
     }
-    pub (crate) fn all(
-        dims: &[String],
-        shape: Vec<u64>,
-    ) -> Self {
-        Self {
-            dims: dims.iter().cloned().collect(),
-            subsets: ArraySubsetList::from(vec![ArraySubset::new_with_shape(shape)]),
-        }
-    }
 
-    pub (crate) fn from_subsets(dims: &[String], subsets: ArraySubsetList) -> Self {
+    pub (crate) fn from_subsets(dims: &[IStr], subsets: ArraySubsetList) -> Self {
         Self {
             dims: dims.iter().cloned().collect(),
-            subsets: subsets,
+            subsets,
         }
     }
 
@@ -435,29 +370,6 @@ impl Emptyable for ArraySubset {
     }
 }
 
-/// Compute the difference of two ranges A \ B.
-/// Returns up to 2 ranges: the part of A before B and the part after B.
-fn difference_ranges(a: &Range<u64>, b: &Range<u64>) -> Vec<Range<u64>> {
-    // If no overlap, return A unchanged
-    if b.end <= a.start || b.start >= a.end {
-        return vec![a.clone()];
-    }
-    // If B completely contains A, return empty
-    if b.start <= a.start && b.end >= a.end {
-        return vec![];
-    }
-    
-    let mut result = Vec::new();
-    // Part before B
-    if a.start < b.start {
-        result.push(a.start..b.start);
-    }
-    // Part after B
-    if a.end > b.end {
-        result.push(b.end..a.end);
-    }
-    result
-}
 
 /// Compute the difference of two hyper-rectangles A \ B.
 /// Returns a list of non-overlapping rectangles that together form A \ B.

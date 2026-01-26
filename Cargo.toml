@@ -129,10 +129,11 @@ regex = "1.9"
 regex-syntax = "0.8.5"
 smallvec = "1.13"
 async-trait = "0.1"
+internment = { version = "0.8", features = ["arc"] }
 pyo3-object_store = "0.8"
 
 [profile.release]
-lto = "fat"
+lto = false
 codegen-units = 16
 
 # Some crates don't change as much but benefit more from

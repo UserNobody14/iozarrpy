@@ -13,6 +13,7 @@ use crate::chunk_plan::{
 };
 use crate::meta::{open_and_load_dataset_meta, open_and_load_dataset_meta_async};
 use crate::py::expr_extract::extract_expr;
+use crate::{IStr, IntoIStr};
 
 #[pyfunction]
 pub(crate) fn print_extension_info() -> String {
@@ -61,9 +62,10 @@ pub(crate) fn _debug_chunk_planning(
     let meta_dict = PyDict::new(py);
     for (name, arr_meta) in &meta.arrays {
         let arr_dict = PyDict::new(py);
-        arr_dict.set_item("path", &arr_meta.path)?;
+        arr_dict.set_item("path", arr_meta.path.to_string())?;
         arr_dict.set_item("shape", &arr_meta.shape)?;
-        arr_dict.set_item("dims", &arr_meta.dims)?;
+        let dims_strs: Vec<String> = arr_meta.dims.iter().map(|d| d.to_string()).collect();
+        arr_dict.set_item("dims", &dims_strs)?;
         arr_dict.set_item("polars_dtype", format!("{:?}", arr_meta.polars_dtype))?;
 
         if let Some(te) = &arr_meta.time_encoding {
@@ -76,11 +78,13 @@ pub(crate) fn _debug_chunk_planning(
             arr_dict.set_item("time_encoding", py.None())?;
         }
 
-        meta_dict.set_item(name, arr_dict)?;
+        meta_dict.set_item(name.to_string(), arr_dict)?;
     }
     result.set_item("meta", meta_dict)?;
-    result.set_item("dims", &meta.dims)?;
-    result.set_item("data_vars", &meta.data_vars)?;
+    let dims_strs: Vec<String> = meta.dims.iter().map(|d| d.to_string()).collect();
+    result.set_item("dims", &dims_strs)?;
+    let data_vars_strs: Vec<String> = meta.data_vars.iter().map(|d| d.to_string()).collect();
+    result.set_item("data_vars", &data_vars_strs)?;
 
     // Extract expression
     let expr = match extract_expr(predicate) {
@@ -92,19 +96,19 @@ pub(crate) fn _debug_chunk_planning(
     };
     result.set_item("expr_ast", format!("{:#?}", expr))?;
 
-    // Determine primary variable
-    let pvar = primary_var.unwrap_or_else(|| {
-        meta.data_vars.first().cloned().unwrap_or_default()
-    });
-    result.set_item("primary_var", &pvar)?;
+    // Determine primary variable (convert String -> IStr at boundary)
+    let pvar: IStr = primary_var
+        .map(|s| s.istr())
+        .unwrap_or_else(|| meta.data_vars.first().cloned().unwrap_or_else(|| "".istr()));
+    result.set_item("primary_var", pvar.to_string())?;
 
     let Some(primary_meta) = meta.arrays.get(&pvar) else {
         result.set_item("error", format!("Primary variable '{}' not found", pvar))?;
         return Ok(result.into());
     };
 
-    let dims = if !primary_meta.dims.is_empty() {
-        primary_meta.dims.clone()
+    let dims: Vec<IStr> = if !primary_meta.dims.is_empty() {
+        primary_meta.dims.iter().cloned().collect()
     } else {
         meta.dims.clone()
     };
@@ -122,16 +126,16 @@ pub(crate) fn _debug_chunk_planning(
         return Ok(result.into());
     };
 
-    // Create dimension length map
+    // Create dimension length map (convert IStr -> String for Python)
     let dim_lengths_map: HashMap<String, u64> = dims
         .iter()
         .zip(dim_lengths.iter())
-        .map(|(d, l)| (d.clone(), *l))
+        .map(|(d, l)| (d.to_string(), *l))
         .collect();
     result.set_item("dim_lengths", dim_lengths_map)?;
 
     // Compile to lazy selection
-    let lazy_selection = match compile_expr_to_lazy_selection(&expr, &meta, &pvar) {
+    let lazy_selection = match compile_expr_to_lazy_selection(&expr, &meta, pvar.as_ref()) {
         Ok(sel) => sel,
         Err(e) => {
             result.set_item("error", format!("Failed to compile expression: {:?}", e))?;
@@ -154,7 +158,7 @@ pub(crate) fn _debug_chunk_planning(
 
     // Resolve the lazy selection
     let (materialized, stats) =
-        match resolve_lazy_selection_sync(&lazy_selection, &meta, opened.store.clone(), &pvar) {
+        match resolve_lazy_selection_sync(&lazy_selection, &meta, opened.store.clone(), pvar.as_ref()) {
             Ok(x) => x,
             Err(e) => {
                 result.set_item(
@@ -226,19 +230,19 @@ async fn _debug_chunk_planning_async_inner(
     result.insert("dims".to_string(), format!("{:?}", meta.dims));
     result.insert("data_vars".to_string(), format!("{:?}", meta.data_vars));
     
-    // Determine primary variable
-    let pvar = primary_var.unwrap_or_else(|| {
-        meta.data_vars.first().cloned().unwrap_or_default()
-    });
-    result.insert("primary_var".to_string(), pvar.clone());
+    // Determine primary variable (convert String -> IStr at boundary)
+    let pvar: IStr = primary_var
+        .map(|s| s.istr())
+        .unwrap_or_else(|| meta.data_vars.first().cloned().unwrap_or_else(|| "".istr()));
+    result.insert("primary_var".to_string(), pvar.to_string());
     
     let Some(primary_meta) = meta.arrays.get(&pvar) else {
         result.insert("error".to_string(), format!("Primary variable '{}' not found", pvar));
         return Ok(result);
     };
     
-    let dims = if !primary_meta.dims.is_empty() {
-        primary_meta.dims.clone()
+    let dims: Vec<IStr> = if !primary_meta.dims.is_empty() {
+        primary_meta.dims.iter().cloned().collect()
     } else {
         meta.dims.clone()
     };
@@ -246,7 +250,7 @@ async fn _debug_chunk_planning_async_inner(
     result.insert("primary_shape".to_string(), format!("{:?}", primary_meta.shape));
     
     // Compile to lazy selection (no I/O)
-    let lazy_selection = match compile_expr_to_lazy_selection(&expr, &meta, &pvar) {
+    let lazy_selection = match compile_expr_to_lazy_selection(&expr, &meta, pvar.as_ref()) {
         Ok(sel) => sel,
         Err(e) => {
             result.insert("error".to_string(), format!("Failed to compile expression: {:?}", e));
@@ -264,7 +268,7 @@ async fn _debug_chunk_planning_async_inner(
         &lazy_selection,
         &meta,
         opened_async.store.clone(),
-        &pvar,
+        pvar.as_ref(),
     ).await;
     let elapsed = start.elapsed();
     result.insert("async_resolution_time_ms".to_string(), format!("{}", elapsed.as_millis()));
@@ -296,7 +300,7 @@ async fn _debug_chunk_planning_async_inner(
         &expr,
         &meta,
         opened_async.store.clone(),
-        &pvar,
+        pvar.as_ref(),
     ).await;
     let elapsed = start.elapsed();
     result.insert("chunk_plan_time_ms".to_string(), format!("{}", elapsed.as_millis()));
@@ -353,15 +357,17 @@ pub(crate) fn _debug_coord_array(
         }
     };
 
-    let Some(arr_meta) = meta.arrays.get(&dim_name) else {
+    let dim_key = dim_name.as_str().istr();
+    let Some(arr_meta) = meta.arrays.get(&dim_key) else {
         result.set_item("error", format!("Array '{}' not found", dim_name))?;
         return Ok(result.into());
     };
 
     result.set_item("dim_name", &dim_name)?;
     result.set_item("shape", &arr_meta.shape)?;
-    result.set_item("dims", &arr_meta.dims)?;
-    result.set_item("path", &arr_meta.path)?;
+    let dims_strs: Vec<String> = arr_meta.dims.iter().map(|d| d.to_string()).collect();
+    result.set_item("dims", &dims_strs)?;
+    result.set_item("path", arr_meta.path.to_string())?;
 
     if let Some(te) = &arr_meta.time_encoding {
         let te_dict = PyDict::new(py);
@@ -391,7 +397,7 @@ pub(crate) fn _debug_coord_array(
     }
 
     // Open the array and read sample values
-    let arr = match Array::open(opened.store.clone(), &arr_meta.path) {
+    let arr = match Array::open(opened.store.clone(), arr_meta.path.as_ref()) {
         Ok(a) => a,
         Err(e) => {
             result.set_item("error", format!("Failed to open array: {}", e))?;
@@ -500,9 +506,10 @@ pub(crate) fn _debug_literal_conversion(
         }
     };
 
+    let dim_key = dim_name.as_str().istr();
     let time_encoding = meta
         .arrays
-        .get(&dim_name)
+        .get(&dim_key)
         .and_then(|a| a.time_encoding.as_ref());
 
     result.set_item("dim_name", &dim_name)?;
@@ -532,8 +539,8 @@ pub(crate) fn _debug_literal_conversion(
             result.set_item("extracted_expr", format!("{:#?}", expr))?;
 
             // Try to compile it to a lazy selection
-            let primary_var = meta.data_vars.first().cloned().unwrap_or_default();
-            match compile_expr_to_lazy_selection(&expr, &meta, &primary_var) {
+            let primary_var = meta.data_vars.first().map(|s| s.as_ref()).unwrap_or("");
+            match compile_expr_to_lazy_selection(&expr, &meta, primary_var) {
                 Ok(sel) => {
                     result.set_item("lazy_selection", format!("{:#?}", sel))?;
                     result.set_item("compilation_success", true)?;

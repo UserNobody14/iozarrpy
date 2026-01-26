@@ -8,6 +8,33 @@ mod scan;
 mod source;
 mod store;
 
+/// Interned string type used throughout the codebase for dimension/variable names.
+/// Uses `ArcIntern` for automatic deduplication, O(1) equality, and reference counting.
+pub type IStr = internment::ArcIntern<str>;
+
+/// Helper trait to create IStr from various string types
+pub trait IntoIStr {
+    fn istr(self) -> IStr;
+}
+
+impl IntoIStr for &str {
+    fn istr(self) -> IStr {
+        IStr::from(self)
+    }
+}
+
+impl IntoIStr for String {
+    fn istr(self) -> IStr {
+        IStr::from(self.as_str())
+    }
+}
+
+impl IntoIStr for &String {
+    fn istr(self) -> IStr {
+        IStr::from(self.as_str())
+    }
+}
+
 #[pymodule]
 fn _core(py: Python<'_>, m: &Bound<PyModule>) -> PyResult<()> {
     // Register object store builders under rainbear._core.store

@@ -1,6 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use polars::prelude::{DataType as PlDataType, Field, Schema};
+use smallvec::SmallVec;
+
+use crate::{IStr, IntoIStr};
 
 /// CF-conventions time encoding information parsed from Zarr attributes.
 #[derive(Debug, Clone)]
@@ -26,23 +29,23 @@ impl TimeEncoding {
 
 #[derive(Debug, Clone)]
 pub struct ZarrArrayMeta {
-    pub path: String,
+    pub path: IStr,
     pub shape: Vec<u64>,
-    pub dims: Vec<String>,
+    pub dims: SmallVec<[IStr; 4]>,
     pub polars_dtype: PlDataType,
     pub time_encoding: Option<TimeEncoding>,
 }
 
 #[derive(Debug, Clone)]
 pub struct ZarrDatasetMeta {
-    pub arrays: BTreeMap<String, ZarrArrayMeta>,
-    pub dims: Vec<String>,
-    pub data_vars: Vec<String>,
+    pub arrays: BTreeMap<IStr, ZarrArrayMeta>,
+    pub dims: Vec<IStr>,
+    pub data_vars: Vec<IStr>,
 }
 
 impl ZarrDatasetMeta {
-    pub fn tidy_schema(&self, variables: Option<&[String]>) -> Schema {
-        let var_set: Option<BTreeSet<&str>> = variables.map(|v| v.iter().map(|s| s.as_str()).collect());
+    pub fn tidy_schema(&self, variables: Option<&[IStr]>) -> Schema {
+        let var_set: Option<BTreeSet<&str>> = variables.map(|v| v.iter().map(|s| s.as_ref()).collect());
 
         let mut fields: Vec<Field> = Vec::new();
 
@@ -52,22 +55,22 @@ impl ZarrDatasetMeta {
                 .get(dim)
                 .map(|m| m.polars_dtype.clone())
                 .unwrap_or(PlDataType::Int64);
-            fields.push(Field::new(dim.into(), dtype));
+            fields.push(Field::new((<IStr as AsRef<str>>::as_ref(dim)).into(), dtype));
         }
 
         let vars_iter: Box<dyn Iterator<Item = &str>> = if let Some(var_set) = &var_set {
             Box::new(
                 self.data_vars
                     .iter()
-                    .map(|s| s.as_str())
+                    .map(|s| s.as_ref())
                     .filter(|v| var_set.contains(v)),
             )
         } else {
-            Box::new(self.data_vars.iter().map(|s| s.as_str()))
+            Box::new(self.data_vars.iter().map(|s| s.as_ref()))
         };
 
         for v in vars_iter {
-            if let Some(m) = self.arrays.get(v) {
+            if let Some(m) = self.arrays.get(&v.istr()) {
                 fields.push(Field::new(v.into(), m.polars_dtype.clone()));
             }
         }

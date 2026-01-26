@@ -9,23 +9,29 @@ use std::sync::Arc;
 
 use super::types::{IndexRange, ValueRange};
 use crate::meta::ZarrDatasetMeta;
+use crate::{IStr, IntoIStr};
 
 /// A request to resolve a value range to an index range for a specific dimension.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct ResolutionRequest {
     /// The dimension name (interned for efficiency).
-    pub(crate) dim: Arc<str>,
+    pub(crate) dim: IStr,
     /// The value range to resolve.
     pub(crate) value_range: ValueRange,
 }
 
 impl ResolutionRequest {
     /// Create a new resolution request.
-    pub(crate) fn new(dim: impl Into<Arc<str>>, value_range: ValueRange) -> Self {
+    pub(crate) fn new(dim: &str, value_range: ValueRange) -> Self {
         Self {
-            dim: dim.into(),
+            dim: dim.istr(),
             value_range,
         }
+    }
+
+    /// Create a new resolution request from an already interned dimension name.
+    pub(crate) fn new_interned(dim: IStr, value_range: ValueRange) -> Self {
+        Self { dim, value_range }
     }
 }
 
@@ -33,7 +39,7 @@ impl ResolutionRequest {
 #[derive(Debug, Clone)]
 pub(crate) struct InterpolationRequest {
     /// The dimension name.
-    pub(crate) dim: Arc<str>,
+    pub(crate) dim: IStr,
     /// The target coordinate values that need bracketing indices.
     pub(crate) points: Arc<Vec<super::types::CoordScalar>>,
 }
@@ -41,11 +47,11 @@ pub(crate) struct InterpolationRequest {
 impl InterpolationRequest {
     /// Create a new interpolation request.
     pub(crate) fn new(
-        dim: impl Into<Arc<str>>,
+        dim: &str,
         points: Arc<Vec<super::types::CoordScalar>>,
     ) -> Self {
         Self {
-            dim: dim.into(),
+            dim: dim.istr(),
             points,
         }
     }

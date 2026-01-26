@@ -6,6 +6,7 @@ use zarrs::array::Array;
 
 use crate::chunk_plan::ChunkPlan;
 use crate::store::StoreInput;
+use crate::{IStr, IntoIStr};
 
 use super::{DEFAULT_BATCH_SIZE, ZarrSource};
 
@@ -22,8 +23,8 @@ impl ZarrSource {
 
         let store = opened.store.clone();
 
-        let vars = if let Some(v) = variables {
-            v
+        let vars: Vec<IStr> = if let Some(v) = variables {
+            v.into_iter().map(|s| s.istr()).collect()
         } else {
             meta.data_vars.clone()
         };
@@ -41,7 +42,7 @@ impl ZarrSource {
             .ok_or_else(|| PyErr::new::<pyo3::exceptions::PyValueError, _>("unknown variable"))?
             .path
             .clone();
-        let primary = Array::open(store.clone(), &primary_path).map_err(|e| {
+        let primary = Array::open(store.clone(), primary_path.as_ref()).map_err(|e| {
             PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string())
         })?;
 
@@ -57,12 +58,12 @@ impl ZarrSource {
             Some(n) => n,
         };
 
-        let dims = meta
+        let dims: Vec<IStr> = meta
             .arrays
             .get(&vars[0])
-            .map(|m| m.dims.clone())
-            .filter(|d| !d.is_empty())
-            .unwrap_or_else(|| (0..primary.dimensionality()).map(|i| format!("dim_{i}")).collect());
+            .map(|m| m.dims.iter().cloned().collect())
+            .filter(|d: &Vec<IStr>| !d.is_empty())
+            .unwrap_or_else(|| (0..primary.dimensionality()).map(|i| format!("dim_{i}").istr()).collect());
         let chunk_iter = ChunkPlan::all(primary_grid_shape.clone()).into_index_iter();
 
         Ok(Self {

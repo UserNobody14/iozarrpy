@@ -1,12 +1,12 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use zarrs::array::Array;
 
 use crate::chunk_plan::CompileError;
-// use crate::chunk_plan::indexing::selection::ArraySubsetList;
 use super::{DatasetSelection, DSelection};
 
 use crate::meta::ZarrDatasetMeta;
+use crate::{IStr, IntoIStr};
 
 
 pub(crate) fn plan_dataset_chunk_indices(
@@ -14,19 +14,20 @@ pub(crate) fn plan_dataset_chunk_indices(
     meta: &ZarrDatasetMeta,
     store: zarrs::storage::ReadableWritableListableStorage,
     include_dim_coords: bool,
-) -> Result<BTreeMap<String, Vec<Vec<u64>>>, CompileError> {
+) -> Result<BTreeMap<IStr, Vec<Vec<u64>>>, CompileError> {
     // let selection = if include_dim_coords {
     //     add_dim_coords(selection, meta)
     // } else {
     //     selection.clone()
     // };
 
-    let mut out: BTreeMap<String, Vec<Vec<u64>>> = BTreeMap::new();
+    let mut out: BTreeMap<IStr, Vec<Vec<u64>>> = BTreeMap::new();
     for (var, sel) in selection.vars() {
-        let Some(var_meta) = meta.arrays.get(var) else {
+        let var_key = var.istr();
+        let Some(var_meta) = meta.arrays.get(&var_key) else {
             continue;
         };
-        let arr = Array::open(store.clone(), &var_meta.path).map_err(|e| {
+        let arr = Array::open(store.clone(), var_meta.path.as_ref()).map_err(|e| {
             CompileError::Unsupported(format!("failed to open array '{var}': {e}"))
         })?;
         // let grid_shape = arr.chunk_grid().grid_shape().to_vec();
@@ -52,7 +53,7 @@ pub(crate) fn plan_dataset_chunk_indices(
                 }
             }
         }
-        out.insert(var.to_string(), chunk_set);
+        out.insert(var_key, chunk_set);
     }
 
     Ok(out)

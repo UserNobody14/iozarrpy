@@ -14,8 +14,11 @@ use crate::chunk_plan::indexing::lazy_selection::{
     lazy_dataset_all_for_vars, lazy_dataset_for_vars_with_selection,
 };
 use crate::chunk_plan::indexing::types::{BoundKind, ValueRange};
+use crate::{IStr, IntoIStr};
 
 use std::sync::Arc;
+use super::expr_utils::expr_to_col_name;
+
 
 /// Compile an expression to a lazy dataset selection.
 ///
@@ -113,7 +116,7 @@ pub(crate) fn compile_node_lazy(
                             *op
                         };
                         compile_cmp_to_lazy_selection(&col, op_eff, &lit, ctx)
-                            .or_else(|_| Ok(lazy_dataset_all_for_vars(vec![col])))
+                            .or_else(|_| Ok(lazy_dataset_all_for_vars(vec![col.istr()])))
                     } else {
                         Ok(all_for_referenced_vars_lazy(expr, ctx))
                     }
@@ -192,7 +195,7 @@ pub(crate) fn compile_node_lazy(
 
         Expr::Selector(selector) => compile_selector_lazy(selector, ctx),
 
-        Expr::Column(name) => Ok(lazy_dataset_all_for_vars(vec![name.to_string()])),
+        Expr::Column(name) => Ok(lazy_dataset_all_for_vars(vec![name.istr()])),
 
         Expr::Agg(_) => Ok(all_for_referenced_vars_lazy(expr, ctx)),
 
@@ -226,7 +229,7 @@ pub(crate) fn compile_node_lazy(
         Expr::Eval { expr, .. } => compile_node_lazy(expr.as_ref(), ctx),
 
         Expr::Field(names) => {
-            let vars: Vec<String> = names.iter().map(|n| n.to_string()).collect();
+            let vars: Vec<IStr> = names.iter().map(|n| n.istr()).collect();
             if vars.is_empty() {
                 Ok(LazyDatasetSelection::NoSelectionMade)
             } else {
@@ -256,7 +259,7 @@ fn all_for_referenced_vars_lazy(expr: &Expr, _ctx: &LazyCompileCtx<'_>) -> LazyD
 }
 
 /// Try to extract a column name and ValueRange from a comparison expression.
-fn try_expr_to_value_range_lazy(expr: &Expr, ctx: &LazyCompileCtx<'_>) -> Option<(String, ValueRange)> {
+fn try_expr_to_value_range_lazy(expr: &Expr, ctx: &LazyCompileCtx<'_>) -> Option<(IStr, ValueRange)> {
     let expr = strip_wrappers(expr);
     let Expr::BinaryExpr { left, op, right } = expr else {
         return None;
@@ -271,14 +274,14 @@ fn try_expr_to_value_range_lazy(expr: &Expr, ctx: &LazyCompileCtx<'_>) -> Option
     let (col, lit, op_eff) = if let (Expr::Column(name), Expr::Literal(lit)) =
         (strip_wrappers(left), strip_wrappers(right))
     {
-        (name.to_string(), lit, *op)
+        (name.istr(), lit, *op)
     } else if let (Expr::Literal(lit), Expr::Column(name)) = (strip_wrappers(left), strip_wrappers(right)) {
-        (name.to_string(), lit, reverse_operator(*op))
+        (name.istr(), lit, reverse_operator(*op))
     } else {
         return None;
     };
 
-    let time_encoding = ctx.meta.arrays.get(col.as_str()).and_then(|a| a.time_encoding.as_ref());
+    let time_encoding = ctx.meta.arrays.get(&col).and_then(|a| a.time_encoding.as_ref());
     let scalar = literal_to_scalar(lit, time_encoding)?;
 
     let mut vr = ValueRange::default();
@@ -296,12 +299,12 @@ fn try_expr_to_value_range_lazy(expr: &Expr, ctx: &LazyCompileCtx<'_>) -> Option
 
 /// Compile a comparison to a lazy selection.
 fn compile_cmp_to_lazy_selection(
-    col: &str,
+    col: &IStr,
     op: Operator,
     lit: &LiteralValue,
     ctx: &LazyCompileCtx<'_>,
 ) -> Result<LazyDatasetSelection, CompileError> {
-    let time_encoding = ctx.meta.arrays.get(col).and_then(|a| a.time_encoding.as_ref());
+    let time_encoding = ctx.meta.arrays.get(&col.istr()).and_then(|a| a.time_encoding.as_ref());
     let Some(scalar) = literal_to_scalar(lit, time_encoding) else {
         return Err(CompileError::Unsupported(format!(
             "unsupported literal: {:?}",
@@ -348,10 +351,10 @@ fn compile_value_range_to_lazy_selection(
 
     // Create a lazy constraint with the unresolved value range
     let constraint = LazyDimConstraint::Unresolved(vr.clone());
-    let rect = LazyHyperRectangle::all().with_dim(Arc::from(col), constraint);
+    let rect = LazyHyperRectangle::all().with_dim(col.istr(), constraint);
     let sel = LazyArraySelection::from_rectangle(rect);
 
-    Ok(lazy_dataset_for_vars_with_selection(ctx.vars.to_vec(), sel))
+    Ok(lazy_dataset_for_vars_with_selection(ctx.vars.iter().cloned(), sel))
 }
 
 /// Compile a boolean function to a lazy selection.
@@ -435,7 +438,6 @@ fn compile_is_between_lazy(
     input: &[Expr],
     ctx: &mut LazyCompileCtx<'_>,
 ) -> Result<LazyDatasetSelection, CompileError> {
-    use super::expr_utils::expr_to_col_name;
 
     if input.len() < 3 {
         return Err(CompileError::Unsupported(format!(
@@ -457,9 +459,9 @@ fn compile_is_between_lazy(
         return Ok(LazyDatasetSelection::NoSelectionMade);
     };
 
-    let a = compile_cmp_to_lazy_selection(col, Operator::GtEq, low_lit, ctx)
+    let a = compile_cmp_to_lazy_selection(&col, Operator::GtEq, low_lit, ctx)
         .unwrap_or_else(|_| LazyDatasetSelection::NoSelectionMade);
-    let b = compile_cmp_to_lazy_selection(col, Operator::LtEq, high_lit, ctx)
+    let b = compile_cmp_to_lazy_selection(&col, Operator::LtEq, high_lit, ctx)
         .unwrap_or_else(|_| LazyDatasetSelection::NoSelectionMade);
     Ok(a.intersect(&b))
 }
@@ -469,7 +471,6 @@ fn compile_is_in_lazy(
     input: &[Expr],
     ctx: &mut LazyCompileCtx<'_>,
 ) -> Result<LazyDatasetSelection, CompileError> {
-    use super::expr_utils::expr_to_col_name;
     use polars::prelude::Scalar;
 
     if input.len() < 2 {
@@ -533,7 +534,7 @@ fn compile_is_in_lazy(
             return Ok(LazyDatasetSelection::NoSelectionMade);
         }
         let lit = LiteralValue::Scalar(Scalar::new(dtype.clone(), av));
-        let node = compile_cmp_to_lazy_selection(col, Operator::Eq, &lit, ctx)
+        let node = compile_cmp_to_lazy_selection(&col, Operator::Eq, &lit, ctx)
             .unwrap_or_else(|_| LazyDatasetSelection::NoSelectionMade);
 
         if node == LazyDatasetSelection::NoSelectionMade {
@@ -577,15 +578,15 @@ fn compile_selector_lazy(
         }
         Selector::Empty => Ok(LazyDatasetSelection::empty()),
         Selector::ByName { names, .. } => {
-            let vars = names.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+            let vars: Vec<IStr> = names.iter().map(|s| s.istr()).collect();
             Ok(lazy_dataset_all_for_vars(vars))
         }
         Selector::Matches(pattern) => {
             let re = Regex::new(pattern.as_str()).map_err(|e| {
                 CompileError::Unsupported(format!("invalid regex pattern '{}': {}", pattern, e))
             })?;
-            let matching_vars: Vec<String> = ctx.meta.data_vars.iter()
-                .filter(|v| re.is_match(v))
+            let matching_vars: Vec<IStr> = ctx.meta.data_vars.iter()
+                .filter(|v| re.is_match(v.as_ref()))
                 .cloned()
                 .collect();
             if matching_vars.is_empty() {
@@ -595,9 +596,9 @@ fn compile_selector_lazy(
             }
         }
         Selector::ByDType(dtype_selector) => {
-            let matching_vars: Vec<String> = ctx.meta.data_vars.iter()
+            let matching_vars: Vec<IStr> = ctx.meta.data_vars.iter()
                 .filter(|v| {
-                    if let Some(array_meta) = ctx.meta.arrays.get(*v) {
+                    if let Some(array_meta) = ctx.meta.arrays.get(v) {
                         dtype_selector.matches(&array_meta.polars_dtype)
                     } else {
                         true
@@ -646,7 +647,7 @@ fn interpolate_selection_nd_lazy(
     let target_fields = target_sc.fields_as_series();
 
     // For each dimension, collect all the target values
-    let mut dim_values: std::collections::BTreeMap<String, Vec<CoordScalar>> =
+    let mut dim_values: std::collections::BTreeMap<IStr, Vec<CoordScalar>> =
         std::collections::BTreeMap::new();
 
     for name in &coord_names {
@@ -656,7 +657,7 @@ fn interpolate_selection_nd_lazy(
         }
 
         // If this coord dim isn't present in the target DataFrame, it's a group key
-        let Some(s) = target_fields.iter().find(|s| s.name() == name.as_str()) else {
+        let Some(s) = target_fields.iter().find(|s| s.name() == <IStr as AsRef<str>>::as_ref(name)) else {
             continue;
         };
 
@@ -675,7 +676,7 @@ fn interpolate_selection_nd_lazy(
 
     // For each dimension, create interpolation constraints for each unique target value.
     // Each target value needs bracketing (the indices on both sides).
-    let mut constraints: std::collections::BTreeMap<Arc<str>, LazyDimConstraint> =
+    let mut constraints: std::collections::BTreeMap<IStr, LazyDimConstraint> =
         std::collections::BTreeMap::new();
 
     for (dim_name, values) in dim_values {
@@ -685,14 +686,14 @@ fn interpolate_selection_nd_lazy(
         
         // Create a special constraint that holds all the interpolation target values
         constraints.insert(
-            Arc::from(dim_name.as_str()),
+            dim_name,
             LazyDimConstraint::UnresolvedInterpolationPoints(Arc::new(interp_values)),
         );
     }
 
     let rect = LazyHyperRectangle::with_dims(constraints);
     let sel = LazyArraySelection::from_rectangle(rect);
-    Ok(lazy_dataset_for_vars_with_selection(ctx.vars.to_vec(), sel))
+    Ok(lazy_dataset_for_vars_with_selection(ctx.vars.iter().cloned(), sel))
 }
 
 /// Find min and max scalar values from a slice using partial comparison.
@@ -714,11 +715,11 @@ fn min_max_scalar(values: &[crate::chunk_plan::indexing::types::CoordScalar]) ->
 }
 
 /// Extract column names from an expression (for lazy interpolation).
-fn extract_column_names_lazy(expr: &Expr) -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
+fn extract_column_names_lazy(expr: &Expr) -> Vec<IStr> {
+    let mut out: Vec<IStr> = Vec::new();
     walk_expr_lazy(expr, &mut |e| {
         if let Expr::Column(name) = e {
-            out.push(name.to_string());
+            out.push(name.istr());
         }
     });
     out.sort();

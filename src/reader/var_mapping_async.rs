@@ -1,10 +1,12 @@
 use zarrs::array::Array;
 
+use crate::IStr;
+
 pub(crate) fn compute_var_chunk_info_async(
     primary_chunk_indices: &[u64],
     primary_chunk_shape: &[u64],
-    primary_dims: &[String],
-    var_dims: &[String],
+    primary_dims: &[IStr],
+    var_dims: &[IStr],
     var_array: &Array<dyn zarrs::storage::AsyncReadableWritableListableStorageTraits>,
 ) -> Result<(Vec<u64>, Vec<u64>), String> {
     let mut var_chunk_indices = Vec::with_capacity(var_dims.len());
