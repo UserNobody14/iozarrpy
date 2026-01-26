@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 use polars::prelude::{DataType as PlDataType, Field, Schema};
 use smallvec::SmallVec;
@@ -30,7 +31,8 @@ impl TimeEncoding {
 #[derive(Debug, Clone)]
 pub struct ZarrArrayMeta {
     pub path: IStr,
-    pub shape: Vec<u64>,
+    /// Shape wrapped in Arc for cheap cloning.
+    pub shape: Arc<[u64]>,
     pub dims: SmallVec<[IStr; 4]>,
     pub polars_dtype: PlDataType,
     pub time_encoding: Option<TimeEncoding>,

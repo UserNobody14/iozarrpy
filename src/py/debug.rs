@@ -63,7 +63,7 @@ pub(crate) fn _debug_chunk_planning(
     for (name, arr_meta) in &meta.arrays {
         let arr_dict = PyDict::new(py);
         arr_dict.set_item("path", arr_meta.path.to_string())?;
-        arr_dict.set_item("shape", &arr_meta.shape)?;
+        arr_dict.set_item("shape", arr_meta.shape.to_vec())?;
         let dims_strs: Vec<String> = arr_meta.dims.iter().map(|d| d.to_string()).collect();
         arr_dict.set_item("dims", &dims_strs)?;
         arr_dict.set_item("polars_dtype", format!("{:?}", arr_meta.polars_dtype))?;
@@ -114,7 +114,7 @@ pub(crate) fn _debug_chunk_planning(
     };
 
     let dim_lengths: Vec<u64> = if primary_meta.shape.len() == dims.len() {
-        primary_meta.shape.clone()
+        primary_meta.shape.to_vec()
     } else {
         result.set_item(
             "error",
@@ -364,7 +364,7 @@ pub(crate) fn _debug_coord_array(
     };
 
     result.set_item("dim_name", &dim_name)?;
-    result.set_item("shape", &arr_meta.shape)?;
+    result.set_item("shape", arr_meta.shape.to_vec())?;
     let dims_strs: Vec<String> = arr_meta.dims.iter().map(|d| d.to_string()).collect();
     result.set_item("dims", &dims_strs)?;
     result.set_item("path", arr_meta.path.to_string())?;

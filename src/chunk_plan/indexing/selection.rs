@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use smallvec::SmallVec;
 use zarrs::array_subset::ArraySubset;
@@ -62,9 +63,10 @@ impl DSelection for DatasetSelection {
 /// Selection for a single array, expressed as a disjunction (OR) of hyper-rectangles.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct DataArraySelection {
-    /// SmallVec of dimension names (each name's position in the vec labels its index)
+    /// SmallVec of dimension names wrapped in Arc for cheap cloning in set operations.
+    /// Each name's position in the vec labels its index.
     /// So if we had [a, b, c], a would be our label for dim 0, b would be 1, c would be 2.
-    dims: SmallVec<[IStr; 4]>,
+    dims: Arc<SmallVec<[IStr; 4]>>,
     /// List of associated ArraySubsets
     subsets: ArraySubsetList
 }
@@ -76,7 +78,7 @@ impl DataArraySelection {
 
     pub (crate) fn from_subsets(dims: &[IStr], subsets: ArraySubsetList) -> Self {
         Self {
-            dims: dims.iter().cloned().collect(),
+            dims: Arc::new(dims.iter().cloned().collect()),
             subsets,
         }
     }
@@ -254,7 +256,7 @@ impl SetOperations for DatasetSelection {
 impl Emptyable for DataArraySelection {
     fn empty() -> Self {
         Self {
-            dims: SmallVec::new(),
+            dims: Arc::new(SmallVec::new()),
             subsets: ArraySubsetList::empty(),
         }
     }

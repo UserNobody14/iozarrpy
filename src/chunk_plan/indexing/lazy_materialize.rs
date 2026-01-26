@@ -58,7 +58,7 @@ pub(crate) fn materialize(
 fn materialize_array(
     selection: &LazyArraySelection,
     dims: &smallvec::SmallVec<[crate::IStr; 4]>,
-    shape: Vec<u64>,
+    shape: std::sync::Arc<[u64]>,
     cache: &dyn ResolutionCache,
 ) -> Result<DataArraySelection, ResolutionError> {
     match selection {
@@ -87,7 +87,7 @@ fn materialize_array(
 fn materialize_rectangle(
     rect: &LazyHyperRectangle,
     dims: &smallvec::SmallVec<[crate::IStr; 4]>,
-    shape: Vec<u64>,
+    shape: std::sync::Arc<[u64]>,
     cache: &dyn ResolutionCache,
 ) -> Result<ArraySubsetList, ResolutionError> {
     if rect.is_empty() {

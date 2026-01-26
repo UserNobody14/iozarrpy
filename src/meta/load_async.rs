@@ -60,7 +60,7 @@ pub async fn load_dataset_meta_from_opened_async(
         let array = Array::new_with_metadata(store.clone(), path_str.as_ref(), array_md.clone())
             .map_err(to_string_err)?;
 
-        let shape = array.shape().to_vec();
+        let shape: std::sync::Arc<[u64]> = array.shape().into();
         let dims = dims_for_array(&array).unwrap_or_else(|| default_dims(shape.len()));
 
         for d in &dims {
@@ -77,7 +77,7 @@ pub async fn load_dataset_meta_from_opened_async(
 
         if shape.len() == 1 && dims.len() == 1 && leaf == dims[0] {
             let dt = zarr_dtype_to_polars(array.data_type().identifier(), time_encoding.as_ref());
-            coord_candidates.insert(leaf.clone(), (shape.clone(), dt));
+            coord_candidates.insert(leaf.clone(), (shape.to_vec(), dt));
         }
 
         // Parse "coordinates" attribute (CF convention) to identify auxiliary coords
