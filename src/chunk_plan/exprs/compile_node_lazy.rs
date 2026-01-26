@@ -6,7 +6,7 @@
 use super::compile_ctx::LazyCompileCtx;
 use super::errors::CompileError;
 use super::literals::{col_lit, literal_anyvalue, literal_to_scalar, reverse_operator, strip_wrappers};
-use super::compile_node::{collect_column_refs, collect_selector_refs};
+use super::compile_node::collect_column_refs;
 use super::{SetOperations, Emptyable};
 use crate::chunk_plan::prelude::*;
 use crate::chunk_plan::indexing::lazy_selection::{
@@ -51,7 +51,7 @@ pub(crate) fn compile_node_lazy(
             if refs.is_empty() {
                 Ok(func_sel)
             } else {
-                let part_sel = lazy_dataset_all_for_vars(refs);
+                let part_sel = lazy_dataset_all_for_vars(refs, ctx.meta);
                 Ok(func_sel.union(&part_sel))
             }
         }
@@ -116,7 +116,7 @@ pub(crate) fn compile_node_lazy(
                             *op
                         };
                         compile_cmp_to_lazy_selection(&col, op_eff, &lit, ctx)
-                            .or_else(|_| Ok(lazy_dataset_all_for_vars(vec![col.istr()])))
+                            .or_else(|_| Ok(lazy_dataset_all_for_vars(vec![col.istr()], ctx.meta)))
                     } else {
                         Ok(all_for_referenced_vars_lazy(expr, ctx))
                     }
@@ -187,7 +187,7 @@ pub(crate) fn compile_node_lazy(
                     if refs.is_empty() {
                         Ok(LazyDatasetSelection::NoSelectionMade)
                     } else {
-                        Ok(lazy_dataset_all_for_vars(refs))
+                        Ok(lazy_dataset_all_for_vars(refs, ctx.meta))
                     }
                 }
             }
@@ -195,7 +195,7 @@ pub(crate) fn compile_node_lazy(
 
         Expr::Selector(selector) => compile_selector_lazy(selector, ctx),
 
-        Expr::Column(name) => Ok(lazy_dataset_all_for_vars(vec![name.istr()])),
+        Expr::Column(name) => Ok(lazy_dataset_all_for_vars(vec![name.istr()], ctx.meta)),
 
         Expr::Agg(_) => Ok(all_for_referenced_vars_lazy(expr, ctx)),
 
@@ -209,7 +209,7 @@ pub(crate) fn compile_node_lazy(
             if refs.is_empty() {
                 Ok(LazyDatasetSelection::NoSelectionMade)
             } else {
-                Ok(lazy_dataset_all_for_vars(refs))
+                Ok(lazy_dataset_all_for_vars(refs, ctx.meta))
             }
         }
 
@@ -222,7 +222,7 @@ pub(crate) fn compile_node_lazy(
             if refs.is_empty() {
                 Ok(LazyDatasetSelection::NoSelectionMade)
             } else {
-                Ok(lazy_dataset_all_for_vars(refs))
+                Ok(lazy_dataset_all_for_vars(refs, ctx.meta))
             }
         }
 
@@ -233,7 +233,7 @@ pub(crate) fn compile_node_lazy(
             if vars.is_empty() {
                 Ok(LazyDatasetSelection::NoSelectionMade)
             } else {
-                Ok(lazy_dataset_all_for_vars(vars))
+                Ok(lazy_dataset_all_for_vars(vars, ctx.meta))
             }
         }
 
@@ -246,7 +246,7 @@ pub(crate) fn compile_node_lazy(
 }
 
 /// Returns a LazyDatasetSelection for the variables referenced in an expression.
-fn all_for_referenced_vars_lazy(expr: &Expr, _ctx: &LazyCompileCtx<'_>) -> LazyDatasetSelection {
+fn all_for_referenced_vars_lazy(expr: &Expr, ctx: &LazyCompileCtx<'_>) -> LazyDatasetSelection {
     let mut refs = Vec::new();
     collect_column_refs(expr, &mut refs);
     refs.sort();
@@ -254,7 +254,7 @@ fn all_for_referenced_vars_lazy(expr: &Expr, _ctx: &LazyCompileCtx<'_>) -> LazyD
     if refs.is_empty() {
         LazyDatasetSelection::NoSelectionMade
     } else {
-        lazy_dataset_all_for_vars(refs)
+        lazy_dataset_all_for_vars(refs, ctx.meta)
     }
 }
 
@@ -354,7 +354,7 @@ fn compile_value_range_to_lazy_selection(
     let rect = LazyHyperRectangle::all().with_dim(col.istr(), constraint);
     let sel = LazyArraySelection::from_rectangle(rect);
 
-    Ok(lazy_dataset_for_vars_with_selection(ctx.vars.iter().cloned(), sel))
+    Ok(lazy_dataset_for_vars_with_selection(ctx.vars.iter().cloned(), ctx.meta, sel))
 }
 
 /// Compile a boolean function to a lazy selection.
@@ -579,7 +579,7 @@ fn compile_selector_lazy(
         Selector::Empty => Ok(LazyDatasetSelection::empty()),
         Selector::ByName { names, .. } => {
             let vars: Vec<IStr> = names.iter().map(|s| s.istr()).collect();
-            Ok(lazy_dataset_all_for_vars(vars))
+            Ok(lazy_dataset_all_for_vars(vars, ctx.meta))
         }
         Selector::Matches(pattern) => {
             let re = Regex::new(pattern.as_str()).map_err(|e| {
@@ -592,7 +592,7 @@ fn compile_selector_lazy(
             if matching_vars.is_empty() {
                 Ok(LazyDatasetSelection::empty())
             } else {
-                Ok(lazy_dataset_all_for_vars(matching_vars))
+                Ok(lazy_dataset_all_for_vars(matching_vars, ctx.meta))
             }
         }
         Selector::ByDType(dtype_selector) => {
@@ -609,11 +609,11 @@ fn compile_selector_lazy(
             if matching_vars.is_empty() {
                 Ok(LazyDatasetSelection::empty())
             } else {
-                Ok(lazy_dataset_all_for_vars(matching_vars))
+                Ok(lazy_dataset_all_for_vars(matching_vars, ctx.meta))
             }
         }
         Selector::ByIndex { .. } => Ok(LazyDatasetSelection::NoSelectionMade),
-        Selector::Wildcard => Ok(lazy_dataset_all_for_vars(ctx.meta.data_vars.clone())),
+        Selector::Wildcard => Ok(lazy_dataset_all_for_vars(ctx.meta.data_vars.clone(), ctx.meta)),
     }
 }
 
@@ -693,7 +693,7 @@ fn interpolate_selection_nd_lazy(
 
     let rect = LazyHyperRectangle::with_dims(constraints);
     let sel = LazyArraySelection::from_rectangle(rect);
-    Ok(lazy_dataset_for_vars_with_selection(ctx.vars.iter().cloned(), sel))
+    Ok(lazy_dataset_for_vars_with_selection(ctx.vars.iter().cloned(), ctx.meta, sel))
 }
 
 /// Find min and max scalar values from a slice using partial comparison.

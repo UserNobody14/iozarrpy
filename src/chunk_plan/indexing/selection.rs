@@ -1,51 +1,25 @@
-use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use smallvec::SmallVec;
 use zarrs::array_subset::ArraySubset;
 
-use crate::{IStr, IntoIStr};
+use crate::IStr;
 
-/// Dataset-level selection: variable name -> selection on that variable.
+use super::grouped_selection::{ArraySelectionType, DatasetSelectionBase, GroupedSelection};
+
+/// Dataset-level selection: type alias for the generic `DatasetSelectionBase`.
 ///
-/// This is intended to be a pure index-selection representation (no chunking info).
-// pub(crate) struct DatasetSelection(pub(crate) BTreeMap<IStr, DataArraySelection>);
+/// This groups variables by their dimension signature to avoid duplication.
+pub(crate) type DatasetSelection = DatasetSelectionBase<DataArraySelection>;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RealSelection(BTreeMap<IStr, DataArraySelection>);
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub (crate) enum DatasetSelection {
-    /// If no selection was made:
-    NoSelectionMade,
-    /// If everything has been excluded
-    Empty,
-    /// Standard selection:
-    Selection(RealSelection),
-}
-
+/// Trait for dataset selections that can iterate over variables.
 pub trait DSelection {
     fn vars(&self) -> impl Iterator<Item = (&str, &DataArraySelection)>;
 }
 
-impl From<BTreeMap<IStr, DataArraySelection>> for RealSelection {
-    fn from(map: BTreeMap<IStr, DataArraySelection>) -> Self {
-        RealSelection(map)
-    }
-}
-
-impl RealSelection {
-    pub(crate) fn len(&self) -> usize {
-        self.0.len()
-    }
-
-    pub(crate) fn get(&self, var: &str) -> Option<&DataArraySelection> {
-        self.0.get(&var.istr())
-    }
-}
-
-impl DSelection for RealSelection {
+impl DSelection for GroupedSelection<DataArraySelection> {
     fn vars(&self) -> impl Iterator<Item = (&str, &DataArraySelection)> {
-        Box::new(self.0.iter().map(|(k, v)| (k.as_ref(), v)))
+        Box::new(GroupedSelection::vars(self)) as Box<dyn Iterator<Item = _>>
     }
 }
 
@@ -57,7 +31,6 @@ impl DSelection for DatasetSelection {
             Self::Empty => Box::new(std::iter::empty()),
         }
     }
-
 }
 
 /// Selection for a single array, expressed as a disjunction (OR) of hyper-rectangles.
@@ -99,159 +72,8 @@ pub trait SetOperations: Emptyable {
 }
 
 
-impl Emptyable for RealSelection {
-    /// TODO: slightly wrong since we would need the actual list of all vars for an empty (?)
-    fn empty() -> Self {
-        Self(BTreeMap::new())
-    }
-    fn is_empty(&self) -> bool {
-        self.0.is_empty()
-    }
-}
-
-impl SetOperations for RealSelection {
-    fn union(&self, other: &Self) -> Self {
-        let (s, o) = (self.0.clone(), other.0.clone());
-        if s.is_empty() {
-            return other.clone();
-        }
-        if o.is_empty() {
-            return self.clone();
-        }
-        let mut out = s.clone();
-        for (k, v) in o {
-            out.entry(k.clone())
-                .and_modify(|cur| *cur = cur.union(&v))
-                .or_insert_with(|| v.clone());
-        }
-        RealSelection(out)
-    }
-    fn intersect(&self, other: &Self) -> Self {
-        let (s, o) = (self.0.clone(), other.0.clone());
-        let mut out = BTreeMap::new();
-        for (k, a) in s {
-            if let Some(b) = o.get(&k) {
-                let sel = a.intersect(b);
-                if !sel.is_empty() {
-                    out.insert(k.clone(), sel);
-                }
-            }
-        }
-        RealSelection(out).into()
-    }
-    fn difference(&self, other: &Self) -> Self {
-        let (s, o) = (self.0.clone(), other.0.clone());
-        let mut out = BTreeMap::new();
-        for (k, a) in s {
-            if let Some(b) = o.get(&k) {
-                let sel = a.difference(b);
-                if !sel.is_empty() {
-                    out.insert(k.clone(), sel);
-                }
-            } else {
-                // Key only in self: keep it (we're subtracting nothing)
-                out.insert(k.clone(), a.clone());
-            }
-        }
-        RealSelection(out).into()
-    }
-    fn exclusive_or(&self, other: &Self) -> Self {
-        let (s, o) = (self.0.clone(), other.0.clone());
-        let mut out = BTreeMap::new();
-        // Keys in self
-        for (k, a) in s.iter() {
-            if let Some(b) = o.get(k) {
-                let sel = a.exclusive_or(b);
-                if !sel.is_empty() {
-                    out.insert(k.clone(), sel);
-                }
-            } else {
-                // Key only in self: include it
-                out.insert(k.clone(), a.clone());
-            }
-        }
-        // Keys only in other
-        for (k, b) in o {
-            if !&s.contains_key(&k) {
-                out.insert(k.clone(), b.clone());
-            }
-        }
-        RealSelection(out).into()
-    }
-
-}
-
-impl Emptyable for DatasetSelection {
-    fn empty() -> Self {
-        Self::Empty
-    }
-    fn is_empty(&self) -> bool {
-        match self {
-            Self::Selection(s) => s.is_empty(),
-            Self::NoSelectionMade | Self::Empty => true,
-        }
-    }
-}
-
-
-impl SetOperations for DatasetSelection {
-    fn union(&self, other: &Self) -> Self {
-        match (self, other) {
-            (Self::Selection(s), Self::Selection(o)) => {
-                Self::Selection(s.union(o))
-            },
-            // NoSelectionMade means "all chunks" - union with all is all
-            (Self::NoSelectionMade, _) | (_, Self::NoSelectionMade) => Self::NoSelectionMade,
-            // Empty means "no chunks" - union with empty is the other side
-            (Self::Empty, _) => other.clone(),
-            (_, Self::Empty) => self.clone(),
-        }
-    }
-
-    fn intersect(&self, other: &DatasetSelection) -> DatasetSelection {
-        match (self, other) {
-            (Self::Selection(s), Self::Selection(o)) => {
-                Self::Selection(s.intersect(o))
-            }
-            (Self::NoSelectionMade, _) => other.clone(),
-            (_, Self::NoSelectionMade) => self.clone(),
-            (Self::Empty, _) => self.clone(),
-            (_, Self::Empty) => other.clone(),
-        }
-    }
-
-    fn difference(&self, other: &DatasetSelection) -> DatasetSelection {
-        match (self, other) {
-            (Self::Selection(s), Self::Selection(o)) => {
-                Self::Selection(s.difference(o))
-            }
-            // NoSelectionMade - X = can't represent complement, stay conservative
-            (Self::NoSelectionMade, _) => Self::NoSelectionMade,
-            // X - NoSelectionMade = empty (subtracting everything)
-            (_, Self::NoSelectionMade) => Self::Empty,
-            // Empty - X = Empty
-            (Self::Empty, _) => Self::Empty,
-            // X - Empty = X
-            (_, Self::Empty) => self.clone(),
-        }
-    }
-
-    fn exclusive_or(&self, other: &DatasetSelection) -> DatasetSelection {
-        match (self, other) {
-            (Self::Selection(s), Self::Selection(o)) => {
-
-                Self::Selection(s.exclusive_or(o))
-            }
-            // NoSelectionMade XOR X = can't represent complement, stay conservative
-            (Self::NoSelectionMade, _) | (_, Self::NoSelectionMade) => Self::NoSelectionMade,
-            // Empty XOR X = X
-            (Self::Empty, _) => other.clone(),
-            (_, Self::Empty) => self.clone(),
-        }
-    }
-
-}
-
+// Note: Emptyable and SetOperations for DatasetSelection are provided by
+// the generic DatasetSelectionBase<Sel> implementation in grouped_selection.rs
 
 impl Emptyable for DataArraySelection {
     fn empty() -> Self {
@@ -262,6 +84,17 @@ impl Emptyable for DataArraySelection {
     }
     fn is_empty(&self) -> bool {
         self.subsets.is_empty()
+    }
+}
+
+impl ArraySelectionType for DataArraySelection {
+    fn all() -> Self {
+        // For concrete selections, "all" is only meaningful when we know the shape.
+        // This method exists for trait completeness but should not be called directly.
+        // Use `from_subsets` with actual bounds instead.
+        // We return empty here as a fallback - in practice, concrete "all" selections
+        // come from materializing LazyArraySelection::all() with shape info.
+        Self::empty()
     }
 }
 

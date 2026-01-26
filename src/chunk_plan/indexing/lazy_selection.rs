@@ -9,7 +9,8 @@ use std::sync::Arc;
 
 use smallvec::SmallVec;
 
-use super::selection::{ArraySubsetList, Emptyable};
+use super::grouped_selection::ArraySelectionType;
+use super::selection::Emptyable;
 use super::types::ValueRange;
 use std::ops::Range;
 use crate::{IStr, IntoIStr};
@@ -76,6 +77,12 @@ impl LazyHyperRectangle {
     #[inline]
     pub(crate) fn is_empty(&self) -> bool {
         self.empty || self.dims.values().any(|c| c.is_empty())
+    }
+
+    /// Returns true if this rectangle represents "select all" (no constraints).
+    #[inline]
+    pub(crate) fn is_all(&self) -> bool {
+        !self.empty && self.dims.is_empty()
     }
 
     /// Get constraint for a specific dimension.
@@ -168,66 +175,42 @@ impl LazyArraySelection {
         }
     }
 
-}
-
-/// Dataset-level lazy selection: variable name -> selection on that variable.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum LazyDatasetSelection {
-    /// No selection was made (equivalent to "select all").
-    NoSelectionMade,
-    /// Everything has been excluded.
-    Empty,
-    /// Standard selection mapping variables to their selections.
-    Selection(BTreeMap<IStr, LazyArraySelection>),
-}
-
-impl Default for LazyDatasetSelection {
-    fn default() -> Self {
-        Self::NoSelectionMade
-    }
-}
-
-impl LazyDatasetSelection {
-    /// Create an empty selection (selects nothing).
-    pub(crate) fn empty() -> Self {
-        Self::Empty
-    }
-
-    /// Returns true if this is an empty selection.
-    pub(crate) fn is_empty_selection(&self) -> bool {
-        matches!(self, Self::Empty)
-    }
-
-    /// Iterate over variables and their selections.
-    pub(crate) fn vars(&self) -> impl Iterator<Item = (&str, &LazyArraySelection)> {
+    /// Returns true if this selection represents "select all" (no constraints).
+    pub(crate) fn is_all(&self) -> bool {
         match self {
-            Self::Selection(sel) => Box::new(sel.iter().map(|(k, v)| (k.as_ref(), v)))
-                as Box<dyn Iterator<Item = _>>,
-            Self::NoSelectionMade | Self::Empty => Box::new(std::iter::empty()),
+            Self::Rectangles(rects) => {
+                rects.len() == 1 && rects[0].is_all()
+            }
+            Self::Difference(_, _) | Self::Union(_, _) => false,
         }
     }
 
 }
 
+/// Dataset-level lazy selection: type alias for the generic `DatasetSelectionBase`.
+///
+/// This groups variables by their dimension signature to avoid duplication.
+pub(crate) type LazyDatasetSelection = super::grouped_selection::DatasetSelectionBase<LazyArraySelection>;
+
 /// Create a lazy dataset selection for the given variables with all indices selected.
-pub(crate) fn lazy_dataset_all_for_vars(vars: impl IntoIterator<Item = IStr>) -> LazyDatasetSelection {
-    let mut m = BTreeMap::new();
-    for v in vars {
-        m.insert(v, LazyArraySelection::all());
-    }
-    LazyDatasetSelection::Selection(m)
+///
+/// Groups variables by their dimension signature from metadata.
+pub(crate) fn lazy_dataset_all_for_vars(
+    vars: impl IntoIterator<Item = IStr>,
+    meta: &crate::meta::ZarrDatasetMeta,
+) -> LazyDatasetSelection {
+    LazyDatasetSelection::all_for_vars(vars, meta)
 }
 
 /// Create a lazy dataset selection for the given variables with the specified selection.
+///
+/// Groups variables by their dimension signature from metadata.
 pub(crate) fn lazy_dataset_for_vars_with_selection(
     vars: impl IntoIterator<Item = IStr>,
+    meta: &crate::meta::ZarrDatasetMeta,
     sel: LazyArraySelection,
 ) -> LazyDatasetSelection {
-    let mut m = BTreeMap::new();
-    for v in vars {
-        m.insert(v, sel.clone());
-    }
-    LazyDatasetSelection::Selection(m)
+    LazyDatasetSelection::for_vars_with_selection(vars, meta, sel)
 }
 
 // ============================================================================
@@ -437,6 +420,12 @@ impl SetOperations for LazyArraySelection {
             return self.clone();
         }
 
+        // Special case: all - all = empty
+        // This is important for selector XOR operations where both sides select "all"
+        if self.is_all() && other.is_all() {
+            return LazyArraySelection::empty();
+        }
+
         // Store as deferred difference for materialization
         LazyArraySelection::Difference(Box::new(self.clone()), Box::new(other.clone()))
     }
@@ -444,89 +433,16 @@ impl SetOperations for LazyArraySelection {
     fn exclusive_or(&self, other: &Self) -> Self {
         self.difference(other).union(&other.difference(self))
     }
-
 }
 
-impl Emptyable for LazyDatasetSelection {
-    fn empty() -> Self {
-        LazyDatasetSelection::empty()
-    }
-    fn is_empty(&self) -> bool {
-        matches!(self, Self::Empty)
+impl ArraySelectionType for LazyArraySelection {
+    fn all() -> Self {
+        LazyArraySelection::all()
     }
 }
-impl SetOperations for LazyDatasetSelection {
-    fn union(&self, other: &Self) -> Self {
-        match (self, other) {
-            (Self::NoSelectionMade, _) | (_, Self::NoSelectionMade) => Self::NoSelectionMade,
-            (Self::Empty, x) | (x, Self::Empty) => x.clone(),
-            (Self::Selection(a), Self::Selection(b)) => {
-                let mut out = a.clone();
-                for (k, v) in b {
-                    out.entry(k.clone())
-                        .and_modify(|cur| *cur = cur.union(v))
-                        .or_insert_with(|| v.clone());
-                }
-                Self::Selection(out)
-            }
-        }
-    }
 
-    fn intersect(&self, other: &Self) -> Self {
-        match (self, other) {
-            (Self::NoSelectionMade, x) | (x, Self::NoSelectionMade) => x.clone(),
-            (Self::Empty, _) | (_, Self::Empty) => Self::Empty,
-            (Self::Selection(a), Self::Selection(b)) => {
-                let mut out = BTreeMap::new();
-                for (k, sel_a) in a {
-                    if let Some(sel_b) = b.get(k) {
-                        let intersected = sel_a.intersect(sel_b);
-                        if !intersected.is_empty() {
-                            out.insert(k.clone(), intersected);
-                        }
-                    }
-                }
-                if out.is_empty() {
-                    Self::Empty
-                } else {
-                    Self::Selection(out)
-                }
-            }
-        }
-    }
-
-    fn difference(&self, other: &Self) -> Self {
-        match (self, other) {
-            (Self::NoSelectionMade, _) => Self::NoSelectionMade,
-            (_, Self::NoSelectionMade) => Self::Empty,
-            (Self::Empty, _) => Self::Empty,
-            (x, Self::Empty) => x.clone(),
-            (Self::Selection(a), Self::Selection(b)) => {
-                let mut out = BTreeMap::new();
-                for (k, sel_a) in a {
-                    if let Some(sel_b) = b.get(k) {
-                        let diff = sel_a.difference(sel_b);
-                        if !diff.is_empty() {
-                            out.insert(k.clone(), diff);
-                        }
-                    } else {
-                        out.insert(k.clone(), sel_a.clone());
-                    }
-                }
-                if out.is_empty() {
-                    Self::Empty
-                } else {
-                    Self::Selection(out)
-                }
-            }
-        }
-    }
-
-    fn exclusive_or(&self, other: &Self) -> Self {
-        self.difference(other).union(&other.difference(self))
-    }
-
-}
+// Note: Emptyable and SetOperations for LazyDatasetSelection are provided by
+// the generic DatasetSelectionBase<Sel> implementation in grouped_selection.rs
 
 /// Intersect two lazy hyper-rectangles.
 fn intersect_lazy_rectangles(a: &LazyHyperRectangle, b: &LazyHyperRectangle) -> LazyHyperRectangle {

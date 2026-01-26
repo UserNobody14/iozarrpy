@@ -19,9 +19,14 @@ pub(crate) use monotonic_scalar::MonotonicCoordResolver;
 pub mod monotonic_async;
 pub(crate) use monotonic_async::AsyncMonotonicResolver;
 
+// Generic grouped selection types
+pub mod grouped_selection;
+pub(crate) use grouped_selection::{
+    ArraySelectionType, DatasetSelectionBase, GroupedSelection,
+};
+
 // Lazy selection types
 pub mod lazy_selection;
-
 
 // Lazy resolution and materialization
 pub mod lazy_materialize;
@@ -36,4 +41,4 @@ pub(crate) use resolver_traits::{
 pub(crate) use selection::{
     DSelection, Emptyable, DatasetSelection
 };
-pub(crate) use types::DimChunkRange;
+pub(crate) use types::{DimChunkRange, DimSignature};

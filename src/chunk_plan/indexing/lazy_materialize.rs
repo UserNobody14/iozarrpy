@@ -10,6 +10,7 @@ use std::sync::Arc;
 
 use zarrs::array_subset::ArraySubset;
 
+use super::grouped_selection::GroupedSelection;
 use super::lazy_selection::{
     LazyArraySelection, LazyDatasetSelection, LazyDimConstraint, LazyHyperRectangle,
 };
@@ -18,7 +19,7 @@ use super::selection::{
     DataArraySelection, DatasetSelection, Emptyable,
     SetOperations,
 };
-use super::types::{IndexRange, ValueRange};
+use super::types::{DimSignature, IndexRange, ValueRange};
 
 /// Materialize a lazy dataset selection into a concrete selection.
 ///
@@ -32,27 +33,71 @@ pub(crate) fn materialize(
         LazyDatasetSelection::NoSelectionMade => Ok(DatasetSelection::NoSelectionMade),
         LazyDatasetSelection::Empty => Ok(DatasetSelection::Empty),
         LazyDatasetSelection::Selection(sel) => {
-            let mut out = BTreeMap::new();
-            for (var, array_sel) in sel {
-                let Some(var_meta) = meta.arrays.get(var) else {
-                    return Err(ResolutionError::Unresolvable(format!(
-                        "variable '{}' not found",
-                        var
-                    )));
-                };
+            // Materialize once per dimension signature
+            let mut by_dims: BTreeMap<Arc<DimSignature>, DataArraySelection> = BTreeMap::new();
+
+            for (sig, array_sel) in sel.by_signature() {
+                // Use the signature's dims to determine shape
+                let dims = sig.dims();
+                let shape = dims_to_shape(dims, meta)?;
+
                 let materialized =
-                    materialize_array(array_sel, &var_meta.dims, var_meta.shape.clone(), cache)?;
+                    materialize_array(array_sel, &dims.iter().cloned().collect(), shape, cache)?;
                 if !materialized.is_empty() {
-                    out.insert(var.clone(), materialized);
+                    // We need an Arc for the key - find it from the lazy selection
+                    if let Some(arc_sig) = sel.by_dims().keys().find(|k| k.as_ref() == sig) {
+                        by_dims.insert(arc_sig.clone(), materialized);
+                    }
                 }
             }
-            if out.is_empty() {
+
+            if by_dims.is_empty() {
                 Ok(DatasetSelection::Empty)
             } else {
-                Ok(DatasetSelection::Selection(out.into()))
+                // Preserve the var_to_sig mapping
+                let var_to_sig = sel.var_to_sig().clone();
+                let grouped = GroupedSelection::from_parts(by_dims, var_to_sig);
+                Ok(DatasetSelection::Selection(grouped))
             }
         }
     }
+}
+
+/// Get shape for a dimension signature by looking up the first matching array.
+fn dims_to_shape(
+    dims: &[crate::IStr],
+    meta: &ZarrDatasetMeta,
+) -> Result<Arc<[u64]>, ResolutionError> {
+    // Find an array that has these dimensions
+    for (_, array_meta) in &meta.arrays {
+        if array_meta.dims.len() == dims.len()
+            && array_meta.dims.iter().zip(dims.iter()).all(|(a, b)| a == b)
+        {
+            return Ok(array_meta.shape.clone());
+        }
+    }
+
+    // Fallback: construct shape from coordinate arrays
+    let mut shape = Vec::with_capacity(dims.len());
+    for dim in dims {
+        if let Some(coord_array) = meta.arrays.get(dim) {
+            if let Some(&len) = coord_array.shape.first() {
+                shape.push(len);
+            } else {
+                return Err(ResolutionError::Unresolvable(format!(
+                    "dimension '{}' has no shape",
+                    dim
+                )));
+            }
+        } else {
+            return Err(ResolutionError::Unresolvable(format!(
+                "cannot determine shape for dimension '{}'",
+                dim
+            )));
+        }
+    }
+
+    Ok(shape.into())
 }
 
 fn materialize_array(
@@ -306,7 +351,8 @@ pub(crate) fn collect_requests_with_meta(
     match selection {
         LazyDatasetSelection::NoSelectionMade | LazyDatasetSelection::Empty => {}
         LazyDatasetSelection::Selection(sel) => {
-            for (_, array_sel) in sel {
+            // Iterate over unique selections by signature
+            for (_, array_sel) in sel.by_signature() {
                 collect_array_requests_with_meta(
                     array_sel,
                     meta,

@@ -1,3 +1,9 @@
+use std::hash::{Hash, Hasher};
+
+use smallvec::SmallVec;
+
+use crate::IStr;
+
 #[derive(Debug, Clone)]
 pub(crate) struct ChunkId {
     pub(crate) indices: Vec<u64>,
@@ -5,7 +11,45 @@ pub(crate) struct ChunkId {
     pub(crate) shape: Vec<u64>,
 }
 
-use std::hash::{Hash, Hasher};
+/// Dimension signature - ordered list of dimension names for grouping.
+///
+/// Variables with the same dimension signature can share a single selection object.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct DimSignature(pub SmallVec<[IStr; 4]>);
+
+impl DimSignature {
+    /// Create a new dimension signature from dimension names.
+    pub fn new(dims: impl Into<SmallVec<[IStr; 4]>>) -> Self {
+        Self(dims.into())
+    }
+
+    /// Get the dimension names.
+    pub fn dims(&self) -> &[IStr] {
+        &self.0
+    }
+
+    /// Get the number of dimensions.
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    /// Check if this signature has no dimensions.
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl From<SmallVec<[IStr; 4]>> for DimSignature {
+    fn from(dims: SmallVec<[IStr; 4]>) -> Self {
+        Self(dims)
+    }
+}
+
+impl From<&[IStr]> for DimSignature {
+    fn from(dims: &[IStr]) -> Self {
+        Self(dims.iter().cloned().collect())
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum BoundKind {
