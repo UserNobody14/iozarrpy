@@ -1,5 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+use smallvec::SmallVec;
+use std::ops::Range;
+use zarrs::array_subset::ArraySubset;
+
 use super::types::BoundKind;
 
 /// Dataset-level selection: variable name -> selection on that variable.
@@ -113,150 +117,35 @@ impl DSelection for DatasetSelection {
 
 /// Selection for a single array, expressed as a disjunction (OR) of hyper-rectangles.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(crate) struct DataArraySelection(pub(crate) Vec<HyperRectangleSelection>);
+pub(crate) struct DataArraySelection {
+    /// SmallVec of dimension names (each name's position in the vec labels its index)
+    /// So if we had [a, b, c], a would be our label for dim 0, b would be 1, c would be 2.
+    dims: SmallVec<[String; 4]>,
+    /// List of associated ArraySubsets
+    subsets: ArraySubsetList
+}
 
 impl DataArraySelection {
-    pub(crate) fn empty() -> Self {
-        Self(Vec::new())
+    pub(crate) fn subsets_iter(&self) -> impl Iterator<Item = &ArraySubset> {
+        self.subsets.0.iter()
     }
-
-    /// Select all indices for this array.
-    ///
-    /// Represented as a single hyper-rectangle with no constrained dimensions.
-    pub(crate) fn all() -> Self {
-        Self(vec![HyperRectangleSelection::all()])
-    }
-
-}
-/// Conjunction (AND) of per-dimension index constraints.
-///
-/// Missing dimension keys mean “all indices along that dimension”.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(crate) struct HyperRectangleSelection {
-    dims: BTreeMap<String, RangeList>,
-    empty: bool,
-}
-
-impl Emptyable for HyperRectangleSelection {
-    fn empty() -> Self {
+    pub (crate) fn all(
+        dims: &[String],
+        shape: Vec<u64>,
+    ) -> Self {
         Self {
-            dims: BTreeMap::new(),
-            empty: true,
+            dims: dims.iter().cloned().collect(),
+            subsets: ArraySubsetList::from(vec![ArraySubset::new_with_shape(shape)]),
         }
     }
 
-    fn is_empty(&self) -> bool {
-        self.empty || self.dims.values().any(|r| r.is_empty())
-    }
-}
-
-impl HyperRectangleSelection {
-
-    pub(crate) fn all() -> Self {
+    pub (crate) fn from_subsets(dims: &[String], subsets: ArraySubsetList) -> Self {
         Self {
-            dims: BTreeMap::new(),
-            empty: false,
+            dims: dims.iter().cloned().collect(),
+            subsets: subsets,
         }
     }
 
-
-
-    pub(crate) fn get_dim(&self, dim: &str) -> Option<&RangeList> {
-        self.dims.get(dim)
-    }
-
-    pub(crate) fn dims(&self) -> impl Iterator<Item = (&str, &RangeList)> {
-        self.dims.iter().map(|(k, v)| (k.as_str(), v))
-    }
-
-    pub(crate) fn dim_names_union(&self, other: &HyperRectangleSelection) -> BTreeSet<String> {
-        self.dims
-            .keys()
-            .chain(other.dims.keys())
-            .cloned()
-            .collect::<BTreeSet<_>>()
-    }
-
-    pub(crate) fn with_dim(mut self, dim: impl Into<String>, ranges: RangeList) -> Self {
-        if ranges.is_empty() {
-            self.empty = true;
-            self.dims.clear();
-            return self;
-        }
-        if !self.empty && ranges != RangeList::all() {
-            self.dims.insert(dim.into(), ranges);
-        }
-        self
-    }
-
-}
-
-/// A list of half-open index ranges.
-///
-/// Invariants (after `normalize()`):
-/// - sorted by `start`
-/// - non-overlapping
-/// - non-adjacent (coalesced)
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(crate) struct RangeList {
-    ranges: Vec<super::types::IndexRange>,
-}
-
-impl RangeList {
-
-    pub(crate) fn all() -> Self {
-        // Represent “all indices” as a single unbounded-ish range. Planning later clamps to
-        // the actual dimension length.
-        Self {
-            ranges: vec![super::types::IndexRange {
-                start: 0,
-                end_exclusive: u64::MAX,
-            }],
-        }
-    }
-
-    pub(crate) fn ranges(&self) -> &[super::types::IndexRange] {
-        &self.ranges
-    }
-
-    pub(crate) fn from_index_range(r: super::types::IndexRange) -> Self {
-        let mut out = Self { ranges: vec![r] };
-        out.normalize();
-        out
-    }
-
-    pub(crate) fn normalize(&mut self) {
-        self.ranges.retain(|r| !r.is_empty());
-        self.ranges.sort_by_key(|r| r.start);
-
-        let mut merged: Vec<super::types::IndexRange> = Vec::with_capacity(self.ranges.len());
-        for r in self.ranges.drain(..) {
-            if let Some(last) = merged.last_mut() {
-                if r.start <= last.end_exclusive {
-                    last.end_exclusive = last.end_exclusive.max(r.end_exclusive);
-                    continue;
-                }
-            }
-            merged.push(r);
-        }
-        self.ranges = merged;
-    }
-
-    pub(crate) fn clamp_to_len(&self, len: u64) -> Self {
-        let mut out = Self::empty();
-        for r in &self.ranges {
-            let s = r.start.min(len);
-            let e = r.end_exclusive.min(len);
-            if e > s {
-                out.ranges.push(super::types::IndexRange {
-                    start: s,
-                    end_exclusive: e,
-                });
-            }
-        }
-        out.normalize();
-        out
-    }
 }
 
 pub trait Emptyable {
@@ -270,110 +159,6 @@ pub trait SetOperations: Emptyable {
     fn intersect(&self, other: &Self) -> Self;
     fn difference(&self, other: &Self) -> Self;
     fn exclusive_or(&self, other: &Self) -> Self;
-}
-
-impl Emptyable for RangeList {
-    fn empty() -> Self {
-        Self { ranges: Vec::new() }
-    }
-    fn is_empty(&self) -> bool {
-        self.ranges.is_empty()
-    }
-    
-}
-impl SetOperations for RangeList {
-    fn union(&self, other: &Self) -> Self {
-        if self.is_empty() {
-            return other.clone();
-        }
-        if other.is_empty() {
-            return self.clone();
-        }
-        let mut out = RangeList {
-            ranges: self
-                .ranges
-                .iter()
-                .chain(other.ranges.iter())
-                .copied()
-                .collect(),
-        };
-        out.normalize();
-        out
-    }
-
-    fn intersect(&self, other: &Self) -> Self {
-        let mut out = RangeList::empty();
-        let mut i = 0usize;
-        let mut j = 0usize;
-        while i < self.ranges.len() && j < other.ranges.len() {
-            let a = self.ranges[i];
-            let b = other.ranges[j];
-            let s = a.start.max(b.start);
-            let e = a.end_exclusive.min(b.end_exclusive);
-            if e > s {
-                out.ranges.push(super::types::IndexRange {
-                    start: s,
-                    end_exclusive: e,
-                });
-            }
-            if a.end_exclusive < b.end_exclusive {
-                i += 1;
-            } else {
-                j += 1;
-            }
-        }
-        out.normalize();
-        out
-    }
-
-    fn difference(&self, other: &Self) -> Self {
-        if self.is_empty() || other.is_empty() {
-            return self.clone();
-        }
-        let mut out = RangeList::empty();
-        let mut j = 0usize;
-        for &a in &self.ranges {
-            let mut cur_start = a.start;
-            let cur_end = a.end_exclusive;
-
-            while j < other.ranges.len() && other.ranges[j].end_exclusive <= cur_start {
-                j += 1;
-            }
-
-            let mut k = j;
-            while k < other.ranges.len() {
-                let b = other.ranges[k];
-                if b.start >= cur_end {
-                    break;
-                }
-                // Overlap: emit left piece if any.
-                if b.start > cur_start {
-                    out.ranges.push(super::types::IndexRange {
-                        start: cur_start,
-                        end_exclusive: b.start.min(cur_end),
-                    });
-                }
-                cur_start = cur_start.max(b.end_exclusive);
-                if cur_start >= cur_end {
-                    break;
-                }
-                k += 1;
-            }
-            if cur_start < cur_end {
-                out.ranges.push(super::types::IndexRange {
-                    start: cur_start,
-                    end_exclusive: cur_end,
-                });
-            }
-        }
-        out.normalize();
-        out
-    }
-
-    fn exclusive_or(&self, other: &RangeList) -> RangeList {
-        self.difference(other).union(&other.difference(self))
-    }
-
 }
 
 
@@ -533,147 +318,73 @@ impl SetOperations for DatasetSelection {
 
 impl Emptyable for DataArraySelection {
     fn empty() -> Self {
-        Self::empty()
+        Self {
+            dims: SmallVec::new(),
+            subsets: ArraySubsetList::empty(),
+        }
     }
     fn is_empty(&self) -> bool {
-        self.0.is_empty()
+        self.subsets.is_empty()
     }
 }
-
 
 impl SetOperations for DataArraySelection {
 
     fn union(&self, other: &DataArraySelection) -> DataArraySelection {
+        if self.is_empty() && other.is_empty() {
+            return DataArraySelection {
+                dims: self.dims.clone(),
+                subsets: ArraySubsetList::empty(),
+            };
+        }
         if self.is_empty() {
-            return other.clone();
+            return DataArraySelection {
+                dims: other.dims.clone(),
+                subsets: other.subsets.clone(),
+            };
         }
         if other.is_empty() {
-            return self.clone();
+            return DataArraySelection {
+                dims: self.dims.clone(),
+                subsets: self.subsets.clone(),
+            };
         }
-        let mut out = self.0.clone();
-        out.extend(other.0.iter().cloned());
-        DataArraySelection(out)
+        DataArraySelection {
+            dims: self.dims.clone(),
+            subsets: self.subsets.union(&other.subsets),
+        }
     }
 
     fn intersect(&self, other: &DataArraySelection) -> DataArraySelection {
         if self.is_empty() || other.is_empty() {
-            return DataArraySelection::empty();
+            return DataArraySelection {
+                dims: self.dims.clone(),
+                subsets: ArraySubsetList::empty(),
+            };
         }
-        let mut out: Vec<HyperRectangleSelection> = Vec::new();
-        for a in &self.0 {
-            for b in &other.0 {
-                if a.is_empty() || b.is_empty() {
-                    continue;
-                }
-        
-                let mut rect_dims = BTreeMap::new();
-                for dim in a.dim_names_union(b) {
-                    let a = a.dims.get(&dim).cloned().unwrap_or_else(RangeList::all);
-                    let b = b.dims.get(&dim).cloned().unwrap_or_else(RangeList::all);
-                    let r = a.intersect(&b);
-                    if r.is_empty() {
-                        continue;
-                    }
-                    if r != RangeList::all() {
-                        rect_dims.insert(dim, r);
-                    }
-                }
-                out.push(HyperRectangleSelection {
-                    dims: rect_dims,
-                    empty: false,
-                });
-            }
+        DataArraySelection {
+            dims: self.dims.clone(),
+            subsets: self.subsets.intersect(&other.subsets),
         }
-        DataArraySelection(out)
     }
 
     fn difference(&self, other: &DataArraySelection) -> DataArraySelection {
         if self.is_empty() {
-            return DataArraySelection::empty();
+            return DataArraySelection {
+                dims: self.dims.clone(),
+                subsets: ArraySubsetList::empty(),
+            };
         }
         if other.is_empty() {
-            return self.clone();
+            return DataArraySelection {
+                dims: self.dims.clone(),
+                subsets: self.subsets.clone(),
+            };
         }
-
-        let mut cur = self.clone();
-        for b in &other.0 {
-            let mut next: Vec<HyperRectangleSelection> = Vec::new();
-            for a in &cur.0 {
-                if a.is_empty() {
-                    continue;
-                }
-                if b.is_empty() {
-                    // b is empty, so a - b = a
-                    next.push(a.clone());
-                    continue;
-                }
-                if b.dims.is_empty() && !b.empty {
-                    // subtracting the universal rectangle => empty
-                    continue;
-                }
-
-                // Compute hyper-rectangle difference A \ B.
-                // Result is a union of "slabs" where we escape B in each dimension.
-                // For each dimension in B, we create a slab that is:
-                // - Outside B in that dimension (A_dim \ B_dim)
-                // - Intersected with B in all prior dimensions (to avoid double-counting)
-                // - Keeps all of A's other constraints
-                let b_dims: Vec<String> = b.dims.keys().cloned().collect();
-                let mut prefix_constraint: BTreeMap<String, RangeList> = BTreeMap::new();
-
-                for dim in b_dims.iter() {
-                    let a_dim = a.dims.get(dim).cloned().unwrap_or_else(RangeList::all);
-                    let b_dim = b.dims.get(dim).cloned().unwrap_or_else(RangeList::all);
-                    let diff = a_dim.difference(&b_dim);
-
-                    if !diff.is_empty() {
-                        // Create a slab: start with A's constraints
-                        let mut rect_dims = a.dims.clone();
-                        // Add prefix constraints (intersection with B in prior dims)
-                        for (prefix_dim, prefix_range) in &prefix_constraint {
-                            let a_prefix = rect_dims.get(prefix_dim).cloned().unwrap_or_else(RangeList::all);
-                            let intersected = a_prefix.intersect(prefix_range);
-                            if intersected.is_empty() {
-                                // This slab is empty, skip it
-                                continue;
-                            }
-                            if intersected != RangeList::all() {
-                                rect_dims.insert(prefix_dim.clone(), intersected);
-                            }
-                        }
-                        // Set this dimension to the difference (escape B here)
-                        if diff != RangeList::all() {
-                            rect_dims.insert(dim.clone(), diff);
-                        } else {
-                            rect_dims.remove(dim);
-                        }
-                        next.push(HyperRectangleSelection {
-                            dims: rect_dims,
-                            empty: false,
-                        });
-                    }
-
-                    // Update prefix constraint: intersect A with B in this dimension
-                    let a_dim = a.dims.get(dim).cloned().unwrap_or_else(RangeList::all);
-                    let b_dim = b.dims.get(dim).cloned().unwrap_or_else(RangeList::all);
-                    let intersected = a_dim.intersect(&b_dim);
-                    if intersected.is_empty() {
-                        // A and B are disjoint in this dimension, so A \ B = A
-                        // All remaining slabs from later dimensions won't contribute
-                        // (their prefix would be empty)
-                        // But we've already added A above... wait, no, we added (A with diff in this dim)
-                        // Actually if disjoint, diff = A_dim, so we added A already. We're done with this b.
-                        break;
-                    }
-                    prefix_constraint.insert(dim.clone(), intersected);
-                }
-            }
-            cur = DataArraySelection(next);
-            if cur.is_empty() {
-                break;
-            }
+        DataArraySelection {
+            dims: self.dims.clone(),
+            subsets: self.subsets.difference(&other.subsets),
         }
-        cur
     }
 
     /// Conservative DNF subtraction: returns a disjunction (OR) of hyper-rectangles.
@@ -690,74 +401,189 @@ impl SetOperations for DataArraySelection {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use super::super::types::IndexRange;
 
-    #[test]
-    fn range_list_normalize_merges_overlaps_and_adjacent() {
-        let mut rl = RangeList {
-            ranges: vec![
-                IndexRange { start: 0, end_exclusive: 5 },
-                IndexRange { start: 5, end_exclusive: 10 },
-                IndexRange { start: 2, end_exclusive: 3 },
-                IndexRange { start: 20, end_exclusive: 21 },
-            ],
-        };
-        rl.normalize();
-        assert_eq!(
-            rl.ranges(),
-            &[
-                IndexRange { start: 0, end_exclusive: 10 },
-                IndexRange { start: 20, end_exclusive: 21 },
-            ]
-        );
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+
+pub (crate) struct ArraySubsetList(Vec<ArraySubset>);
+impl ArraySubsetList {
+    pub(crate) fn new() -> Self {
+        Self(Vec::new())
     }
-
-    #[test]
-    fn range_list_intersect() {
-        let a = RangeList::from_index_range(IndexRange {
-            start: 0,
-            end_exclusive: 10,
-        });
-        let b = RangeList::from_index_range(IndexRange {
-            start: 5,
-            end_exclusive: 12,
-        });
-        assert_eq!(
-            a.intersect(&b).ranges(),
-            &[IndexRange {
-                start: 5,
-                end_exclusive: 10
-            }]
-        );
+    pub(crate) fn push(&mut self, subset: ArraySubset) {
+        self.0.push(subset);
     }
-
-    #[test]
-    fn range_list_difference_splits() {
-        let a = RangeList::from_index_range(IndexRange {
-            start: 0,
-            end_exclusive: 10,
-        });
-        let b = RangeList::from_index_range(IndexRange {
-            start: 3,
-            end_exclusive: 7,
-        });
-        assert_eq!(
-            a.difference(&b).ranges(),
-            &[
-                IndexRange {
-                    start: 0,
-                    end_exclusive: 3
-                },
-                IndexRange {
-                    start: 7,
-                    end_exclusive: 10
-                },
-            ]
-        );
+    pub(crate) fn extend(&mut self, other: &ArraySubsetList) {
+        self.0.extend(other.0.iter().cloned());
     }
-
 }
+
+impl Emptyable for ArraySubsetList {
+    fn empty() -> Self {
+        Self(Vec::new())
+    }
+    fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl Emptyable for ArraySubset {
+    fn empty() -> Self {
+        ArraySubset::new_empty(0)
+    }
+    fn is_empty(&self) -> bool {
+        self.is_empty()
+    }
+}
+
+/// Compute the difference of two ranges A \ B.
+/// Returns up to 2 ranges: the part of A before B and the part after B.
+fn difference_ranges(a: &Range<u64>, b: &Range<u64>) -> Vec<Range<u64>> {
+    // If no overlap, return A unchanged
+    if b.end <= a.start || b.start >= a.end {
+        return vec![a.clone()];
+    }
+    // If B completely contains A, return empty
+    if b.start <= a.start && b.end >= a.end {
+        return vec![];
+    }
+    
+    let mut result = Vec::new();
+    // Part before B
+    if a.start < b.start {
+        result.push(a.start..b.start);
+    }
+    // Part after B
+    if a.end > b.end {
+        result.push(b.end..a.end);
+    }
+    result
+}
+
+/// Compute the difference of two hyper-rectangles A \ B.
+/// Returns a list of non-overlapping rectangles that together form A \ B.
+///
+/// The algorithm "peels off" slices of A that don't overlap with B,
+/// dimension by dimension. This produces at most n rectangles for n dimensions.
+fn hyper_rectangle_difference(a: &ArraySubset, b: &ArraySubset) -> Vec<ArraySubset> {
+    let ndim = a.shape().len();
+    if ndim != b.shape().len() {
+        return vec![a.clone()];
+    }
+    
+    // Check if there's any overlap
+    match a.overlap(b) {
+        Ok(overlap) if overlap.is_empty() => return vec![a.clone()],
+        Err(_) => return vec![a.clone()],
+        _ => {}
+    }
+    
+    let a_ranges = a.to_ranges();
+    let b_ranges = b.to_ranges();
+    
+    let mut result = Vec::new();
+    // Track the "remaining" part of A as we peel off pieces
+    let mut remaining_ranges = a_ranges.clone();
+    
+    for dim in 0..ndim {
+        let a_range = &remaining_ranges[dim];
+        let b_range = &b_ranges[dim];
+        
+        // Part of A before B in this dimension
+        if a_range.start < b_range.start && b_range.start < a_range.end {
+            let mut piece = remaining_ranges.clone();
+            piece[dim] = a_range.start..b_range.start;
+            result.push(ArraySubset::new_with_ranges(&piece));
+        }
+        
+        // Part of A after B in this dimension
+        if a_range.end > b_range.end && b_range.end > a_range.start {
+            let mut piece = remaining_ranges.clone();
+            piece[dim] = b_range.end..a_range.end;
+            result.push(ArraySubset::new_with_ranges(&piece));
+        }
+        
+        // Narrow remaining to the overlap in this dimension for next iteration
+        remaining_ranges[dim] = a_range.start.max(b_range.start)..a_range.end.min(b_range.end);
+        if remaining_ranges[dim].is_empty() {
+            // No overlap in this dimension, we've already captured all of A
+            break;
+        }
+    }
+    
+    // Filter out any empty subsets
+    result.into_iter().filter(|s| !s.is_empty()).collect()
+}
+
+impl SetOperations for ArraySubset {
+    fn union(&self, other: &ArraySubset) -> ArraySubset {
+        // Union of two rectangles isn't a single rectangle in general
+        // Return the bounding box as a conservative over-approximation
+        // (The real union is handled at ArraySubsetList level)
+        self.overlap(other).unwrap_or_else(|_| ArraySubset::empty())
+    }
+    fn intersect(&self, other: &ArraySubset) -> ArraySubset {
+        self.overlap(other).unwrap_or_else(|_| ArraySubset::empty())
+    }
+    fn difference(&self, other: &ArraySubset) -> ArraySubset {
+        // Single-rectangle difference returns multiple rectangles
+        // This method is not ideal - use hyper_rectangle_difference directly
+        // For now, return empty if they overlap, otherwise return self
+        match self.overlap(other) {
+            Ok(overlap) if !overlap.is_empty() => ArraySubset::new_empty(self.shape().len()),
+            _ => self.clone(),
+        }
+    }
+    fn exclusive_or(&self, other: &ArraySubset) -> ArraySubset {
+        // XOR can't be represented as single rectangle
+        ArraySubset::new_empty(self.shape().len())
+    }
+}
+
+impl SetOperations for ArraySubsetList {
+    fn union(&self, other: &ArraySubsetList) -> ArraySubsetList {
+        let mut out = self.0.clone();
+        out.extend(other.0.iter().cloned());
+        Self(out)
+    }
+    fn intersect(&self, other: &ArraySubsetList) -> ArraySubsetList {
+        let mut out = Vec::new();
+        for a in &self.0 {
+            for b in &other.0 {
+                if let Ok(overlap) = a.overlap(b) {
+                    if !overlap.is_empty() {
+                        out.push(overlap);
+                    }
+                }
+            }
+        }
+        Self(out)
+    }
+    fn difference(&self, other: &ArraySubsetList) -> ArraySubsetList {
+        // For A \ B where A and B are both lists of rectangles:
+        // Start with all rectangles from A, then subtract each rectangle from B
+        let mut current = self.0.clone();
+        
+        for b in &other.0 {
+            let mut next = Vec::new();
+            for a in &current {
+                // Subtract b from a, which may produce multiple rectangles
+                let diff = hyper_rectangle_difference(a, b);
+                next.extend(diff);
+            }
+            current = next;
+        }
+        
+        Self(current)
+    }
+    fn exclusive_or(&self, other: &ArraySubsetList) -> ArraySubsetList {
+        self.difference(other).union(&other.difference(self))
+    }
+}
+
+impl From<Vec<ArraySubset>> for ArraySubsetList {
+    fn from(subsets: Vec<ArraySubset>) -> Self {
+        Self(subsets)
+    }
+}
+
 

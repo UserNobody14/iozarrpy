@@ -9,8 +9,9 @@ use std::sync::Arc;
 
 use smallvec::SmallVec;
 
-use super::selection::{RangeList, Emptyable};
+use super::selection::{ArraySubsetList, Emptyable};
 use super::types::ValueRange;
+use std::ops::Range;
 
 /// A per-dimension constraint in value-space (deferred resolution).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -28,7 +29,7 @@ pub(crate) enum LazyDimConstraint {
     /// The resolution will union the bracketing ranges for each point with clamping.
     UnresolvedInterpolationPoints(Arc<Vec<super::types::CoordScalar>>),
     /// Already resolved (optimization for pre-computed constraints).
-    Resolved(RangeList),
+    Resolved(Range<u64>),
 }
 
 impl LazyDimConstraint {
@@ -42,16 +43,6 @@ impl LazyDimConstraint {
             || matches!(self, LazyDimConstraint::UnresolvedInterpolationPoints(pts) if pts.is_empty())
     }
 
-    /// Returns true if this constraint needs resolution.
-    #[inline]
-    pub(crate) fn needs_resolution(&self) -> bool {
-        matches!(
-            self,
-            LazyDimConstraint::Unresolved(_)
-                | LazyDimConstraint::UnresolvedInterpolation(_)
-                | LazyDimConstraint::UnresolvedInterpolationPoints(_)
-        )
-    }
 }
 
 /// Conjunction (AND) of per-dimension lazy constraints.
@@ -84,11 +75,6 @@ impl LazyHyperRectangle {
     #[inline]
     pub(crate) fn is_empty(&self) -> bool {
         self.empty || self.dims.values().any(|c| c.is_empty())
-    }
-
-    /// Returns true if any dimension constraint needs resolution.
-    pub(crate) fn needs_resolution(&self) -> bool {
-        self.dims.values().any(|c| c.needs_resolution())
     }
 
     /// Get constraint for a specific dimension.
@@ -181,15 +167,6 @@ impl LazyArraySelection {
         }
     }
 
-    /// Returns true if any constraint needs resolution.
-    pub(crate) fn needs_resolution(&self) -> bool {
-        match self {
-            Self::Rectangles(rects) => rects.iter().any(|r| r.needs_resolution()),
-            Self::Difference(a, b) | Self::Union(a, b) => {
-                a.needs_resolution() || b.needs_resolution()
-            }
-        }
-    }
 }
 
 /// Dataset-level lazy selection: variable name -> selection on that variable.
@@ -229,13 +206,6 @@ impl LazyDatasetSelection {
         }
     }
 
-    /// Returns true if any constraint needs resolution.
-    pub(crate) fn needs_resolution(&self) -> bool {
-        match self {
-            Self::Selection(sel) => sel.values().any(|s| s.needs_resolution()),
-            Self::NoSelectionMade | Self::Empty => false,
-        }
-    }
 }
 
 /// Create a lazy dataset selection for the given variables with all indices selected.
@@ -264,6 +234,29 @@ pub(crate) fn lazy_dataset_for_vars_with_selection(
 // ============================================================================
 
 use super::selection::SetOperations;
+
+impl Emptyable for Range<u64> {
+    fn empty() -> Self {
+        0..0
+    }
+    fn is_empty(&self) -> bool {
+        self.start >= self.end
+    }
+}
+impl SetOperations for Range<u64> {
+    fn union(&self, other: &Self) -> Self {
+        self.start.min(other.start)..self.end.max(other.end)
+    }
+    fn intersect(&self, other: &Self) -> Self {
+        self.start.max(other.start)..self.end.min(other.end)
+    }
+    fn difference(&self, other: &Self) -> Self {
+        self.start.max(other.start)..self.end.min(other.end)
+    }
+    fn exclusive_or(&self, other: &Self) -> Self {
+        self.start.max(other.start)..self.end.min(other.end)
+    }
+}
 
 impl Emptyable for LazyDimConstraint {
     fn empty() -> Self {

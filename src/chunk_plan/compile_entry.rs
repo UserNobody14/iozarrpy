@@ -11,19 +11,17 @@
 use crate::chunk_plan::exprs::compile_node_lazy;
 use crate::chunk_plan::exprs::LazyCompileCtx;
 use crate::chunk_plan::exprs::CompileError;
-use crate::chunk_plan::indexing::DataArraySelection;
-use crate::chunk_plan::indexing::monotonic_scalar::MonotonicCoordResolver;
+use crate::chunk_plan::indexing::MonotonicCoordResolver;
 use crate::chunk_plan::indexing::plan::{ChunkPlan, ChunkPlanNode};
 use crate::chunk_plan::prelude::*;
 use crate::chunk_plan::indexing::selection::DatasetSelection;
-use crate::chunk_plan::indexing::selection_to_chunks::plan_data_array_chunk_indices;
 use crate::chunk_plan::indexing::lazy_selection::LazyDatasetSelection;
 use crate::chunk_plan::indexing::lazy_materialize::{
     collect_requests_with_meta, materialize, MergedCache,
 };
-use crate::chunk_plan::indexing::resolver_traits::SyncCoordResolver;
-use crate::chunk_plan::indexing::monotonic_async::AsyncMonotonicResolver;
-use crate::chunk_plan::indexing::resolver_traits::AsyncCoordResolver;
+use crate::chunk_plan::indexing::SyncCoordResolver;
+use crate::chunk_plan::indexing::AsyncMonotonicResolver;
+use crate::chunk_plan::indexing::AsyncCoordResolver;
 
 /// Statistics about the planning process.
 pub(crate) struct PlannerStats {
@@ -127,7 +125,11 @@ pub(crate) fn resolve_lazy_selection_sync(
 
     // Merge caches and materialize
     let merged = MergedCache::new(&*resolved_cache, &immediate_cache);
-    let selection = materialize(lazy_selection, &merged).map_err(|e| {
+    let selection = materialize(
+        lazy_selection,
+        &meta,
+        &merged
+    ).map_err(|e| {
         CompileError::Unsupported(format!("materialization failed: {}", e))
     })?;
 
@@ -181,20 +183,24 @@ pub(crate) fn compile_expr_to_chunk_plan(
         .chunk_shape(&zero)
         .map_err(|e| CompileError::Unsupported(e.to_string()))?;
     let chunk_shape = chunk_shape_nz.iter().map(|nz| nz.get()).collect::<Vec<_>>();
+    let _ = chunk_shape; // Suppress unused variable warning
 
     if let DatasetSelection::Selection(selection) = selection {
-        let chunk_set = selection
-            .get(primary_var)
-            .map(|sel| {
-                plan_data_array_chunk_indices(
-                    sel,
-                    &primary_meta.dims,
-                    &primary_meta.shape,
-                    &grid_shape,
-                    &chunk_shape,
-                )
-            })
-            .unwrap_or_default();
+        // If the primary variable is not in the selection, it means it was pruned to empty
+        let Some(darray) = selection.get(primary_var) else {
+            let plan = ChunkPlan::from_root(grid_shape, ChunkPlanNode::Empty);
+            return Ok((plan, stats));
+        };
+        let mut chunk_set = Vec::new();
+        for subset in darray.subsets_iter() {
+            let chunks = primary.chunks_in_array_subset(subset).map_err(|e| CompileError::Unsupported(e.to_string()))?;
+            if let Some(chunks) = chunks {
+                for chunk_index in chunks.indices().iter() {
+                    // chunk_index is a TinyVec<[u64; 4]>
+                    chunk_set.push(chunk_index.iter().copied().collect());
+                }
+            }
+        }
 
         let indices: Vec<Vec<u64>> = chunk_set.into_iter().collect();
         let plan = ChunkPlan::from_root(grid_shape, ChunkPlanNode::Explicit(indices));
@@ -251,7 +257,7 @@ pub(crate) async fn resolve_lazy_selection_async(
 
     // Merge caches and materialize
     let merged = MergedCache::new(&*resolved_cache, &immediate_cache);
-    let selection = materialize(lazy_selection, &merged).map_err(|e| {
+    let selection = materialize(lazy_selection, &meta, &merged).map_err(|e| {
         CompileError::Unsupported(format!("materialization failed: {}", e))
     })?;
 
@@ -300,20 +306,24 @@ pub(crate) async fn compile_expr_to_chunk_plan_async(
         .chunk_shape(&zero)
         .map_err(|e| CompileError::Unsupported(e.to_string()))?;
     let chunk_shape = chunk_shape_nz.iter().map(|nz| nz.get()).collect::<Vec<_>>();
+    let _ = chunk_shape; // Suppress unused variable warning
 
     if let DatasetSelection::Selection(selection) = selection {
-        let chunk_set = selection
-            .get(primary_var)
-            .map(|sel| {
-                plan_data_array_chunk_indices(
-                    sel,
-                    &primary_meta.dims,
-                    &primary_meta.shape,
-                    &grid_shape,
-                    &chunk_shape,
-                )
-            })
-            .unwrap_or_default();
+        // If the primary variable is not in the selection, it means it was pruned to empty
+        let Some(darray) = selection.get(primary_var) else {
+            let plan = ChunkPlan::from_root(grid_shape, ChunkPlanNode::Empty);
+            return Ok((plan, stats));
+        };
+        let mut chunk_set = Vec::new();
+        for subset in darray.subsets_iter() {
+            let chunks = primary.chunks_in_array_subset(subset).map_err(|e| CompileError::Unsupported(e.to_string()))?;
+            if let Some(chunks) = chunks {
+                for chunk_index in chunks.indices().iter() {
+                    // chunk_index is a TinyVec<[u64; 4]>
+                    chunk_set.push(chunk_index.iter().copied().collect());
+                }
+            }
+        }
 
         let indices: Vec<Vec<u64>> = chunk_set.into_iter().collect();
         let plan = ChunkPlan::from_root(grid_shape, ChunkPlanNode::Explicit(indices));

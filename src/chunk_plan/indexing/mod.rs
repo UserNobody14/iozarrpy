@@ -21,30 +21,19 @@ pub(crate) use monotonic_async::AsyncMonotonicResolver;
 
 // Lazy selection types
 pub mod lazy_selection;
-pub(crate) use lazy_selection::{
-    LazyArraySelection, LazyDatasetSelection, LazyDimConstraint, LazyHyperRectangle,
-    lazy_dataset_all_for_vars, lazy_dataset_for_vars_with_selection,
-};
+
 
 // Lazy resolution and materialization
 pub mod lazy_materialize;
-pub(crate) use lazy_materialize::{
-    collect_requests, collect_requests_with_meta, materialize,
-    MergedCache,
-};
 
 // Resolver traits
 pub mod resolver_traits;
 pub(crate) use resolver_traits::{
-    AsyncCoordResolver, HashMapCache, ResolutionCache, ResolutionError,
-    ResolutionRequest, SyncCoordResolver,
+    AsyncCoordResolver, SyncCoordResolver
 };
 
 // Core types re-exports
-pub(crate) use plan::{ChunkIndexIter, ChunkPlan};
 pub(crate) use selection::{
-    SetOperations, DSelection, Emptyable,
-    DataArraySelection, DatasetSelection, HyperRectangleSelection, RangeList,
+    DSelection, Emptyable, DatasetSelection
 };
-pub(crate) use selection_to_chunks::plan_dataset_chunk_indices;
-pub(crate) use types::{BoundKind, ChunkId, CoordScalar, DimChunkRange, IndexRange, ValueRange};
+pub(crate) use types::DimChunkRange;

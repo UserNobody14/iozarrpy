@@ -21,9 +21,7 @@ pub(crate) use compile_entry::{
 };
 
 // Primary entry points (async)
-pub(crate) use compile_entry::{
-    compile_expr_to_chunk_plan_async, compile_expr_to_dataset_selection_async,
-};
+pub(crate) use compile_entry::compile_expr_to_chunk_plan_async;
 
 // Advanced: lazy compilation + manual resolution
 pub(crate) use compile_entry::{
@@ -33,11 +31,7 @@ pub(crate) use compile_entry::{
 pub(crate) use indexing::selection_to_chunks::plan_dataset_chunk_indices;
 
 // Lazy selection types and resolver traits for advanced usage
-pub(crate) use indexing::lazy_selection::LazyDatasetSelection;
-pub(crate) use indexing::resolver_traits::{AsyncCoordResolver, SyncCoordResolver};
-pub(crate) use indexing::monotonic_async::AsyncMonotonicResolver;
 pub(crate) use indexing::selection::DSelection;
-pub(crate) use indexing::Emptyable;
 
 // Debug utilities - expose additional internal types
 pub(crate) use indexing::lazy_materialize::collect_requests_with_meta;

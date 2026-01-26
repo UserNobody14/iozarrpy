@@ -5,89 +5,27 @@
 //! 2. Materialize a lazy selection into a concrete selection using a resolution cache
 
 use std::collections::{BTreeMap, HashSet};
+use std::ops::Range;
 use std::sync::Arc;
 
-use smallvec::SmallVec;
+use zarrs::array_subset::ArraySubset;
 
 use super::lazy_selection::{
     LazyArraySelection, LazyDatasetSelection, LazyDimConstraint, LazyHyperRectangle,
 };
 use super::resolver_traits::{ResolutionCache, ResolutionError, ResolutionRequest};
 use super::selection::{
-    DataArraySelection, DatasetSelection, HyperRectangleSelection, RangeList, SetOperations, Emptyable,
+    DataArraySelection, DatasetSelection, Emptyable,
+    SetOperations,
 };
 use super::types::{IndexRange, ValueRange};
-
-/// Collect all resolution requests from a lazy dataset selection.
-///
-/// Returns a deduplicated set of requests that need to be resolved.
-pub(crate) fn collect_requests(selection: &LazyDatasetSelection) -> Vec<ResolutionRequest> {
-    let mut requests = HashSet::new();
-
-    match selection {
-        LazyDatasetSelection::NoSelectionMade | LazyDatasetSelection::Empty => {}
-        LazyDatasetSelection::Selection(sel) => {
-            for (_, array_sel) in sel {
-                collect_array_requests(array_sel, &mut requests);
-            }
-        }
-    }
-
-    requests.into_iter().collect()
-}
-
-fn collect_array_requests(selection: &LazyArraySelection, requests: &mut HashSet<ResolutionRequest>) {
-    match selection {
-        LazyArraySelection::Rectangles(rects) => {
-            for rect in rects {
-                collect_rectangle_requests(rect, requests);
-            }
-        }
-        LazyArraySelection::Difference(a, b) | LazyArraySelection::Union(a, b) => {
-            collect_array_requests(a, requests);
-            collect_array_requests(b, requests);
-        }
-    }
-}
-
-fn collect_rectangle_requests(rect: &LazyHyperRectangle, requests: &mut HashSet<ResolutionRequest>) {
-    for (dim, constraint) in rect.dims() {
-        match constraint {
-            LazyDimConstraint::Unresolved(vr) => {
-                requests.insert(ResolutionRequest::new(dim.clone(), vr.clone()));
-            }
-            LazyDimConstraint::UnresolvedInterpolation(vr) => {
-                requests.insert(ResolutionRequest::new(dim.clone(), (**vr).clone()));
-            }
-            LazyDimConstraint::UnresolvedInterpolationPoints(points) => {
-                // For interpolation points, we need to create requests for each point's
-                // bracketing lookups. We create two requests per point: <= v and >= v.
-                for point in points.iter() {
-                    // Request for <= v (to find left bracket)
-                    let vr_max = ValueRange {
-                        max: Some((point.clone(), super::types::BoundKind::Inclusive)),
-                        ..Default::default()
-                    };
-                    requests.insert(ResolutionRequest::new(dim.clone(), vr_max));
-                    
-                    // Request for >= v (to find right bracket)
-                    let vr_min = ValueRange {
-                        min: Some((point.clone(), super::types::BoundKind::Inclusive)),
-                        ..Default::default()
-                    };
-                    requests.insert(ResolutionRequest::new(dim.clone(), vr_min));
-                }
-            }
-            _ => {}
-        }
-    }
-}
 
 /// Materialize a lazy dataset selection into a concrete selection.
 ///
 /// Uses the provided cache to resolve value ranges to index ranges.
 pub(crate) fn materialize(
     selection: &LazyDatasetSelection,
+    meta: &ZarrDatasetMeta,
     cache: &dyn ResolutionCache,
 ) -> Result<DatasetSelection, ResolutionError> {
     match selection {
@@ -96,7 +34,14 @@ pub(crate) fn materialize(
         LazyDatasetSelection::Selection(sel) => {
             let mut out = BTreeMap::new();
             for (var, array_sel) in sel {
-                let materialized = materialize_array(array_sel, cache)?;
+                let Some(var_meta) = meta.arrays.get(var) else {
+                    return Err(ResolutionError::Unresolvable(format!(
+                        "variable '{}' not found",
+                        var
+                    )));
+                };
+                let materialized =
+                    materialize_array(array_sel, &var_meta.dims, var_meta.shape.clone(), cache)?;
                 if !materialized.is_empty() {
                     out.insert(var.clone(), materialized);
                 }
@@ -112,27 +57,28 @@ pub(crate) fn materialize(
 
 fn materialize_array(
     selection: &LazyArraySelection,
+    dims: &[String],
+    shape: Vec<u64>,
     cache: &dyn ResolutionCache,
 ) -> Result<DataArraySelection, ResolutionError> {
     match selection {
         LazyArraySelection::Rectangles(rects) => {
-            let mut out = Vec::with_capacity(rects.len());
+            let mut out = ArraySubsetList::new();
             for rect in rects {
-                let materialized = materialize_rectangle(rect, cache)?;
-                if !materialized.is_empty() {
-                    out.push(materialized);
-                }
+                let materialized = materialize_rectangle(rect, dims, shape.clone(), cache)?;
+                out = out.union(&materialized);
             }
-            Ok(DataArraySelection(out))
+
+            Ok(DataArraySelection::from_subsets(dims, out))
         }
         LazyArraySelection::Difference(a, b) => {
-            let a_mat = materialize_array(a, cache)?;
-            let b_mat = materialize_array(b, cache)?;
+            let a_mat = materialize_array(a, dims, shape.clone(), cache)?;
+            let b_mat = materialize_array(b, dims, shape.clone(), cache)?;
             Ok(a_mat.difference(&b_mat))
         }
         LazyArraySelection::Union(a, b) => {
-            let a_mat = materialize_array(a, cache)?;
-            let b_mat = materialize_array(b, cache)?;
+            let a_mat = materialize_array(a, dims, shape.clone(), cache)?;
+            let b_mat = materialize_array(b, dims, shape.clone(), cache)?;
             Ok(a_mat.union(&b_mat))
         }
     }
@@ -140,75 +86,66 @@ fn materialize_array(
 
 fn materialize_rectangle(
     rect: &LazyHyperRectangle,
+    dims: &[String],
+    shape: Vec<u64>,
     cache: &dyn ResolutionCache,
-) -> Result<HyperRectangleSelection, ResolutionError> {
+) -> Result<ArraySubsetList, ResolutionError> {
     if rect.is_empty() {
-        return Ok(HyperRectangleSelection::empty());
+        return Ok(ArraySubsetList::empty());
     }
 
-    let mut result = HyperRectangleSelection::all();
+    // Start with a single subset representing "all" for each dimension
+    // Each element in current_subsets is a vec of ranges, one per dimension
+    let mut current_subsets: Vec<Vec<Range<u64>>> = vec![
+        (0..dims.len()).map(|i| 0..shape[i]).collect()
+    ];
 
     for (dim, constraint) in rect.dims() {
-        let range_list = materialize_constraint(dim, constraint, cache)?;
-        if range_list.is_empty() {
-            return Ok(HyperRectangleSelection::empty());
-        }
-        if range_list != RangeList::all() {
-            result = result.with_dim(dim.to_string(), range_list);
+        let dim_idx_option = dims.iter().position(|d| d == dim.as_ref());
+        if let Some(dim_idx) = dim_idx_option {
+            let range_list = materialize_constraint_multi(dim, 0..shape[dim_idx], constraint, cache)?;
+            if range_list.is_empty() {
+                return Ok(ArraySubsetList::empty());
+            }
+            
+            // For each (range, existing subset) pair, create a new subset
+            let mut new_subsets = Vec::new();
+            for subset in current_subsets.iter() {
+                for range in range_list.iter() {
+                    if !range.is_empty() {
+                        let mut new_subset = subset.clone();
+                        new_subset[dim_idx] = range.clone();
+                        new_subsets.push(new_subset);
+                    }
+                }
+            }
+            
+            if new_subsets.is_empty() {
+                return Ok(ArraySubsetList::empty());
+            }
+            current_subsets = new_subsets;
         }
     }
 
-    Ok(result)
+    let mut out_list = ArraySubsetList::new();
+    for subset in current_subsets {
+        out_list.push(ArraySubset::new_with_ranges(&subset));
+    }
+    Ok(out_list)
 }
 
-fn materialize_constraint(
+/// Materialize a constraint returning potentially multiple ranges.
+/// For interpolation points, each point may produce a disjoint range.
+fn materialize_constraint_multi(
     dim: &Arc<str>,
+    dim_range: Range<u64>,
     constraint: &LazyDimConstraint,
     cache: &dyn ResolutionCache,
-) -> Result<RangeList, ResolutionError> {
+) -> Result<Vec<Range<u64>>, ResolutionError> {
     match constraint {
-        LazyDimConstraint::All => Ok(RangeList::all()),
-        LazyDimConstraint::Empty => Ok(RangeList::empty()),
-        LazyDimConstraint::Resolved(rl) => Ok(rl.clone()),
-        LazyDimConstraint::Unresolved(vr) => {
-            let request = ResolutionRequest::new(dim.clone(), vr.clone());
-            match cache.get(&request) {
-                Some(Some(idx_range)) => Ok(RangeList::from_index_range(idx_range)),
-                Some(None) => {
-                    // Resolution was attempted but couldn't determine a range
-                    // (e.g., non-monotonic array) - return All conservatively
-                    Ok(RangeList::all())
-                }
-                None => Err(ResolutionError::NotFound(request)),
-            }
-        }
-        LazyDimConstraint::UnresolvedInterpolation(vr) => {
-            // Interpolation needs bracketing indices - expand by 1 on each side.
-            let request = ResolutionRequest::new(dim.clone(), (**vr).clone());
-            match cache.get(&request) {
-                Some(Some(idx_range)) => {
-                    // Expand by 1 on each side for interpolation bracketing
-                    let expanded = IndexRange {
-                        start: idx_range.start.saturating_sub(1),
-                        // Note: we don't know dim_len here, so we just add 1
-                        // The caller should clamp this if needed
-                        end_exclusive: idx_range.end_exclusive.saturating_add(1),
-                    };
-                    Ok(RangeList::from_index_range(expanded))
-                }
-                Some(None) => {
-                    // Resolution was attempted but couldn't determine a range
-                    Ok(RangeList::all())
-                }
-                None => Err(ResolutionError::NotFound(request)),
-            }
-        }
         LazyDimConstraint::UnresolvedInterpolationPoints(points) => {
-            // For each point, we need to find bracketing indices and union them.
-            // We look up the <= v and >= v requests from the cache.
-            use super::selection::SetOperations;
-
-            let mut result = RangeList::empty();
+            // For each point, compute bracketing indices and collect disjoint ranges
+            let mut ranges = Vec::new();
 
             for point in points.iter() {
                 // Look up the <= v request (to find left bracket)
@@ -227,44 +164,120 @@ fn materialize_constraint(
 
                 let left_end = match cache.get(&req_max) {
                     Some(Some(r)) => r.end_exclusive,
-                    Some(None) => return Ok(RangeList::all()), // Can't resolve
+                    Some(None) => return Ok(vec![dim_range]), // Can't resolve
                     None => return Err(ResolutionError::NotFound(req_max)),
                 };
 
                 let right_start = match cache.get(&req_min) {
                     Some(Some(r)) => r.start,
-                    Some(None) => return Ok(RangeList::all()), // Can't resolve
+                    Some(None) => return Ok(vec![dim_range]), // Can't resolve
                     None => return Err(ResolutionError::NotFound(req_min)),
                 };
 
-                // Compute bracketing indices with clamping
-                // left_end is the exclusive end of the range <= v
-                // right_start is the start of the range >= v
-                //
-                // For interpolation:
-                // - left_idx is the last index <= v (i.e., left_end - 1, clamped to 0)
-                // - right_idx is the first index >= v (i.e., right_start)
-                //
-                // We need to include both for bracketing.
-                // Clamp to valid range: we don't know dim_len here, but the resolver
-                // should have returned valid ranges. If left_end == 0, clamp left_idx to 0.
+                // Compute bracketing indices
                 let left_idx = if left_end == 0 { 0 } else { left_end - 1 };
                 let right_idx = right_start;
 
-                // The bracket spans from min(left_idx, right_idx) to max(left_idx, right_idx) + 1
+                // The bracket spans from min to max + 1
                 let start = left_idx.min(right_idx);
                 let end_exclusive = left_idx.max(right_idx).saturating_add(1);
 
                 // Expand by 1 on each side to be safe near chunk boundaries
-                let expanded = IndexRange {
-                    start: start.saturating_sub(1),
-                    end_exclusive: end_exclusive.saturating_add(1),
-                };
+                let expanded_start = start.saturating_sub(1);
+                let expanded_end = end_exclusive.saturating_add(1).min(dim_range.end);
 
-                result = result.union(&RangeList::from_index_range(expanded));
+                ranges.push(expanded_start..expanded_end);
             }
 
-            Ok(result)
+            // Merge adjacent/overlapping ranges for efficiency
+            ranges = merge_ranges(ranges);
+            
+            Ok(ranges)
+        }
+        // For all other constraint types, delegate to the single-range version
+        _ => {
+            let single = materialize_constraint(dim, dim_range, constraint, cache)?;
+            Ok(vec![single])
+        }
+    }
+}
+
+/// Merge overlapping or adjacent ranges into a minimal set
+fn merge_ranges(mut ranges: Vec<Range<u64>>) -> Vec<Range<u64>> {
+    if ranges.is_empty() {
+        return ranges;
+    }
+    
+    // Sort by start
+    ranges.sort_by_key(|r| r.start);
+    
+    let mut result = Vec::new();
+    let mut current = ranges[0].clone();
+    
+    for range in ranges.into_iter().skip(1) {
+        if range.start <= current.end {
+            // Overlapping or adjacent - extend current
+            current.end = current.end.max(range.end);
+        } else {
+            // Disjoint - save current and start new
+            result.push(current);
+            current = range;
+        }
+    }
+    result.push(current);
+    
+    result
+}
+
+fn materialize_constraint(
+    dim: &Arc<str>,
+    dim_range: Range<u64>,
+    constraint: &LazyDimConstraint,
+    cache: &dyn ResolutionCache,
+) -> Result<Range<u64>, ResolutionError> {
+    match constraint {
+        LazyDimConstraint::All => Ok(dim_range),
+        LazyDimConstraint::Empty => Ok(0..0),
+        LazyDimConstraint::Resolved(rl) => Ok(rl.clone()),
+        LazyDimConstraint::Unresolved(vr) => {
+            let request = ResolutionRequest::new(dim.clone(), vr.clone());
+            match cache.get(&request) {
+                Some(Some(idx_range)) => Ok(
+                    idx_range.start..idx_range.end_exclusive
+                ),
+                Some(None) => {
+                    // Resolution was attempted but couldn't determine a range
+                    // (e.g., non-monotonic array) - return All conservatively
+                    Ok(dim_range)
+                }
+                None => Err(ResolutionError::NotFound(request)),
+            }
+        }
+        LazyDimConstraint::UnresolvedInterpolation(vr) => {
+            // Interpolation needs bracketing indices - expand by 1 on each side.
+            let request = ResolutionRequest::new(dim.clone(), (**vr).clone());
+            match cache.get(&request) {
+                Some(Some(idx_range)) => {
+                    // Expand by 1 on each side for interpolation bracketing
+                    let expanded = IndexRange {
+                        start: idx_range.start.saturating_sub(1),
+                        // Note: we don't know dim_len here, so we just add 1
+                        // The caller should clamp this if needed
+                        end_exclusive: idx_range.end_exclusive.saturating_add(1),
+                    };
+                    Ok(expanded.start..expanded.end_exclusive)
+                }
+                Some(None) => {
+                    // Resolution was attempted but couldn't determine a range
+                    Ok(dim_range)
+                }
+                None => Err(ResolutionError::NotFound(request)),
+            }
+        }
+        LazyDimConstraint::UnresolvedInterpolationPoints(_) => {
+            // This case is handled by materialize_constraint_multi, so if we reach here
+            // it means we were called through the wrong path. Return conservative dim_range.
+            Ok(dim_range)
         }
     }
 }
@@ -274,6 +287,7 @@ fn materialize_constraint(
 // ============================================================================
 
 use crate::chunk_plan::indexing::index_ranges::index_range_for_index_dim;
+use crate::chunk_plan::indexing::selection::ArraySubsetList;
 use crate::meta::ZarrDatasetMeta;
 
 /// Collect requests and handle index-only dimensions.
@@ -442,7 +456,10 @@ pub(crate) struct MergedCache<'a> {
 }
 
 impl<'a> MergedCache<'a> {
-    pub(crate) fn new(primary: &'a dyn ResolutionCache, secondary: &'a dyn ResolutionCache) -> Self {
+    pub(crate) fn new(
+        primary: &'a dyn ResolutionCache,
+        secondary: &'a dyn ResolutionCache,
+    ) -> Self {
         Self { primary, secondary }
     }
 }
