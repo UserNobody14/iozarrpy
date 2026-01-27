@@ -18,8 +18,31 @@ impl ZarrSource {
         variables: Option<Vec<String>>,
         max_chunks_to_read: Option<usize>,
     ) -> PyResult<Self> {
-        let (opened, meta) = crate::meta::open_and_load_dataset_meta_from_input(store_input)
-            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+        // Try hierarchical loading first, with fallback to legacy loading
+        let (opened, meta, unified_meta, is_hierarchical) =
+            match crate::meta::open_and_load_zarr_meta_from_input(store_input.clone()) {
+                Ok((opened, unified)) => {
+                    let is_hier = unified.is_hierarchical();
+                    let legacy = crate::meta::ZarrDatasetMeta::from(&unified);
+                    // Check if we got any data vars from hierarchical loading
+                    if !legacy.data_vars.is_empty() {
+                        (opened, legacy, Some(unified), is_hier)
+                    } else {
+                        // Hierarchical loading found no data vars, fall back to legacy
+                        let (opened2, legacy2) =
+                            crate::meta::open_and_load_dataset_meta_from_input(store_input)
+                                .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+                        (opened2, legacy2, None, false)
+                    }
+                }
+                Err(_) => {
+                    // Hierarchical loading failed, use legacy
+                    let (opened, legacy) =
+                        crate::meta::open_and_load_dataset_meta_from_input(store_input)
+                            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+                    (opened, legacy, None, false)
+                }
+            };
 
         let store = opened.store.clone();
 
@@ -68,6 +91,7 @@ impl ZarrSource {
 
         Ok(Self {
             meta,
+            unified_meta,
             store,
             dims,
             vars,
@@ -81,6 +105,7 @@ impl ZarrSource {
             chunk_offset: 0,
             done: primary.dimensionality() == 0 && false,
             chunks_left: max_chunks_to_read,
+            is_hierarchical,
         })
     }
 
@@ -97,7 +122,20 @@ impl ZarrSource {
     }
 
     pub(super) fn schema_impl(&self) -> PySchema {
-        let schema = self.meta.tidy_schema(Some(&self.vars));
+        // Use unified meta for schema if available (supports struct columns)
+        // For hierarchical stores, pass None to include all child groups as struct columns
+        // unless specific variables were selected by the user
+        let schema = if let Some(ref unified) = self.unified_meta {
+            if self.is_hierarchical {
+                // For hierarchical stores, always show full schema with struct columns
+                // The with_columns filter will be applied during data retrieval
+                unified.tidy_schema(None)
+            } else {
+                unified.tidy_schema(Some(&self.vars))
+            }
+        } else {
+            self.meta.tidy_schema(Some(&self.vars))
+        };
         PySchema(Arc::new(schema))
     }
 }

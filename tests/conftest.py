@@ -560,3 +560,146 @@ def multi_var_dataset() -> MultiVarDatasetInfo:
     """
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     return _generate_multi_var_dataset(OUTPUT_DIR)
+
+
+# ---------------------------------------------------------------------------
+# DataTree / Hierarchical Zarr test datasets
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class DataTreeConfig:
+    """Configuration for a hierarchical DataTree test dataset."""
+
+    name: str
+    # Description of the tree structure
+    description: str
+    # Hierarchy depth (1 = flat, 2 = root + children, etc.)
+    depth: int
+    # Number of child nodes at root level
+    n_children: int
+    # Root dimensions
+    root_dims: list[str] = field(default_factory=lambda: ["y", "x"])
+    # Expected child group names
+    child_groups: list[str] = field(default_factory=list)
+    # Whether consolidated metadata is used
+    consolidated: bool = True
+
+
+# DataTree dataset configurations
+DATATREE_CONFIGS: list[DataTreeConfig] = [
+    DataTreeConfig(
+        name="simple_datatree",
+        description="2-level tree with shared dimensions, 2 model children",
+        depth=2,
+        n_children=2,
+        root_dims=["y", "x"],
+        child_groups=["model_a", "model_b"],
+    ),
+    DataTreeConfig(
+        name="simple_datatree_unconsolidated",
+        description="Same as simple_datatree but without consolidated metadata",
+        depth=2,
+        n_children=2,
+        root_dims=["y", "x"],
+        child_groups=["model_a", "model_b"],
+        consolidated=False,
+    ),
+    DataTreeConfig(
+        name="ensemble_tree",
+        description="Ensemble model with time dimension and 5 members",
+        depth=2,
+        n_children=5,
+        root_dims=["time", "y", "x"],
+        child_groups=["member_0", "member_1", "member_2", "member_3", "member_4"],
+    ),
+    DataTreeConfig(
+        name="deep_tree_d4",
+        description="4-level deep hierarchy for nested struct testing",
+        depth=4,
+        n_children=1,
+        root_dims=["y", "x"],
+        child_groups=["level_1"],
+    ),
+    DataTreeConfig(
+        name="heterogeneous_tree",
+        description="Tree with nodes having different dimensions/schemas",
+        depth=2,
+        n_children=3,
+        root_dims=["y", "x"],
+        child_groups=["surface_2d", "atmosphere_3d", "timeseries_1d"],
+    ),
+    DataTreeConfig(
+        name="wide_tree_n10",
+        description="Wide tree with 10 sibling children",
+        depth=2,
+        n_children=10,
+        root_dims=["y", "x"],
+        child_groups=[f"child_{i}" for i in range(10)],
+    ),
+]
+
+
+def _generate_datatree_datasets(output_dir: Path) -> dict[str, str]:
+    """Generate all DataTree test datasets and return a mapping of name -> path."""
+    from tests import datatree_generators
+
+    paths: dict[str, str] = {}
+
+    # Simple datatree (consolidated)
+    paths["simple_datatree"] = datatree_generators.generate_simple_datatree_store(
+        output_dir, name="simple_datatree.zarr"
+    )
+
+    # Simple datatree (unconsolidated)
+    tree = datatree_generators.create_simple_datatree()
+    path = output_dir / "simple_datatree_unconsolidated.zarr"
+    paths["simple_datatree_unconsolidated"] = datatree_generators.write_datatree_to_zarr(
+        tree, path, consolidated=False
+    )
+
+    # Ensemble tree
+    paths["ensemble_tree"] = datatree_generators.generate_ensemble_tree_store(
+        output_dir, name="ensemble_tree.zarr"
+    )
+
+    # Deep tree (depth=4)
+    paths["deep_tree_d4"] = datatree_generators.generate_deep_tree_store(
+        output_dir, depth=4, name="deep_tree_d4.zarr"
+    )
+
+    # Heterogeneous tree
+    paths["heterogeneous_tree"] = datatree_generators.generate_heterogeneous_tree_store(
+        output_dir, name="heterogeneous_tree.zarr"
+    )
+
+    # Wide tree (10 children)
+    paths["wide_tree_n10"] = datatree_generators.generate_wide_tree_store(
+        output_dir, n_children=10, name="wide_tree_n10.zarr"
+    )
+
+    return paths
+
+
+@pytest.fixture(scope="session")
+def datatree_datasets() -> dict[str, str]:
+    """Session-scoped fixture that generates all DataTree test datasets once.
+
+    Returns a dict with keys:
+    - 'simple_datatree': 2-level tree with model_a, model_b children
+    - 'simple_datatree_unconsolidated': Same but without consolidated metadata
+    - 'ensemble_tree': Ensemble forecast with 5 members
+    - 'deep_tree_d4': 4-level deeply nested tree
+    - 'heterogeneous_tree': Nodes with different dimensions
+    - 'wide_tree_n10': Tree with 10 sibling children
+    """
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    return _generate_datatree_datasets(OUTPUT_DIR)
+
+
+def get_datatree_config(name: str) -> DataTreeConfig:
+    """Get a DataTree dataset configuration by name."""
+    for cfg in DATATREE_CONFIGS:
+        if cfg.name == name:
+            return cfg
+    raise ValueError(f"Unknown datatree config: {name}")

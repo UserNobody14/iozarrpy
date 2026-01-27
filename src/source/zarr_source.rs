@@ -4,14 +4,17 @@ use polars::prelude::Expr;
 use pyo3::prelude::*;
 
 use crate::chunk_plan::ChunkIndexIter;
-use crate::meta::ZarrDatasetMeta;
+use crate::meta::{ZarrDatasetMeta, ZarrMeta};
 use crate::IStr;
 
 pub(super) const DEFAULT_BATCH_SIZE: usize = 10_000;
 
 #[pyclass]
 pub struct ZarrSource {
+    /// Legacy flat metadata (for backward compatibility)
     meta: ZarrDatasetMeta,
+    /// Unified hierarchical metadata (when available)
+    unified_meta: Option<ZarrMeta>,
     store: zarrs::storage::ReadableWritableListableStorage,
 
     dims: Vec<IStr>,
@@ -32,6 +35,9 @@ pub struct ZarrSource {
 
     // Optional cap on number of chunks we will read (for debugging / safety).
     chunks_left: Option<usize>,
+    
+    /// True if this is a hierarchical (DataTree) store
+    is_hierarchical: bool,
 }
 
 pub(super) fn to_py_err<E: std::fmt::Display>(e: E) -> PyErr {

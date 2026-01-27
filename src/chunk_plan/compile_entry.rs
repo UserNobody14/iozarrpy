@@ -342,3 +342,39 @@ pub(crate) async fn compile_expr_to_chunk_plan_async(
         Ok((plan, stats))
     }
 }
+
+// ============================================================================
+// Unified ZarrMeta entry points
+// ============================================================================
+
+/// Compile an expression to a lazy dataset selection using unified ZarrMeta.
+pub(crate) fn compile_expr_to_lazy_selection_unified(
+    expr: &Expr,
+    meta: &crate::meta::ZarrMeta,
+    primary_var: &str,
+) -> Result<LazyDatasetSelection, CompileError> {
+    let legacy_meta = ZarrDatasetMeta::from(meta);
+    compile_expr_to_lazy_selection(expr, &legacy_meta, primary_var)
+}
+
+/// Compile an expression to a chunk plan (sync) using unified ZarrMeta.
+pub(crate) fn compile_expr_to_chunk_plan_unified(
+    expr: &Expr,
+    meta: &crate::meta::ZarrMeta,
+    store: zarrs::storage::ReadableWritableListableStorage,
+    primary_var: &str,
+) -> Result<(ChunkPlan, PlannerStats), CompileError> {
+    let legacy_meta = ZarrDatasetMeta::from(meta);
+    compile_expr_to_chunk_plan(expr, &legacy_meta, store, primary_var)
+}
+
+/// Compile an expression to a chunk plan (async) using unified ZarrMeta.
+pub(crate) async fn compile_expr_to_chunk_plan_unified_async(
+    expr: &Expr,
+    meta: &crate::meta::ZarrMeta,
+    store: zarrs::storage::AsyncReadableWritableListableStorage,
+    primary_var: &str,
+) -> Result<(ChunkPlan, PlannerStats), CompileError> {
+    let legacy_meta = ZarrDatasetMeta::from(meta);
+    compile_expr_to_chunk_plan_async(expr, &legacy_meta, store, primary_var).await
+}

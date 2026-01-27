@@ -67,4 +67,7 @@ build = [
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_functions = ["test_*"]
-addopts = ["-v", "--tb=short"]
+addopts = ["-v", "--tb=short", "-m", "not benchmark"]
+markers = [
+    "benchmark: marks tests as benchmarks (deselect with '-m \"not benchmark\"')",
+]

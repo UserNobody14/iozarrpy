@@ -6,7 +6,7 @@
 use super::compile_ctx::LazyCompileCtx;
 use super::errors::CompileError;
 use super::literals::{col_lit, literal_anyvalue, literal_to_scalar, reverse_operator, strip_wrappers};
-use super::compile_node::collect_column_refs;
+use super::compile_node::{collect_column_refs, extract_struct_field_path};
 use super::{SetOperations, Emptyable};
 use crate::chunk_plan::prelude::*;
 use crate::chunk_plan::indexing::lazy_selection::{
@@ -109,6 +109,21 @@ pub(crate) fn compile_node_lazy(
                     Ok(a.difference(&b).union(&b.difference(&a)))
                 }
                 Operator::Eq | Operator::GtEq | Operator::Gt | Operator::LtEq | Operator::Lt => {
+                    // Check for struct field access (e.g., model_a.struct.field("temp") > 280)
+                    if let Some((struct_col, field_name)) = extract_struct_field_path(strip_wrappers(left.as_ref())) {
+                        if let Expr::Literal(lit) = strip_wrappers(right.as_ref()) {
+                            return compile_struct_field_cmp(&struct_col, &field_name, *op, lit, ctx)
+                                .or_else(|_| Ok(all_for_referenced_vars_lazy(expr, ctx)));
+                        }
+                    }
+                    if let Some((struct_col, field_name)) = extract_struct_field_path(strip_wrappers(right.as_ref())) {
+                        if let Expr::Literal(lit) = strip_wrappers(left.as_ref()) {
+                            return compile_struct_field_cmp(&struct_col, &field_name, reverse_operator(*op), lit, ctx)
+                                .or_else(|_| Ok(all_for_referenced_vars_lazy(expr, ctx)));
+                        }
+                    }
+
+                    // Regular column comparison
                     if let Some((col, lit)) = col_lit(left, right).or_else(|| col_lit(right, left)) {
                         let op_eff = if matches!(strip_wrappers(left.as_ref()), Expr::Literal(_)) {
                             reverse_operator(*op)
@@ -355,6 +370,57 @@ fn compile_value_range_to_lazy_selection(
     let sel = LazyArraySelection::from_rectangle(rect);
 
     Ok(lazy_dataset_for_vars_with_selection(ctx.vars.iter().cloned(), ctx.meta, sel))
+}
+
+/// Compile a struct field comparison to a lazy selection.
+/// Maps model_a.struct.field("temperature") > 280 to constraint on "model_a/temperature" array.
+fn compile_struct_field_cmp(
+    struct_col: &IStr,
+    field_name: &IStr,
+    op: Operator,
+    lit: &LiteralValue,
+    ctx: &mut LazyCompileCtx<'_>,
+) -> Result<LazyDatasetSelection, CompileError> {
+    // Build the array path (e.g., "model_a/temperature")
+    let array_path: IStr = format!("{}/{}", struct_col, field_name).istr();
+
+    // Look up array metadata - check both the path and the field name directly
+    let arr_meta = ctx.meta.arrays.get(&array_path)
+        .or_else(|| ctx.meta.arrays.get(field_name));
+
+    let time_encoding = arr_meta.and_then(|a| a.time_encoding.as_ref());
+    let Some(scalar) = literal_to_scalar(lit, time_encoding) else {
+        return Err(CompileError::Unsupported(format!("unsupported literal: {:?}", lit)));
+    };
+
+    let mut vr = ValueRange::default();
+    match op {
+        Operator::Eq => vr.eq = Some(scalar),
+        Operator::Gt => vr.min = Some((scalar, BoundKind::Exclusive)),
+        Operator::GtEq => vr.min = Some((scalar, BoundKind::Inclusive)),
+        Operator::Lt => vr.max = Some((scalar, BoundKind::Exclusive)),
+        Operator::LtEq => vr.max = Some((scalar, BoundKind::Inclusive)),
+        _ => return Err(CompileError::Unsupported(format!("unsupported op: {:?}", op))),
+    }
+
+    // For struct fields, we need to find which dimensions apply
+    // If the array is a dimension array, constrain that dimension
+    // Otherwise, just return "all" for the referenced vars
+    if let Some(meta) = arr_meta {
+        if meta.dims.len() == 1 {
+            let dim = &meta.dims[0];
+            if ctx.dims.contains(dim) {
+                // This is a 1D coordinate-like array, apply constraint to its dimension
+                let constraint = LazyDimConstraint::Unresolved(vr.clone());
+                let rect = LazyHyperRectangle::all().with_dim(dim.clone(), constraint);
+                let sel = LazyArraySelection::from_rectangle(rect);
+                return Ok(lazy_dataset_for_vars_with_selection(ctx.vars.iter().cloned(), ctx.meta, sel));
+            }
+        }
+    }
+
+    // Fallback: treat as regular variable reference
+    Ok(lazy_dataset_all_for_vars(vec![array_path], ctx.meta))
 }
 
 /// Compile a boolean function to a lazy selection.

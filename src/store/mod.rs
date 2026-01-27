@@ -12,6 +12,7 @@ pub use open_async::{open_store_async, open_store_from_object_store_async, Async
 pub use open_sync::{open_store, open_store_from_object_store, OpenedStore};
 
 /// Input type for store parameters that can be either a URL string or an ObjectStore instance.
+#[derive(Clone)]
 pub enum StoreInput {
     /// A URL string (e.g., "s3://bucket/path.zarr" or "/local/path.zarr")
     Url(String),

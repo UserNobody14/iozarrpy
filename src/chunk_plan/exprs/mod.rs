@@ -15,6 +15,9 @@ pub(crate) use crate::chunk_plan::indexing::selection::SetOperations;
 pub(crate) use crate::chunk_plan::indexing::Emptyable;
 pub(crate) use errors::{CompileError, CoordIndexResolver, ResolveError};
 pub(crate) use compile_ctx::LazyCompileCtx;
-pub(crate) use compile_node::{collect_column_refs, collect_selector_refs};
+pub(crate) use compile_node::{
+    collect_column_refs, collect_selector_refs, collect_struct_field_refs,
+    extract_struct_field_path,
+};
 pub(crate) use compile_node_lazy::compile_node_lazy;
 pub(crate) use literals::apply_time_encoding;

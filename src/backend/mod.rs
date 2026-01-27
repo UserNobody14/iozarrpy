@@ -7,7 +7,7 @@
 
 mod traits;
 mod caching;
-mod source;
+// mod source;  // TODO: This module was referenced but doesn't exist
 mod py;
 
 pub use traits::{

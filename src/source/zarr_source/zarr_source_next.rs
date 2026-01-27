@@ -9,7 +9,7 @@ use crate::reader::{
     checked_chunk_len, compute_strides, compute_var_chunk_info, retrieve_1d_subset, retrieve_chunk,
     ColumnData,
 };
-use crate::IStr;
+use crate::{IStr, IntoIStr};
 
 use super::{to_py_err, ZarrSource};
 
@@ -334,6 +334,127 @@ impl ZarrSource {
                         .collect();
 
                     cols.push(data.take_indices(&indices).into_series(name.as_ref()).into());
+                }
+            }
+
+            // Build struct columns for child groups (hierarchical stores only)
+            if self.is_hierarchical {
+                if let Some(ref unified) = self.unified_meta {
+                    for (child_name, child_node) in &unified.root.children {
+                        let child_name_str: &str = child_name.as_ref();
+                        
+                        // Check if this group should be emitted
+                        let should_emit = self.with_columns.as_ref().map_or(true, |cols| {
+                            let child_name_istr: &str = child_name.as_ref();
+                            cols.contains(&child_name_istr.istr())
+                        });
+                        if !should_emit {
+                            continue;
+                        }
+
+                        let mut field_series: Vec<Series> = Vec::new();
+
+                        // Load each data variable in this child group
+                        for var_name in &child_node.data_vars {
+                            let var_name_str: &str = var_name.as_ref();
+                            
+                            // Build the path to find this variable
+                            let child_path_str: &str = child_node.path.as_ref();
+                            let full_path = format!(
+                                "{}{}",
+                                child_path_str,
+                                if child_path_str.ends_with('/') || var_name_str.starts_with('/') {
+                                    var_name_str.to_string()
+                                } else {
+                                    format!("/{}", var_name_str)
+                                }
+                            );
+
+                            // Try to find and load the array
+                            if let Some(arr_meta) = unified.path_to_array.get(&full_path.istr()) {
+                                let arr = Array::open(self.store.clone(), arr_meta.path.as_ref())
+                                    .map_err(to_py_err)?;
+
+                                // Compute chunk indices for this variable
+                                let var_dims: Vec<IStr> = arr_meta.dims.iter().cloned().collect();
+                                let (var_chunk_indices, var_offsets) = if var_dims == self.dims {
+                                    (idx.clone(), vec![0; self.dims.len()])
+                                } else {
+                                    compute_var_chunk_info(
+                                        idx,
+                                        &chunk_shape,
+                                        &self.dims,
+                                        &var_dims,
+                                        &arr,
+                                    )
+                                    .map_err(to_py_err)?
+                                };
+
+                                let var_chunk_shape: Vec<u64> = if var_chunk_indices.is_empty() {
+                                    vec![]
+                                } else {
+                                    arr.chunk_shape(&var_chunk_indices)
+                                        .map_err(to_py_err)?
+                                        .iter()
+                                        .map(|x| x.get())
+                                        .collect()
+                                };
+
+                                let data = retrieve_chunk(&arr, &var_chunk_indices).map_err(to_py_err)?;
+
+                                // Build series with broadcasting if needed
+                                let series = if var_dims == self.dims && var_offsets.iter().all(|&o| o == 0) {
+                                    data.slice(start, len).take_indices(&keep).into_series(var_name_str)
+                                } else {
+                                    let dim_mapping: Vec<Option<usize>> = self
+                                        .dims
+                                        .iter()
+                                        .map(|pd| var_dims.iter().position(|vd| vd == pd))
+                                        .collect();
+                                    let var_strides = compute_strides(&var_chunk_shape);
+
+                                    let indices: Vec<usize> = keep
+                                        .iter()
+                                        .map(|&r| {
+                                            let row = start + r;
+                                            let mut var_idx: u64 = 0;
+                                            for (primary_d, maybe_var_d) in dim_mapping.iter().enumerate() {
+                                                if let Some(var_d) = *maybe_var_d {
+                                                    let local = (row as u64 / strides[primary_d]) % chunk_shape[primary_d];
+                                                    let local_with_offset = local + var_offsets.get(var_d).copied().unwrap_or(0);
+                                                    if var_d < var_strides.len() {
+                                                        var_idx += local_with_offset * var_strides[var_d];
+                                                    }
+                                                }
+                                            }
+                                            var_idx as usize
+                                        })
+                                        .collect();
+
+                                    data.take_indices(&indices).into_series(var_name_str)
+                                };
+
+                                field_series.push(series);
+                            } else {
+                                // Variable not found - create null series
+                                let null_series = Series::new_null(var_name_str.into(), keep.len());
+                                field_series.push(null_series);
+                            }
+                        }
+
+                        // Create struct column from field series
+                        if !field_series.is_empty() {
+                            let struct_chunked = StructChunked::from_series(
+                                child_name_str.into(),
+                                keep.len(),  // Row length, not field count
+                                field_series.iter(),
+                            )
+                            .map_err(|e| {
+                                PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string())
+                            })?;
+                            cols.push(struct_chunked.into_series().into());
+                        }
+                    }
                 }
             }
 
