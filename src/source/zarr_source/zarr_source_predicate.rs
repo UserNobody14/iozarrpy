@@ -1,8 +1,7 @@
 use pyo3::prelude::*;
 use pyo3::types::PyAny;
-use zarrs::array::Array;
 
-use crate::chunk_plan::{compile_expr_to_chunk_plan, ChunkPlan};
+use crate::chunk_plan::compile_expr_to_grouped_chunk_plan;
 use crate::IntoIStr;
 
 use super::{panic_to_py_err, to_py_err, ZarrSource};
@@ -20,31 +19,17 @@ impl ZarrSource {
         }))
         .map_err(|e| panic_to_py_err(e, "panic while converting predicate Expr"))??;
 
-        // Compile Expr -> candidate-chunk plan.
-        let compiled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            compile_expr_to_chunk_plan(&expr, &self.meta, self.store.clone(), self.vars[0].as_ref())
+        // Compile Expr -> GroupedChunkPlan (per-grid subsets)
+        let plan_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            compile_expr_to_grouped_chunk_plan(&expr, &self.meta, self.store.clone())
         }))
         .map_err(|e| panic_to_py_err(e, "panic while compiling predicate chunk plan"))?;
 
-        match compiled {
-            Ok((plan, _stats)) => {
-                self.primary_grid_shape = plan.grid_shape().to_vec();
-                self.chunk_iter = plan.into_index_iter();
-                self.current_chunk_indices = None;
-                self.chunk_offset = 0;
-            }
-            Err(_) => {
-                // Fall back to scanning all chunks if planning fails.
-                let primary_path = self.meta.arrays[&self.vars[0]].path.clone();
-                let primary = Array::open(self.store.clone(), primary_path.as_ref()).map_err(to_py_err)?;
-                let grid_shape = primary.chunk_grid().grid_shape().to_vec();
-                self.primary_grid_shape = grid_shape.clone();
-                self.chunk_iter = ChunkPlan::all(grid_shape).into_index_iter();
-                self.current_chunk_indices = None;
-                self.chunk_offset = 0;
-            }
-        }
+        let (plan, _stats) = plan_result.map_err(to_py_err)?;
 
+        // Rebuild grid iteration states from the plan
+        self.set_grid_states_from_plan(plan);
+        
         self.predicate = Some(expr);
         Ok(())
     }
@@ -53,4 +38,3 @@ impl ZarrSource {
         self.with_columns = Some(columns.into_iter().map(|s| s.istr()).collect());
     }
 }
-

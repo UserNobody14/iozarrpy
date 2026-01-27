@@ -88,7 +88,7 @@ impl CachingAsyncBackend {
 
     /// Internal: Load metadata from store.
     async fn load_metadata_impl(&self) -> Result<Arc<ZarrDatasetMeta>, BackendError> {
-        use crate::meta::load_dataset_meta_from_opened_async;
+        use crate::meta::load_zarr_meta_from_opened_async;
         use crate::store::AsyncOpenedStore;
 
         let opened = AsyncOpenedStore {
@@ -96,9 +96,12 @@ impl CachingAsyncBackend {
             root: self.root.clone(),
         };
 
-        let meta = load_dataset_meta_from_opened_async(&opened)
+        let zarr_meta = load_zarr_meta_from_opened_async(&opened)
             .await
             .map_err(|e| BackendError::Other(e))?;
+
+        // Convert to ZarrDatasetMeta - preserves hierarchical paths from path_to_array
+        let meta = ZarrDatasetMeta::from(&zarr_meta);
 
         Ok(Arc::new(meta))
     }

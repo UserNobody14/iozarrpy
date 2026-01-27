@@ -58,6 +58,8 @@ impl DataArraySelection {
 
 }
 
+
+
 pub trait Emptyable {
     fn empty() -> Self;
     fn is_empty(&self) -> bool;
@@ -175,6 +177,19 @@ impl SetOperations for DataArraySelection {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 
 pub (crate) struct ArraySubsetList(Vec<ArraySubset>);
+
+impl From<Vec<ArraySubset>> for ArraySubsetList {
+    fn from(subsets: Vec<ArraySubset>) -> Self {
+        Self(subsets)
+    }
+}
+
+impl From<DataArraySelection> for ArraySubsetList {
+    fn from(selection: DataArraySelection) -> Self {
+        selection.subsets
+    }
+}
+
 impl ArraySubsetList {
     pub(crate) fn new() -> Self {
         Self(Vec::new())
@@ -185,6 +200,13 @@ impl ArraySubsetList {
     pub(crate) fn extend(&mut self, other: &ArraySubsetList) {
         self.0.extend(other.0.iter().cloned());
     }
+    pub(crate) fn subsets_iter(&self) -> impl Iterator<Item = &ArraySubset> {
+        self.0.iter()
+    }
+    pub(crate) fn num_elements_usize(&self) -> usize {
+        self.0.iter().map(|s| s.num_elements_usize()).sum()
+    }
+    
 }
 
 impl Emptyable for ArraySubsetList {
@@ -280,7 +302,7 @@ impl SetOperations for ArraySubset {
             _ => self.clone(),
         }
     }
-    fn exclusive_or(&self, other: &ArraySubset) -> ArraySubset {
+    fn exclusive_or(&self, _other: &ArraySubset) -> ArraySubset {
         // XOR can't be represented as single rectangle
         ArraySubset::new_empty(self.shape().len())
     }
@@ -327,10 +349,5 @@ impl SetOperations for ArraySubsetList {
     }
 }
 
-impl From<Vec<ArraySubset>> for ArraySubsetList {
-    fn from(subsets: Vec<ArraySubset>) -> Self {
-        Self(subsets)
-    }
-}
 
 

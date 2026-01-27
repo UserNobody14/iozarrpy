@@ -1,5 +1,9 @@
 use super::prelude::*;
 
+/// Open variable and coordinate arrays for reading.
+///
+/// Returns (var_arrays, coord_arrays) - the caller is responsible for
+/// selecting a reference array for chunk iteration based on their needs.
 pub(crate) async fn open_arrays_async(
     store: zarrs::storage::AsyncReadableWritableListableStorage,
     meta: &ZarrDatasetMeta,
@@ -7,24 +11,11 @@ pub(crate) async fn open_arrays_async(
     dims: &[IStr],
 ) -> Result<
     (
-        Arc<Array<dyn zarrs::storage::AsyncReadableWritableListableStorageTraits>>,
         Vec<(IStr, Arc<Array<dyn zarrs::storage::AsyncReadableWritableListableStorageTraits>>)>,
         Vec<(IStr, Arc<Array<dyn zarrs::storage::AsyncReadableWritableListableStorageTraits>>)>,
     ),
     String,
 > {
-    let primary_path = meta
-        .arrays
-        .get(&vars[0])
-        .ok_or_else(|| "unknown primary variable".to_string())?
-        .path
-        .clone();
-
-    let primary = Array::async_open(store.clone(), primary_path.as_ref())
-        .await
-        .map_err(to_string_err)?;
-    let primary = Arc::new(primary);
-
     // Open coord arrays (dims) and variable arrays in parallel.
     let mut coord_futs = FuturesUnordered::new();
     for d in dims {
@@ -62,6 +53,5 @@ pub(crate) async fn open_arrays_async(
         vars_out.push(r?);
     }
 
-    Ok((primary, vars_out, coords))
+    Ok((vars_out, coords))
 }
-

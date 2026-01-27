@@ -12,7 +12,6 @@ use crate::chunk_plan::exprs::compile_node_lazy;
 use crate::chunk_plan::exprs::LazyCompileCtx;
 use crate::chunk_plan::exprs::CompileError;
 use crate::chunk_plan::indexing::MonotonicCoordResolver;
-use crate::chunk_plan::indexing::plan::{ChunkPlan, ChunkPlanNode};
 use crate::chunk_plan::prelude::*;
 use crate::chunk_plan::indexing::selection::DatasetSelection;
 use crate::chunk_plan::indexing::lazy_selection::LazyDatasetSelection;
@@ -22,7 +21,7 @@ use crate::chunk_plan::indexing::lazy_materialize::{
 use crate::chunk_plan::indexing::SyncCoordResolver;
 use crate::chunk_plan::indexing::AsyncMonotonicResolver;
 use crate::chunk_plan::indexing::AsyncCoordResolver;
-use crate::{IStr, IntoIStr};
+use crate::IStr;
 
 /// Statistics about the planning process.
 pub(crate) struct PlannerStats {
@@ -30,9 +29,57 @@ pub(crate) struct PlannerStats {
     pub(crate) coord_reads: u64,
 }
 
+/// Compute dimensions and their lengths from dataset metadata.
+///
+/// This replaces the old pattern of extracting dims from a "primary variable".
+/// Dimensions are taken from `meta.dims` and lengths are derived from
+/// coordinate arrays or the first matching data array.
+fn compute_dims_and_lengths(meta: &ZarrDatasetMeta) -> (Vec<IStr>, Vec<u64>) {
+    let dims = meta.dims.clone();
+    let dim_lengths: Vec<u64> = dims
+        .iter()
+        .map(|d| {
+            // First try: look for a 1D coordinate array with this dimension name
+            if let Some(coord_array) = meta.arrays.get(d) {
+                if let Some(&len) = coord_array.shape.first() {
+                    return len;
+                }
+            }
+            // Second try: look for any array that has this dimension and get its size
+            for (_, arr_meta) in &meta.arrays {
+                if let Some(pos) = arr_meta.dims.iter().position(|dim| dim == d) {
+                    if pos < arr_meta.shape.len() {
+                        return arr_meta.shape[pos];
+                    }
+                }
+            }
+            // Fallback
+            1
+        })
+        .collect();
+    (dims, dim_lengths)
+}
+
 fn default_vars_for_dataset_selection(meta: &ZarrDatasetMeta) -> Vec<IStr> {
     let mut out: std::collections::BTreeSet<IStr> = std::collections::BTreeSet::new();
+    
+    // Include root-level data vars
     out.extend(meta.data_vars.iter().cloned());
+    
+    // Include all array paths from meta.arrays (includes hierarchical paths)
+    // Filter to only include paths that look like variables (not coordinate arrays)
+    for (path, _arr_meta) in &meta.arrays {
+        // Skip dimension coordinate arrays (1D arrays where the dim name == array name)
+        let is_coord = meta.dims.iter().any(|d| d == path);
+        if !is_coord {
+            // Include hierarchical paths (contain '/')
+            let path_str: &str = path.as_ref();
+            if path_str.contains('/') && !path_str.starts_with('/') {
+                out.insert(path.clone());
+            }
+        }
+    }
+    
     // Also include 1D dimension coordinate arrays (e.g. `time`, `x`, `y`) if present.
     for d in &meta.dims {
         if meta.arrays.contains_key(d) {
@@ -54,30 +101,8 @@ fn default_vars_for_dataset_selection(meta: &ZarrDatasetMeta) -> Vec<IStr> {
 pub(crate) fn compile_expr_to_lazy_selection(
     expr: &Expr,
     meta: &ZarrDatasetMeta,
-    primary_var: &str,
 ) -> Result<LazyDatasetSelection, CompileError> {
-    let primary_key = primary_var.istr();
-    let Some(primary_meta) = meta.arrays.get(&primary_key) else {
-        return Err(CompileError::MissingPrimaryDims(format!(
-            "primary variable '{}' not found",
-            primary_var
-        )));
-    };
-
-    let dims: Vec<IStr> = if !primary_meta.dims.is_empty() {
-        primary_meta.dims.iter().cloned().collect()
-    } else {
-        meta.dims.clone()
-    };
-
-    let dim_lengths = if primary_meta.shape.len() == dims.len() {
-        primary_meta.shape.clone()
-    } else {
-        return Err(CompileError::MissingPrimaryDims(format!(
-            "primary variable '{}' has shape {:?} incompatible with dims {:?}",
-            primary_var, primary_meta.shape, dims
-        )));
-    };
+    let (dims, dim_lengths) = compute_dims_and_lengths(meta);
 
     let vars = default_vars_for_dataset_selection(meta);
     let mut ctx = LazyCompileCtx::new(meta, &dims, &dim_lengths, &vars);
@@ -93,30 +118,8 @@ pub(crate) fn resolve_lazy_selection_sync(
     lazy_selection: &LazyDatasetSelection,
     meta: &ZarrDatasetMeta,
     store: zarrs::storage::ReadableWritableListableStorage,
-    primary_var: &str,
 ) -> Result<(DatasetSelection, PlannerStats), CompileError> {
-    let primary_key = primary_var.istr();
-    let Some(primary_meta) = meta.arrays.get(&primary_key) else {
-        return Err(CompileError::MissingPrimaryDims(format!(
-            "primary variable '{}' not found",
-            primary_var
-        )));
-    };
-
-    let dims: Vec<IStr> = if !primary_meta.dims.is_empty() {
-        primary_meta.dims.iter().cloned().collect()
-    } else {
-        meta.dims.clone()
-    };
-
-    let dim_lengths = if primary_meta.shape.len() == dims.len() {
-        primary_meta.shape.clone()
-    } else {
-        return Err(CompileError::MissingPrimaryDims(format!(
-            "primary variable '{}' has shape {:?} incompatible with dims {:?}",
-            primary_var, primary_meta.shape, dims
-        )));
-    };
+    let (dims, dim_lengths) = compute_dims_and_lengths(meta);
 
     // Collect requests, handling index-only dimensions immediately
     let (requests, immediate_cache) =
@@ -130,7 +133,7 @@ pub(crate) fn resolve_lazy_selection_sync(
     let merged = MergedCache::new(&*resolved_cache, &immediate_cache);
     let selection = materialize(
         lazy_selection,
-        &meta,
+        meta,
         &merged
     ).map_err(|e| {
         CompileError::Unsupported(format!("materialization failed: {}", e))
@@ -153,70 +156,11 @@ pub(crate) fn compile_expr_to_dataset_selection(
     expr: &Expr,
     meta: &ZarrDatasetMeta,
     store: zarrs::storage::ReadableWritableListableStorage,
-    primary_var: &str,
 ) -> Result<(DatasetSelection, PlannerStats), CompileError> {
-    let lazy_selection = compile_expr_to_lazy_selection(expr, meta, primary_var)?;
-    resolve_lazy_selection_sync(&lazy_selection, meta, store, primary_var)
+    let lazy_selection = compile_expr_to_lazy_selection(expr, meta)?;
+    resolve_lazy_selection_sync(&lazy_selection, meta, store)
 }
 
-/// Compile an expression to a chunk plan (synchronous).
-///
-/// This is the main entry point for synchronous chunk planning.
-pub(crate) fn compile_expr_to_chunk_plan(
-    expr: &Expr,
-    meta: &ZarrDatasetMeta,
-    store: zarrs::storage::ReadableWritableListableStorage,
-    primary_var: &str,
-) -> Result<(ChunkPlan, PlannerStats), CompileError> {
-    let primary_key = primary_var.istr();
-    let Some(primary_meta) = meta.arrays.get(&primary_key) else {
-        return Err(CompileError::MissingPrimaryDims(format!(
-            "primary variable '{}' not found",
-            primary_var
-        )));
-    };
-
-    let (selection, stats) =
-        compile_expr_to_dataset_selection(expr, meta, store.clone(), primary_var)?;
-
-    let primary = Array::open(store.clone(), primary_meta.path.as_ref())
-        .map_err(|e| CompileError::Unsupported(format!("failed to open primary array: {:?}", e)))?;
-    let grid_shape = primary.chunk_grid().grid_shape().to_vec();
-    let zero = vec![0u64; primary.dimensionality()];
-    let chunk_shape_nz = primary
-        .chunk_shape(&zero)
-        .map_err(|e| CompileError::Unsupported(e.to_string()))?;
-    let chunk_shape = chunk_shape_nz.iter().map(|nz| nz.get()).collect::<Vec<_>>();
-    let _ = chunk_shape; // Suppress unused variable warning
-
-    if let DatasetSelection::Selection(selection) = selection {
-        // If the primary variable is not in the selection, it means it was pruned to empty
-        let Some(darray) = selection.get(primary_var) else {
-            let plan = ChunkPlan::from_root(grid_shape, ChunkPlanNode::Empty);
-            return Ok((plan, stats));
-        };
-        let mut chunk_set = Vec::new();
-        for subset in darray.subsets_iter() {
-            let chunks = primary.chunks_in_array_subset(subset).map_err(|e| CompileError::Unsupported(e.to_string()))?;
-            if let Some(chunks) = chunks {
-                for chunk_index in chunks.indices().iter() {
-                    // chunk_index is a TinyVec<[u64; 4]>
-                    chunk_set.push(chunk_index.iter().copied().collect());
-                }
-            }
-        }
-
-        let indices: Vec<Vec<u64>> = chunk_set.into_iter().collect();
-        let plan = ChunkPlan::from_root(grid_shape, ChunkPlanNode::Explicit(indices));
-        Ok((plan, stats))
-    } else if let DatasetSelection::NoSelectionMade = selection {
-        let plan = ChunkPlan::all(grid_shape);
-        Ok((plan, stats))
-    } else {
-        let plan = ChunkPlan::from_root(grid_shape, ChunkPlanNode::Empty);
-        Ok((plan, stats))
-    }
-}
 
 // ============================================================================
 // Asynchronous resolution
@@ -227,30 +171,8 @@ pub(crate) async fn resolve_lazy_selection_async(
     lazy_selection: &LazyDatasetSelection,
     meta: &ZarrDatasetMeta,
     store: zarrs::storage::AsyncReadableWritableListableStorage,
-    primary_var: &str,
 ) -> Result<(DatasetSelection, PlannerStats), CompileError> {
-    let primary_key = primary_var.istr();
-    let Some(primary_meta) = meta.arrays.get(&primary_key) else {
-        return Err(CompileError::MissingPrimaryDims(format!(
-            "primary variable '{}' not found",
-            primary_var
-        )));
-    };
-
-    let dims: Vec<IStr> = if !primary_meta.dims.is_empty() {
-        primary_meta.dims.iter().cloned().collect()
-    } else {
-        meta.dims.clone()
-    };
-
-    let dim_lengths = if primary_meta.shape.len() == dims.len() {
-        primary_meta.shape.clone()
-    } else {
-        return Err(CompileError::MissingPrimaryDims(format!(
-            "primary variable '{}' has shape {:?} incompatible with dims {:?}",
-            primary_var, primary_meta.shape, dims
-        )));
-    };
+    let (dims, dim_lengths) = compute_dims_and_lengths(meta);
 
     // Collect requests, handling index-only dimensions immediately
     let (requests, immediate_cache) =
@@ -262,7 +184,7 @@ pub(crate) async fn resolve_lazy_selection_async(
 
     // Merge caches and materialize
     let merged = MergedCache::new(&*resolved_cache, &immediate_cache);
-    let selection = materialize(lazy_selection, &meta, &merged).map_err(|e| {
+    let selection = materialize(lazy_selection, meta, &merged).map_err(|e| {
         CompileError::Unsupported(format!("materialization failed: {}", e))
     })?;
 
@@ -277,71 +199,11 @@ pub(crate) async fn compile_expr_to_dataset_selection_async(
     expr: &Expr,
     meta: &ZarrDatasetMeta,
     store: zarrs::storage::AsyncReadableWritableListableStorage,
-    primary_var: &str,
 ) -> Result<(DatasetSelection, PlannerStats), CompileError> {
-    let lazy_selection = compile_expr_to_lazy_selection(expr, meta, primary_var)?;
-    resolve_lazy_selection_async(&lazy_selection, meta, store, primary_var).await
+    let lazy_selection = compile_expr_to_lazy_selection(expr, meta)?;
+    resolve_lazy_selection_async(&lazy_selection, meta, store).await
 }
 
-/// Compile an expression to a chunk plan (async).
-///
-/// This is the main entry point for async chunk planning with concurrent I/O.
-pub(crate) async fn compile_expr_to_chunk_plan_async(
-    expr: &Expr,
-    meta: &ZarrDatasetMeta,
-    store: zarrs::storage::AsyncReadableWritableListableStorage,
-    primary_var: &str,
-) -> Result<(ChunkPlan, PlannerStats), CompileError> {
-    let primary_key = primary_var.istr();
-    let Some(primary_meta) = meta.arrays.get(&primary_key) else {
-        return Err(CompileError::MissingPrimaryDims(format!(
-            "primary variable '{}' not found",
-            primary_var
-        )));
-    };
-
-    let (selection, stats) =
-        compile_expr_to_dataset_selection_async(expr, meta, store.clone(), primary_var).await?;
-
-    let primary = Array::async_open(store.clone(), primary_meta.path.as_ref())
-        .await
-        .map_err(|e| CompileError::Unsupported(format!("failed to open primary array: {:?}", e)))?;
-    let grid_shape = primary.chunk_grid().grid_shape().to_vec();
-    let zero = vec![0u64; primary.dimensionality()];
-    let chunk_shape_nz = primary
-        .chunk_shape(&zero)
-        .map_err(|e| CompileError::Unsupported(e.to_string()))?;
-    let chunk_shape = chunk_shape_nz.iter().map(|nz| nz.get()).collect::<Vec<_>>();
-    let _ = chunk_shape; // Suppress unused variable warning
-
-    if let DatasetSelection::Selection(selection) = selection {
-        // If the primary variable is not in the selection, it means it was pruned to empty
-        let Some(darray) = selection.get(primary_var) else {
-            let plan = ChunkPlan::from_root(grid_shape, ChunkPlanNode::Empty);
-            return Ok((plan, stats));
-        };
-        let mut chunk_set = Vec::new();
-        for subset in darray.subsets_iter() {
-            let chunks = primary.chunks_in_array_subset(subset).map_err(|e| CompileError::Unsupported(e.to_string()))?;
-            if let Some(chunks) = chunks {
-                for chunk_index in chunks.indices().iter() {
-                    // chunk_index is a TinyVec<[u64; 4]>
-                    chunk_set.push(chunk_index.iter().copied().collect());
-                }
-            }
-        }
-
-        let indices: Vec<Vec<u64>> = chunk_set.into_iter().collect();
-        let plan = ChunkPlan::from_root(grid_shape, ChunkPlanNode::Explicit(indices));
-        Ok((plan, stats))
-    } else if let DatasetSelection::NoSelectionMade = selection {
-        let plan = ChunkPlan::all(grid_shape);
-        Ok((plan, stats))
-    } else {
-        let plan = ChunkPlan::from_root(grid_shape, ChunkPlanNode::Empty);
-        Ok((plan, stats))
-    }
-}
 
 // ============================================================================
 // Unified ZarrMeta entry points
@@ -351,30 +213,44 @@ pub(crate) async fn compile_expr_to_chunk_plan_async(
 pub(crate) fn compile_expr_to_lazy_selection_unified(
     expr: &Expr,
     meta: &crate::meta::ZarrMeta,
-    primary_var: &str,
 ) -> Result<LazyDatasetSelection, CompileError> {
     let legacy_meta = ZarrDatasetMeta::from(meta);
-    compile_expr_to_lazy_selection(expr, &legacy_meta, primary_var)
+    compile_expr_to_lazy_selection(expr, &legacy_meta)
 }
 
-/// Compile an expression to a chunk plan (sync) using unified ZarrMeta.
-pub(crate) fn compile_expr_to_chunk_plan_unified(
+// ============================================================================
+// GroupedChunkPlan entry points (heterogeneous chunk grids)
+// ============================================================================
+
+use crate::chunk_plan::indexing::selection_to_chunks::{
+    selection_to_grouped_chunk_plan, selection_to_grouped_chunk_plan_async,
+};
+use crate::chunk_plan::indexing::GroupedChunkPlan;
+
+/// Compile an expression to a grouped chunk plan (sync).
+///
+/// This handles heterogeneous chunk grids: variables with the same dimensions
+/// but different chunk shapes will have separate ChunkPlans.
+pub(crate) fn compile_expr_to_grouped_chunk_plan(
     expr: &Expr,
-    meta: &crate::meta::ZarrMeta,
+    meta: &ZarrDatasetMeta,
     store: zarrs::storage::ReadableWritableListableStorage,
-    primary_var: &str,
-) -> Result<(ChunkPlan, PlannerStats), CompileError> {
-    let legacy_meta = ZarrDatasetMeta::from(meta);
-    compile_expr_to_chunk_plan(expr, &legacy_meta, store, primary_var)
+) -> Result<(GroupedChunkPlan, PlannerStats), CompileError> {
+    let (selection, stats) = compile_expr_to_dataset_selection(expr, meta, store.clone())?;
+    let grouped_plan = selection_to_grouped_chunk_plan(&selection, meta, store)?;
+    Ok((grouped_plan, stats))
 }
 
-/// Compile an expression to a chunk plan (async) using unified ZarrMeta.
-pub(crate) async fn compile_expr_to_chunk_plan_unified_async(
+/// Compile an expression to a grouped chunk plan (async).
+///
+/// This handles heterogeneous chunk grids: variables with the same dimensions
+/// but different chunk shapes will have separate ChunkPlans.
+pub(crate) async fn compile_expr_to_grouped_chunk_plan_async(
     expr: &Expr,
-    meta: &crate::meta::ZarrMeta,
+    meta: &ZarrDatasetMeta,
     store: zarrs::storage::AsyncReadableWritableListableStorage,
-    primary_var: &str,
-) -> Result<(ChunkPlan, PlannerStats), CompileError> {
-    let legacy_meta = ZarrDatasetMeta::from(meta);
-    compile_expr_to_chunk_plan_async(expr, &legacy_meta, store, primary_var).await
+) -> Result<(GroupedChunkPlan, PlannerStats), CompileError> {
+    let (selection, stats) = compile_expr_to_dataset_selection_async(expr, meta, store.clone()).await?;
+    let grouped_plan = selection_to_grouped_chunk_plan_async(&selection, meta, store).await?;
+    Ok((grouped_plan, stats))
 }

@@ -2,6 +2,7 @@ use super::chunk_to_df::chunk_to_df;
 use super::open_arrays::open_arrays_async;
 use super::prelude::*;
 use crate::IntoIStr;
+use crate::chunk_plan::compile_expr_to_grouped_chunk_plan_async;
 
 pub(crate) async fn scan_zarr_df_async(
     store_input: StoreInput,
@@ -11,8 +12,10 @@ pub(crate) async fn scan_zarr_df_async(
     with_columns: Option<BTreeSet<String>>,
 ) -> Result<DataFrame, PyErr> {
     // Async open + async meta traversal.
-    let (opened_async, meta) =
-        open_and_load_dataset_meta_from_input_async(store_input).await.map_err(to_py_err)?;
+    let (opened_async, zarr_meta) =
+        open_and_load_zarr_meta_from_input_async(store_input).await.map_err(to_py_err)?;
+    // Convert to ZarrDatasetMeta - preserves hierarchical paths from path_to_array
+    let meta = ZarrDatasetMeta::from(&zarr_meta);
 
     // Convert from Python String to IStr at the boundary
     let vars: Vec<IStr> = variables
@@ -24,43 +27,80 @@ pub(crate) async fn scan_zarr_df_async(
         ));
     }
 
-    let primary_var = &vars[0];
-    let primary_meta = meta.arrays.get(primary_var).ok_or_else(|| {
-        PyErr::new::<pyo3::exceptions::PyValueError, _>("unknown primary variable")
-    })?;
-    let dims: Vec<IStr> = if !primary_meta.dims.is_empty() {
-        primary_meta.dims.iter().cloned().collect()
-    } else {
-        meta.dims.clone()
-    };
+    // Use dataset dims directly
+    let dims = meta.dims.clone();
 
     // Open arrays once (async) for reading.
-    let (primary, var_arrays, coord_arrays) =
+    let (var_arrays, coord_arrays) =
         open_arrays_async(opened_async.store.clone(), &meta, &vars, &dims)
             .await
             .map_err(to_py_err)?;
 
     // Compile chunk plan using truly async I/O (concurrent coordinate resolution).
-    let (plan, _stats) = match compile_expr_to_chunk_plan_async(
+    let (grouped_plan, _stats) = match compile_expr_to_grouped_chunk_plan_async(
         &expr,
         &meta,
         opened_async.store.clone(),
-        primary_var.as_ref(),
     )
     .await
     {
         Ok(x) => x,
         Err(_) => {
-            // Fall back to scanning all chunks if planning fails.
-            let grid_shape = primary.chunk_grid().grid_shape().to_vec();
+            // Fall back to empty plan - will scan no chunks
             (
-                ChunkPlan::all(grid_shape),
+                GroupedChunkPlan::new(),
                 crate::chunk_plan::PlannerStats { coord_reads: 0 },
             )
         }
     };
 
-    let indices: Vec<Vec<u64>> = plan.into_index_iter().collect();
+    // Pick a reference variable for chunk iteration geometry
+    // TODO: Eventually iterate per-grid, but for now pick the first variable
+    let ref_var = &vars[0];
+    let ref_meta = meta.arrays.get(ref_var).ok_or_else(|| {
+        PyErr::new::<pyo3::exceptions::PyValueError, _>("unknown variable")
+    })?;
+    let ref_array = zarrs::array::Array::async_open(opened_async.store.clone(), ref_meta.path.as_ref())
+        .await
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
+    let ref_array = Arc::new(ref_array);
+
+    // Convert array subsets to chunk indices for the reference variable
+    let mut chunk_indices: Vec<Vec<u64>> = Vec::new();
+    
+    // Get the plan for the reference variable, or scan all chunks if not in plan
+    if let Some(subsets) = grouped_plan.get_plan(ref_var.as_ref()) {
+        for subset in subsets.subsets_iter() {
+            if let Ok(Some(chunks)) = ref_array.chunks_in_array_subset(subset) {
+                for chunk_idx in chunks.indices().iter() {
+                    chunk_indices.push(chunk_idx.iter().copied().collect());
+                }
+            }
+        }
+    } else if grouped_plan.is_empty() {
+        // No selection made - scan all chunks
+        let grid_shape = ref_array.chunk_grid().grid_shape();
+        // Generate all chunk indices
+        let mut idx = vec![0u64; grid_shape.len()];
+        loop {
+            chunk_indices.push(idx.clone());
+            // Increment (last dim fastest)
+            let mut carry = true;
+            for d in (0..idx.len()).rev() {
+                if carry {
+                    idx[d] += 1;
+                    if idx[d] < grid_shape[d] {
+                        carry = false;
+                    } else {
+                        idx[d] = 0;
+                    }
+                }
+            }
+            if carry {
+                break;
+            }
+        }
+    }
 
     let max_conc = max_concurrency
         .filter(|&v| v > 0)
@@ -78,9 +118,9 @@ pub(crate) async fn scan_zarr_df_async(
     );
 
     let mut futs = FuturesUnordered::new();
-    for idx in indices {
+    for idx in chunk_indices {
         let permit = semaphore.clone().acquire_owned().await.unwrap();
-        let primary = primary.clone();
+        let ref_array = ref_array.clone();
         let meta = Arc::clone(&meta);
         let dims = Arc::clone(&dims);
         let vars = Arc::clone(&vars);
@@ -89,7 +129,7 @@ pub(crate) async fn scan_zarr_df_async(
         let with_columns = Arc::clone(&with_columns);
         futs.push(async move {
             let _permit = permit;
-            chunk_to_df(idx, primary, meta, dims, vars, var_arrays, coord_arrays, with_columns).await
+            chunk_to_df(idx, ref_array, meta, dims, vars, var_arrays, coord_arrays, with_columns).await
         });
     }
 

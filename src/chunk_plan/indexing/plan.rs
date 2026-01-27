@@ -1,275 +1,111 @@
-use super::types::DimChunkRange;
+use std::collections::BTreeMap;
+use std::sync::Arc;
 
+use crate::IStr;
+use crate::chunk_plan::indexing::types::ChunkGridSignature;
+use crate::chunk_plan::indexing::selection::ArraySubsetList;
+
+// =============================================================================
+// Grouped Chunk Plan
+// =============================================================================
+
+/// Grouped chunk plan - maps chunk grid signatures to plans.
+///
+/// This allows heterogeneous chunk layouts: variables with the same dimensions
+/// but different chunk shapes will have different plans.
 #[derive(Debug, Clone)]
-pub(crate) enum ChunkPlanNode {
-    Empty,
-    AllChunks,
-    Rect(Vec<DimChunkRange>),
-    Explicit(Vec<Vec<u64>>),
-    Union(Vec<ChunkPlanNode>),
+pub(crate) struct GroupedChunkPlan {
+    /// ChunkPlan by grid signature
+    by_grid: BTreeMap<Arc<ChunkGridSignature>, ArraySubsetList>,
+    /// Variable name to grid signature lookup
+    var_to_grid: BTreeMap<IStr, Arc<ChunkGridSignature>>,
 }
 
-impl ChunkPlanNode {
-    pub(crate) fn is_empty(&self) -> bool {
-        match self {
-            ChunkPlanNode::Empty => true,
-            ChunkPlanNode::Explicit(v) => v.is_empty(),
-            _ => false,
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct ChunkPlan {
-    grid_shape: Vec<u64>,
-    root: ChunkPlanNode,
-}
-
-impl ChunkPlan {
-    pub(crate) fn all(grid_shape: Vec<u64>) -> Self {
+impl GroupedChunkPlan {
+    /// Create a new empty grouped chunk plan.
+    pub fn new() -> Self {
         Self {
-            grid_shape,
-            root: ChunkPlanNode::AllChunks,
+            by_grid: BTreeMap::new(),
+            var_to_grid: BTreeMap::new(),
         }
     }
 
-    pub(crate) fn from_root(grid_shape: Vec<u64>, root: ChunkPlanNode) -> Self {
-        Self {
-            grid_shape,
-            root,
-        }
+    /// Insert a plan for a variable with the given grid signature.
+    pub fn insert(&mut self, var: IStr, sig: Arc<ChunkGridSignature>, plan: ArraySubsetList) {
+        self.var_to_grid.insert(var, sig.clone());
+        self.by_grid.entry(sig).or_insert(plan);
     }
 
-    pub(crate) fn grid_shape(&self) -> &[u64] {
-        &self.grid_shape
+    /// Get the plan for a specific variable.
+    pub fn get_plan(&self, var: &str) -> Option<&ArraySubsetList> {
+        let sig = self.var_to_grid.get(&crate::IntoIStr::istr(var))?;
+        self.by_grid.get(sig)
     }
 
-    pub(crate) fn into_index_iter(self) -> ChunkIndexIter {
-        ChunkIndexIter::new(self.root, self.grid_shape)
-    }
-}
-
-pub(crate) struct ChunkIndexIter {
-    stack: Vec<OwnedIterFrame>,
-}
-
-enum OwnedIterFrame {
-    Empty,
-    AllChunks(AllChunksIter),
-    Rect(RectIter),
-    Explicit(ExplicitIter),
-    Union(UnionOwnedIter),
-}
-
-impl ChunkIndexIter {
-    fn new(root: ChunkPlanNode, grid_shape: Vec<u64>) -> Self {
-        let mut it = Self { stack: Vec::new() };
-        it.push_node(root, grid_shape);
-        it
+    /// Get the grid signature for a variable.
+    pub fn get_signature(&self, var: &str) -> Option<&Arc<ChunkGridSignature>> {
+        self.var_to_grid.get(&crate::IntoIStr::istr(var))
     }
 
-    fn push_node(&mut self, node: ChunkPlanNode, grid_shape: Vec<u64>) {
-        match node {
-            ChunkPlanNode::Empty => self.stack.push(OwnedIterFrame::Empty),
-            ChunkPlanNode::AllChunks => self
-                .stack
-                .push(OwnedIterFrame::AllChunks(AllChunksIter::new(&grid_shape))),
-            ChunkPlanNode::Rect(ranges) => self
-                .stack
-                .push(OwnedIterFrame::Rect(RectIter::new(&ranges))),
-            ChunkPlanNode::Explicit(items) => self
-                .stack
-                .push(OwnedIterFrame::Explicit(ExplicitIter::new(items))),
-            ChunkPlanNode::Union(children) => self.stack.push(OwnedIterFrame::Union(
-                UnionOwnedIter::new(children, grid_shape),
-            )),
-        }
+    /// Get all variables for a grid signature.
+    pub fn vars_for_grid(&self, sig: &ChunkGridSignature) -> Vec<&IStr> {
+        self.var_to_grid
+            .iter()
+            .filter(|(_, s)| s.as_ref() == sig)
+            .map(|(v, _)| v)
+            .collect()
     }
-}
 
-impl Iterator for ChunkIndexIter {
-    type Item = Vec<u64>;
+    /// Get the number of unique chunk grids.
+    pub fn num_grids(&self) -> usize {
+        self.by_grid.len()
+    }
 
-    fn next(&mut self) -> Option<Self::Item> {
-        loop {
-            let frame = self.stack.pop()?;
-            match frame {
-                OwnedIterFrame::Empty => continue,
-                OwnedIterFrame::AllChunks(mut it) => {
-                    if let Some(v) = it.next() {
-                        self.stack.push(OwnedIterFrame::AllChunks(it));
-                        return Some(v);
-                    }
-                }
-                OwnedIterFrame::Rect(mut it) => {
-                    if let Some(v) = it.next() {
-                        self.stack.push(OwnedIterFrame::Rect(it));
-                        return Some(v);
-                    }
-                }
-                OwnedIterFrame::Explicit(mut it) => {
-                    if let Some(v) = it.next() {
-                        self.stack.push(OwnedIterFrame::Explicit(it));
-                        return Some(v);
-                    }
-                }
-                OwnedIterFrame::Union(mut it) => {
-                    if let Some(v) = it.next() {
-                        self.stack.push(OwnedIterFrame::Union(it));
-                        return Some(v);
-                    }
-                }
-            }
-        }
+    /// Get the number of variables.
+    pub fn num_vars(&self) -> usize {
+        self.var_to_grid.len()
+    }
+
+    /// Check if this plan is empty.
+    pub fn is_empty(&self) -> bool {
+        self.by_grid.is_empty()
+    }
+
+    /// Total number of chunks across all grids.
+    pub fn total_chunks(&self) -> usize {
+        self.by_grid
+            .values()
+            .map(|plan| plan.clone().num_elements_usize()
+                )
+            .sum()
+    }
+
+    /// Iterate over (grid_signature, variables, chunk_plan) tuples.
+    pub fn iter_grids(&self) -> impl Iterator<Item = (&ChunkGridSignature, Vec<&IStr>, &ArraySubsetList)> {
+        self.by_grid.iter().map(move |(sig, plan)| {
+            let vars = self.vars_for_grid(sig.as_ref());
+            (sig.as_ref(), vars, plan)
+        })
+    }
+
+    /// Iterate over (grid_signature, chunk_plan) pairs.
+    pub fn iter_plans(&self) -> impl Iterator<Item = (&Arc<ChunkGridSignature>, &ArraySubsetList)> {
+        self.by_grid.iter()
+    }
+
+    /// Get the internal by_grid map.
+    pub fn by_grid(&self) -> &BTreeMap<Arc<ChunkGridSignature>, ArraySubsetList> {
+        &self.by_grid
+    }
+
+    /// Get the internal var_to_grid map.
+    pub fn var_to_grid(&self) -> &BTreeMap<IStr, Arc<ChunkGridSignature>> {
+        &self.var_to_grid
     }
 }
 
-struct AllChunksIter {
-    grid_shape: Vec<u64>,
-    cur: Vec<u64>,
-    started: bool,
-    done: bool,
-}
-
-impl AllChunksIter {
-    fn new(grid_shape: &[u64]) -> Self {
-        let cur = vec![0; grid_shape.len()];
-        Self {
-            grid_shape: grid_shape.to_vec(),
-            cur,
-            started: false,
-            done: grid_shape.is_empty(),
-        }
+impl Default for GroupedChunkPlan {
+    fn default() -> Self {
+        Self::new()
     }
 }
-
-impl Iterator for AllChunksIter {
-    type Item = Vec<u64>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.done {
-            return None;
-        }
-        if !self.started {
-            self.started = true;
-            return Some(self.cur.clone());
-        }
-        // advance lexicographically (last dim fastest)
-        for i in (0..self.cur.len()).rev() {
-            self.cur[i] += 1;
-            if self.cur[i] < self.grid_shape[i] {
-                return Some(self.cur.clone());
-            }
-            self.cur[i] = 0;
-        }
-        self.done = true;
-        None
-    }
-}
-
-struct RectIter {
-    ranges: Vec<DimChunkRange>,
-    cur: Vec<u64>,
-    started: bool,
-    done: bool,
-}
-
-impl RectIter {
-    fn new(ranges: &[DimChunkRange]) -> Self {
-        let cur = ranges.iter().map(|r| r.start_chunk).collect::<Vec<_>>();
-        let done =
-            ranges.is_empty() || ranges.iter().any(|r| r.end_chunk_inclusive < r.start_chunk);
-        Self {
-            ranges: ranges.to_vec(),
-            cur,
-            started: false,
-            done,
-        }
-    }
-}
-
-impl Iterator for RectIter {
-    type Item = Vec<u64>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.done {
-            return None;
-        }
-        if !self.started {
-            self.started = true;
-            return Some(self.cur.clone());
-        }
-        for i in (0..self.cur.len()).rev() {
-            self.cur[i] += 1;
-            if self.cur[i] <= self.ranges[i].end_chunk_inclusive {
-                return Some(self.cur.clone());
-            }
-            self.cur[i] = self.ranges[i].start_chunk;
-        }
-        self.done = true;
-        None
-    }
-}
-
-struct ExplicitIter {
-    items: Vec<Vec<u64>>,
-    idx: usize,
-}
-
-impl ExplicitIter {
-    fn new(items: Vec<Vec<u64>>) -> Self {
-        Self { items, idx: 0 }
-    }
-}
-
-impl Iterator for ExplicitIter {
-    type Item = Vec<u64>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.idx >= self.items.len() {
-            return None;
-        }
-        let v = self.items[self.idx].clone();
-        self.idx += 1;
-        Some(v)
-    }
-}
-
-struct UnionOwnedIter {
-    children: Vec<ChunkPlanNode>,
-    child_idx: usize,
-    child_iter: Option<ChunkIndexIter>,
-    grid_shape: Vec<u64>,
-}
-
-impl UnionOwnedIter {
-    fn new(children: Vec<ChunkPlanNode>, grid_shape: Vec<u64>) -> Self {
-        Self {
-            children,
-            child_idx: 0,
-            child_iter: None,
-            grid_shape,
-        }
-    }
-}
-
-impl Iterator for UnionOwnedIter {
-    type Item = Vec<u64>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        loop {
-            if let Some(it) = &mut self.child_iter {
-                if let Some(v) = it.next() {
-                    return Some(v);
-                }
-            }
-            if self.child_idx >= self.children.len() {
-                return None;
-            }
-            let node = self.children[self.child_idx].clone();
-            self.child_iter = Some(ChunkIndexIter::new(node, self.grid_shape.clone()));
-            self.child_idx += 1;
-        }
-    }
-}
-

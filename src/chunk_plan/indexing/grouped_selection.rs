@@ -58,10 +58,10 @@ impl<Sel: ArraySelectionType> GroupedSelection<Sel> {
 
         for var in vars {
             let sig = if let Some(array_meta) = meta.arrays.get(&var) {
-                DimSignature::from(array_meta.dims.as_slice())
+                DimSignature::from_dims_only(array_meta.dims.clone())
             } else {
                 // Variable not found in meta - use empty signature
-                DimSignature::new(smallvec::SmallVec::new())
+                DimSignature::from_dims_only(smallvec::SmallVec::new())
             };
 
             let sig_arc = sig_cache

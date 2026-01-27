@@ -21,9 +21,6 @@ pub(crate) use monotonic_async::AsyncMonotonicResolver;
 
 // Generic grouped selection types
 pub mod grouped_selection;
-pub(crate) use grouped_selection::{
-    ArraySelectionType, DatasetSelectionBase, GroupedSelection,
-};
 
 // Lazy selection types
 pub mod lazy_selection;
@@ -39,6 +36,6 @@ pub(crate) use resolver_traits::{
 
 // Core types re-exports
 pub(crate) use selection::{
-    DSelection, Emptyable, DatasetSelection
+    Emptyable, DatasetSelection
 };
-pub(crate) use types::{DimChunkRange, DimSignature};
+pub(crate) use plan::GroupedChunkPlan;

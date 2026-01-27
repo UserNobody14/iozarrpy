@@ -101,10 +101,28 @@ pub(crate) async fn chunk_to_df(
         let chunk_shape = chunk_shape.clone();
         var_reads.push(async move {
             let var_meta_dims: Vec<IStr> = var_meta.dims.iter().cloned().collect();
+            
+            // Get the variable's chunk grid shape to validate indices
+            let var_grid_shape: Vec<u64> = arr.chunk_grid().grid_shape().to_vec();
+            
             let (var_chunk_indices, var_offsets) = if var_meta_dims.len() == dims.len()
                 && var_meta_dims == *dims
             {
-                (idx.clone(), vec![0; dims.len()])
+                // Same dimensions - but check if chunk index is valid for this variable's grid
+                let idx_valid = idx.len() == var_grid_shape.len()
+                    && idx.iter().zip(var_grid_shape.iter()).all(|(i, g)| *i < *g);
+                
+                if idx_valid {
+                    (idx.clone(), vec![0; dims.len()])
+                } else {
+                    // Chunk index out of range for this variable - clamp to valid range
+                    let clamped: Vec<u64> = idx
+                        .iter()
+                        .zip(var_grid_shape.iter())
+                        .map(|(i, g)| (*i).min(g.saturating_sub(1)))
+                        .collect();
+                    (clamped, vec![0; dims.len()])
+                }
             } else {
                 compute_var_chunk_info_async(&idx, &chunk_shape, &dims, &var_meta_dims, &arr)
                     .map_err(to_py_err)?
@@ -210,15 +228,27 @@ pub(crate) async fn chunk_to_df(
     // Variable columns.
     for (name, data, var_dims, var_chunk_shape, var_offsets) in var_chunks {
         let var_dims_vec: Vec<IStr> = var_dims.iter().cloned().collect();
-        if var_dims_vec.len() == dims.len() && var_dims_vec == *dims && var_offsets.iter().all(|&o| o == 0)
-        {
+        
+        // Check if we can use direct indexing:
+        // - Same dimensions in same order
+        // - Same chunk shape (important! different chunking means different data layout)
+        // - Zero offsets
+        let same_dims = var_dims_vec.len() == dims.len() && var_dims_vec == *dims;
+        let same_chunk_shape = var_chunk_shape == chunk_shape;
+        let zero_offsets = var_offsets.iter().all(|&o| o == 0);
+        
+        if same_dims && same_chunk_shape && zero_offsets {
+            // Fast path: direct index mapping
             cols.push(data.take_indices(&keep).into_series(name.as_ref()).into());
         } else {
+            // Slow path: map indices through dimension/chunk shape differences
             let dim_mapping: Vec<Option<usize>> = dims
                 .iter()
                 .map(|pd| var_dims.iter().position(|vd| vd == pd))
                 .collect();
             let var_strides = compute_strides(&var_chunk_shape);
+            let var_data_len = data.len();
+            
             let indices: Vec<usize> = keep
                 .iter()
                 .map(|&row| {
@@ -226,11 +256,19 @@ pub(crate) async fn chunk_to_df(
                     for (primary_d, maybe_var_d) in dim_mapping.iter().enumerate() {
                         if let Some(var_d) = *maybe_var_d {
                             let local = (row as u64 / strides[primary_d]) % chunk_shape[primary_d];
-                            let local_with_offset = local + var_offsets[var_d];
+                            // When chunk shapes differ, map local to the var's chunk shape
+                            let var_local = if same_dims && var_chunk_shape.len() > var_d {
+                                // Same dims but different chunk shape: clamp to var's chunk bounds
+                                local.min(var_chunk_shape[var_d].saturating_sub(1))
+                            } else {
+                                local
+                            };
+                            let local_with_offset = var_local + var_offsets[var_d];
                             var_idx += local_with_offset * var_strides[var_d];
                         }
                     }
-                    var_idx as usize
+                    // Clamp to data bounds to prevent panics
+                    (var_idx as usize).min(var_data_len.saturating_sub(1))
                 })
                 .collect();
             cols.push(data.take_indices(&indices).into_series(name.as_ref()).into());

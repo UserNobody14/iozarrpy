@@ -3,15 +3,14 @@
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyDict};
 use pyo3_async_runtimes::tokio::future_into_py;
-use std::collections::{BTreeMap, HashMap};
-use crate::chunk_plan::DataArraySelection;
+use std::collections::HashMap;
 
 use crate::chunk_plan::{
-    collect_requests_with_meta, compile_expr_to_lazy_selection, resolve_lazy_selection_sync,
-    resolve_lazy_selection_async, compile_expr_to_chunk_plan_async,
-    DatasetSelection,
+    DatasetSelection, collect_requests_with_meta,
+    compile_expr_to_grouped_chunk_plan_async, compile_expr_to_lazy_selection,
+    resolve_lazy_selection_async, resolve_lazy_selection_sync,
 };
-use crate::meta::{open_and_load_dataset_meta, open_and_load_dataset_meta_async};
+use crate::meta::{ZarrDatasetMeta, open_and_load_zarr_meta, open_and_load_zarr_meta_async};
 use crate::py::expr_extract::extract_expr;
 use crate::{IStr, IntoIStr};
 
@@ -50,13 +49,15 @@ pub(crate) fn _debug_chunk_planning(
     let result = PyDict::new(py);
 
     // Open the store and load metadata
-    let (opened, meta) = match open_and_load_dataset_meta(&zarr_url) {
+    let (opened, zarr_meta) = match open_and_load_zarr_meta(&zarr_url) {
         Ok(x) => x,
         Err(e) => {
             result.set_item("error", format!("Failed to open store: {}", e))?;
             return Ok(result.into());
         }
     };
+    // Convert to ZarrDatasetMeta - preserves hierarchical paths from path_to_array
+    let meta = ZarrDatasetMeta::from(&zarr_meta);
 
     // Add metadata info
     let meta_dict = PyDict::new(py);
@@ -135,7 +136,7 @@ pub(crate) fn _debug_chunk_planning(
     result.set_item("dim_lengths", dim_lengths_map)?;
 
     // Compile to lazy selection
-    let lazy_selection = match compile_expr_to_lazy_selection(&expr, &meta, pvar.as_ref()) {
+    let lazy_selection = match compile_expr_to_lazy_selection(&expr, &meta) {
         Ok(sel) => sel,
         Err(e) => {
             result.set_item("error", format!("Failed to compile expression: {:?}", e))?;
@@ -158,7 +159,7 @@ pub(crate) fn _debug_chunk_planning(
 
     // Resolve the lazy selection
     let (materialized, stats) =
-        match resolve_lazy_selection_sync(&lazy_selection, &meta, opened.store.clone(), pvar.as_ref()) {
+        match resolve_lazy_selection_sync(&lazy_selection, &meta, opened.store.clone()) {
             Ok(x) => x,
             Err(e) => {
                 result.set_item(
@@ -174,12 +175,8 @@ pub(crate) fn _debug_chunk_planning(
 
     // Check if the selection is empty or "no selection made" (which means all chunks)
     let selection_summary = match &materialized {
-        DatasetSelection::NoSelectionMade => {
-            "NoSelectionMade (will select ALL chunks)".to_string()
-        }
-        DatasetSelection::Empty => {
-            "Empty (will select NO chunks)".to_string()
-        }
+        DatasetSelection::NoSelectionMade => "NoSelectionMade (will select ALL chunks)".to_string(),
+        DatasetSelection::Empty => "Empty (will select NO chunks)".to_string(),
         DatasetSelection::Selection(sel) => {
             format!("Selection with {} variables", sel.len())
         }
@@ -202,11 +199,11 @@ pub(crate) fn _debug_chunk_planning_async(
 ) -> PyResult<Py<PyAny>> {
     // Extract expression under the GIL
     let expr = extract_expr(predicate)?;
-    
+
     let awaitable = future_into_py(py, async move {
         _debug_chunk_planning_async_inner(zarr_url, expr, primary_var).await
     })?;
-    
+
     Ok(awaitable.unbind())
 }
 
@@ -216,114 +213,145 @@ async fn _debug_chunk_planning_async_inner(
     primary_var: Option<String>,
 ) -> PyResult<HashMap<String, String>> {
     let mut result: HashMap<String, String> = HashMap::new();
-    
+
     // Open the store async and load metadata
-    let (opened_async, meta) = match open_and_load_dataset_meta_async(&zarr_url).await {
+    let (opened_async, zarr_meta) = match open_and_load_zarr_meta_async(&zarr_url).await {
         Ok(x) => x,
         Err(e) => {
             result.insert("error".to_string(), format!("Failed to open store: {}", e));
             return Ok(result);
         }
     };
-    
+    // Convert to ZarrDatasetMeta - preserves hierarchical paths from path_to_array
+    let meta = ZarrDatasetMeta::from(&zarr_meta);
+
     result.insert("meta_loaded".to_string(), "true".to_string());
     result.insert("dims".to_string(), format!("{:?}", meta.dims));
     result.insert("data_vars".to_string(), format!("{:?}", meta.data_vars));
-    
+
     // Determine primary variable (convert String -> IStr at boundary)
     let pvar: IStr = primary_var
         .map(|s| s.istr())
         .unwrap_or_else(|| meta.data_vars.first().cloned().unwrap_or_else(|| "".istr()));
     result.insert("primary_var".to_string(), pvar.to_string());
-    
+
     let Some(primary_meta) = meta.arrays.get(&pvar) else {
-        result.insert("error".to_string(), format!("Primary variable '{}' not found", pvar));
+        result.insert(
+            "error".to_string(),
+            format!("Primary variable '{}' not found", pvar),
+        );
         return Ok(result);
     };
-    
+
     let dims: Vec<IStr> = if !primary_meta.dims.is_empty() {
         primary_meta.dims.iter().cloned().collect()
     } else {
         meta.dims.clone()
     };
     result.insert("primary_dims".to_string(), format!("{:?}", dims));
-    result.insert("primary_shape".to_string(), format!("{:?}", primary_meta.shape));
-    
+    result.insert(
+        "primary_shape".to_string(),
+        format!("{:?}", primary_meta.shape),
+    );
+
     // Compile to lazy selection (no I/O)
-    let lazy_selection = match compile_expr_to_lazy_selection(&expr, &meta, pvar.as_ref()) {
+    let lazy_selection = match compile_expr_to_lazy_selection(&expr, &meta) {
         Ok(sel) => sel,
         Err(e) => {
-            result.insert("error".to_string(), format!("Failed to compile expression: {:?}", e));
+            result.insert(
+                "error".to_string(),
+                format!("Failed to compile expression: {:?}", e),
+            );
             return Ok(result);
         }
     };
-    result.insert("lazy_selection".to_string(), format!("{:#?}", lazy_selection));
+    result.insert(
+        "lazy_selection".to_string(),
+        format!("{:#?}", lazy_selection),
+    );
     result.insert("lazy_compilation_success".to_string(), "true".to_string());
-    
+
     // Now test async resolution
     result.insert("starting_async_resolution".to_string(), "true".to_string());
-    
+
     let start = std::time::Instant::now();
-    let resolve_result = resolve_lazy_selection_async(
-        &lazy_selection,
-        &meta,
-        opened_async.store.clone(),
-        pvar.as_ref(),
-    ).await;
+    let resolve_result =
+        resolve_lazy_selection_async(&lazy_selection, &meta, opened_async.store.clone()).await;
     let elapsed = start.elapsed();
-    result.insert("async_resolution_time_ms".to_string(), format!("{}", elapsed.as_millis()));
-    
+    result.insert(
+        "async_resolution_time_ms".to_string(),
+        format!("{}", elapsed.as_millis()),
+    );
+
     match resolve_result {
         Ok((selection, stats)) => {
             result.insert("async_resolution_success".to_string(), "true".to_string());
             result.insert("coord_reads".to_string(), format!("{}", stats.coord_reads));
-            
+
             let selection_summary = match &selection {
                 DatasetSelection::NoSelectionMade => "NoSelectionMade".to_string(),
                 DatasetSelection::Empty => "Empty".to_string(),
-                DatasetSelection::Selection(sel) => format!("Selection with {} variables", sel.len()),
+                DatasetSelection::Selection(sel) => {
+                    format!("Selection with {} variables", sel.len())
+                }
             };
             result.insert("selection_summary".to_string(), selection_summary);
-            result.insert("materialized_selection".to_string(), format!("{:#?}", selection));
+            result.insert(
+                "materialized_selection".to_string(),
+                format!("{:#?}", selection),
+            );
         }
         Err(e) => {
             result.insert("async_resolution_success".to_string(), "false".to_string());
             result.insert("async_resolution_error".to_string(), format!("{:?}", e));
         }
     }
-    
+
     // Also test the full chunk plan compilation
     result.insert("starting_chunk_plan".to_string(), "true".to_string());
-    
+
     let start = std::time::Instant::now();
-    let plan_result = compile_expr_to_chunk_plan_async(
-        &expr,
-        &meta,
-        opened_async.store.clone(),
-        pvar.as_ref(),
-    ).await;
+    let plan_result =
+        compile_expr_to_grouped_chunk_plan_async(&expr, &meta, opened_async.store.clone()).await;
     let elapsed = start.elapsed();
-    result.insert("chunk_plan_time_ms".to_string(), format!("{}", elapsed.as_millis()));
-    
+    result.insert(
+        "chunk_plan_time_ms".to_string(),
+        format!("{}", elapsed.as_millis()),
+    );
+
     match plan_result {
         Ok((plan, stats)) => {
             result.insert("chunk_plan_success".to_string(), "true".to_string());
-            result.insert("chunk_plan_coord_reads".to_string(), format!("{}", stats.coord_reads));
-            
-            let indices: Vec<Vec<u64>> = plan.into_index_iter().collect();
-            result.insert("num_chunks".to_string(), format!("{}", indices.len()));
-            if indices.len() <= 10 {
-                result.insert("chunk_indices".to_string(), format!("{:?}", indices));
-            } else {
-                result.insert("chunk_indices_sample".to_string(), format!("{:?}...", &indices[..10]));
+            result.insert(
+                "chunk_plan_coord_reads".to_string(),
+                format!("{}", stats.coord_reads),
+            );
+
+            // Report grouped chunk plan summary
+            result.insert("num_grids".to_string(), format!("{}", plan.num_grids()));
+            result.insert("num_vars".to_string(), format!("{}", plan.num_vars()));
+            result.insert("total_chunks".to_string(), format!("{}", plan.total_chunks()));
+
+            // List variables per grid signature
+            let mut grid_info: Vec<String> = Vec::new();
+            for (sig, vars, subsets) in plan.iter_grids() {
+                let var_names: Vec<&str> = vars.iter().map(|v| v.as_ref()).collect();
+                let num_subsets = subsets.subsets_iter().count();
+                grid_info.push(format!(
+                    "dims={:?}, vars={:?}, subsets={}",
+                    sig.dims(),
+                    var_names,
+                    num_subsets
+                ));
             }
+            result.insert("grids".to_string(), format!("{:?}", grid_info));
         }
         Err(e) => {
             result.insert("chunk_plan_success".to_string(), "false".to_string());
             result.insert("chunk_plan_error".to_string(), format!("{:?}", e));
         }
     }
-    
+
     Ok(result)
 }
 
@@ -349,13 +377,15 @@ pub(crate) fn _debug_coord_array(
     let num_samples = num_samples.unwrap_or(5);
 
     // Open the store and load metadata
-    let (opened, meta) = match open_and_load_dataset_meta(&zarr_url) {
+    let (opened, zarr_meta) = match open_and_load_zarr_meta(&zarr_url) {
         Ok(x) => x,
         Err(e) => {
             result.set_item("error", format!("Failed to open store: {}", e))?;
             return Ok(result.into());
         }
     };
+    // Convert to ZarrDatasetMeta - preserves hierarchical paths from path_to_array
+    let meta = ZarrDatasetMeta::from(&zarr_meta);
 
     let dim_key = dim_name.as_str().istr();
     let Some(arr_meta) = meta.arrays.get(&dim_key) else {
@@ -444,7 +474,13 @@ pub(crate) fn _debug_coord_array(
             for &idx in &sample_indices {
                 let start = [idx as u64];
                 let shape = [1u64];
-                match arr.retrieve_array_subset_ndarray::<i64>(&zarrs::array_subset::ArraySubset::new_with_start_shape(start.to_vec(), shape.to_vec()).unwrap()) {
+                match arr.retrieve_array_subset_ndarray::<i64>(
+                    &zarrs::array_subset::ArraySubset::new_with_start_shape(
+                        start.to_vec(),
+                        shape.to_vec(),
+                    )
+                    .unwrap(),
+                ) {
                     Ok(data) => {
                         if let Some(&v) = data.as_slice().and_then(|s| s.first()) {
                             raw_values.push(v);
@@ -475,7 +511,10 @@ pub(crate) fn _debug_coord_array(
             result.set_item("sample_decoded_values", decoded_values)?;
         }
         _ => {
-            result.set_item("note", format!("Value sampling not implemented for dtype '{}'", dtype_id))?;
+            result.set_item(
+                "note",
+                format!("Value sampling not implemented for dtype '{}'", dtype_id),
+            )?;
         }
     }
 
@@ -498,13 +537,15 @@ pub(crate) fn _debug_literal_conversion(
     let result = PyDict::new(py);
 
     // Open the store and load metadata
-    let (_, meta) = match open_and_load_dataset_meta(&zarr_url) {
+    let (_, zarr_meta) = match open_and_load_zarr_meta(&zarr_url) {
         Ok(x) => x,
         Err(e) => {
             result.set_item("error", format!("Failed to open store: {}", e))?;
             return Ok(result.into());
         }
     };
+    // Convert to ZarrDatasetMeta - preserves hierarchical paths from path_to_array
+    let meta = ZarrDatasetMeta::from(&zarr_meta);
 
     let dim_key = dim_name.as_str().istr();
     let time_encoding = meta
@@ -539,8 +580,7 @@ pub(crate) fn _debug_literal_conversion(
             result.set_item("extracted_expr", format!("{:#?}", expr))?;
 
             // Try to compile it to a lazy selection
-            let primary_var = meta.data_vars.first().map(|s| s.as_ref()).unwrap_or("");
-            match compile_expr_to_lazy_selection(&expr, &meta, primary_var) {
+            match compile_expr_to_lazy_selection(&expr, &meta) {
                 Ok(sel) => {
                     result.set_item("lazy_selection", format!("{:#?}", sel))?;
                     result.set_item("compilation_success", true)?;

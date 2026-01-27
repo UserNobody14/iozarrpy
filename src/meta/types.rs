@@ -447,11 +447,34 @@ impl From<ZarrDatasetMeta> for ZarrMeta {
 }
 
 impl From<&ZarrMeta> for ZarrDatasetMeta {
-    /// Convert a ZarrMeta back to flat ZarrDatasetMeta (loses hierarchy info)
+    /// Convert a ZarrMeta back to flat ZarrDatasetMeta.
+    /// 
+    /// This preserves hierarchical paths in `arrays` by including:
+    /// - Full path with leading slash (e.g., `/model_a/temperature`)
+    /// - Path without leading slash (e.g., `model_a/temperature`)
+    /// - Leaf name for root arrays (e.g., `temperature`)
+    ///
+    /// `data_vars` contains only root-level variables for schema compatibility.
+    /// Use `arrays` to look up variables by path.
     fn from(meta: &ZarrMeta) -> Self {
+        let mut arrays = BTreeMap::new();
+        
+        // Add all paths from path_to_array
+        for (path, arr) in &meta.path_to_array {
+            let path_str: &str = path.as_ref();
+            arrays.insert(path.clone(), arr.clone());
+            
+            // Also add without leading slash for user convenience
+            if path_str.starts_with('/') {
+                let no_slash = path_str.trim_start_matches('/').istr();
+                arrays.entry(no_slash).or_insert_with(|| arr.clone());
+            }
+        }
+        
         ZarrDatasetMeta {
-            arrays: meta.path_to_array.clone(),
+            arrays,
             dims: meta.dim_analysis.root_dims.clone(),
+            // Keep only root-level data vars for schema compatibility
             data_vars: meta.root.data_vars.clone(),
         }
     }

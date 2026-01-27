@@ -7,7 +7,6 @@
 //! rather than individual scalar values.
 
 use std::collections::BTreeMap;
-use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use super::resolver_traits::{AsyncCoordResolver, HashMapCache, ResolutionCache, ResolutionRequest};

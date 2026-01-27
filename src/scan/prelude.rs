@@ -11,21 +11,18 @@ pub(crate) use zarrs::array::Array;
 pub(crate) use crate::IStr;
 // (moved to `reader::retrieve_*`)
 
-pub(crate) use crate::chunk_plan::{compile_expr_to_chunk_plan_async, ChunkPlan};
+pub(crate) use crate::chunk_plan::GroupedChunkPlan;
 
 // For backward compatibility, also export the sync version
-#[allow(unused_imports)]
-pub(crate) use crate::chunk_plan::compile_expr_to_chunk_plan;
 pub(crate) use crate::reader::{
     checked_chunk_len, compute_strides, compute_var_chunk_info_async, retrieve_1d_subset_async,
     retrieve_chunk_async, ColumnData,
 };
 pub(crate) use crate::meta::{
-    open_and_load_dataset_meta_async, open_and_load_dataset_meta_from_input_async,
-    open_and_load_zarr_meta_async, open_and_load_zarr_meta_from_input_async, ZarrDatasetMeta,
+    open_and_load_zarr_meta_from_input_async, ZarrDatasetMeta,
     ZarrMeta, ZarrNode,
 };
-pub(crate) use crate::store::{open_store, StoreInput};
+pub(crate) use crate::store::StoreInput;
 
 pub(super) const DEFAULT_MAX_CONCURRENCY: usize = 16;
 

@@ -1,14 +1,15 @@
+//! Next-batch iteration logic for ZarrSource.
+//!
+//! This module handles the per-batch iteration for the Polars scan interface.
+//! It reads from multiple chunk grids and joins them on dimension columns.
+
 use polars::prelude::*;
 use pyo3::prelude::*;
 use pyo3_polars::error::PyPolarsErr;
 use pyo3_polars::PyDataFrame;
-use smallvec::SmallVec;
 use zarrs::array::Array;
 
-use crate::reader::{
-    checked_chunk_len, compute_strides, compute_var_chunk_info, retrieve_1d_subset, retrieve_chunk,
-    ColumnData,
-};
+use crate::reader::{compute_strides, retrieve_1d_subset, retrieve_array_subset, ColumnData};
 use crate::{IStr, IntoIStr};
 
 use super::{to_py_err, ZarrSource};
@@ -19,450 +20,436 @@ impl ZarrSource {
             return Ok(None);
         }
 
-        // Open arrays (cheap-ish metadata, but still avoid reopening per element).
-        let primary_path = self.meta.arrays[&self.vars[0]].path.clone();
-        let primary = Array::open(self.store.clone(), primary_path.as_ref()).map_err(to_py_err)?;
-        let array_shape = primary.shape().to_vec();
+        // Handle scalar case (0-dimensional arrays)
+        if self.dims.is_empty() {
+            return self.next_scalar_impl();
+        }
 
-        // Handle scalar arrays as a single “chunk”
-        if primary.dimensionality() == 0 {
-            // For now: scalar => one row
-            if self.n_rows_left == 0 {
+        // Read from all grids and join
+        let df = self.read_joined_batch()?;
+
+        if let Some(df) = df {
+            let n_rows = df.height();
+            self.n_rows_left = self.n_rows_left.saturating_sub(n_rows);
+            Ok(Some(PyDataFrame(df)))
+        } else {
+            self.done = true;
+            Ok(None)
+        }
+    }
+
+    /// Handle scalar (0-dimensional) arrays
+    fn next_scalar_impl(&mut self) -> PyResult<Option<PyDataFrame>> {
+        if self.n_rows_left == 0 {
+            return Ok(None);
+        }
+        self.consume_chunk_budget()?;
+
+        let mut cols: Vec<Column> = Vec::new();
+        for v in &self.vars {
+            if !self.should_emit(v.as_ref()) {
+                continue;
+            }
+            let path = &self.meta.arrays[v].path;
+            let arr = Array::open(self.store.clone(), path.as_ref()).map_err(to_py_err)?;
+            let data = crate::reader::retrieve_chunk(&arr, &[]).map_err(to_py_err)?;
+            cols.push(data.slice(0, 1).into_series(v.as_ref()).into());
+        }
+        let df = DataFrame::new(1, cols).map_err(PyPolarsErr::from)?;
+        self.n_rows_left = self.n_rows_left.saturating_sub(1);
+
+        self.done = true;
+        Ok(Some(PyDataFrame(df)))
+    }
+
+    /// Read a batch from the current grid, including ALL variables with consistent columns.
+    ///
+    /// This is the core method for handling heterogeneous chunk grids:
+    /// 1. Find a grid with pending work to define the coordinate range
+    /// 2. Read ALL variables that share the same dimensions (data for some, reading actual values)
+    /// 3. Variables with different dimensions get null columns
+    fn read_joined_batch(&mut self) -> PyResult<Option<DataFrame>> {
+        // Find the first grid with pending work to define the batch coordinate range
+        let primary_grid_idx = loop {
+            if self.current_grid_idx >= self.grid_states.len() {
                 return Ok(None);
             }
-            self.consume_chunk_budget()?;
 
-            let mut cols: Vec<Column> = Vec::new();
-            for v in &self.vars {
-                if !self.should_emit(v.as_ref()) {
-                    continue;
-                }
-                let path = &self.meta.arrays[v].path;
-                let arr = Array::open(self.store.clone(), path.as_ref()).map_err(to_py_err)?;
-                let data = retrieve_chunk(&arr, &[]).map_err(to_py_err)?;
-                cols.push(data.slice(0, 1).into_series(v.as_ref()).into());
+            let grid_state = &mut self.grid_states[self.current_grid_idx];
+            if grid_state.advance().is_some() {
+                break self.current_grid_idx;
             }
-            let df = DataFrame::new(1, cols).map_err(PyPolarsErr::from)?;
-            self.n_rows_left = self.n_rows_left.saturating_sub(1);
 
-            self.done = true;
-            return Ok(Some(PyDataFrame(df)));
+            // This grid is exhausted, move to next
+            self.current_grid_idx += 1;
+        };
+
+        self.consume_chunk_budget()?;
+
+        // Get the subset from the primary grid (defines coordinate range for this batch)
+        let primary_subset = match &self.grid_states[primary_grid_idx].current_subset {
+            Some(s) => s.clone(),
+            None => return Ok(None),
+        };
+
+        let subset_shape: Vec<u64> = primary_subset.shape().to_vec();
+        let subset_origin: Vec<u64> = primary_subset.start().to_vec();
+        let subset_len: usize = primary_subset.num_elements_usize();
+
+        if subset_len == 0 {
+            self.grid_states[primary_grid_idx].finish_current();
+            return self.read_joined_batch(); // Try next subset
         }
 
-        // Advance to the next candidate chunk (planned from the predicate) as needed.
-        loop {
-            if self.current_chunk_indices.is_none() {
-                if let Some(next_idx) = self.chunk_iter.next() {
-                    self.consume_chunk_budget()?;
-                    self.current_chunk_indices = Some(next_idx);
-                    self.chunk_offset = 0;
-                } else {
-                    self.done = true;
-                    return Ok(None);
-                }
-            }
-            let idx = self.current_chunk_indices.as_ref().unwrap();
-            let chunk_shape_nz = primary.chunk_shape(idx).map_err(to_py_err)?;
-            let chunk_shape: Vec<u64> = chunk_shape_nz.iter().map(|x| x.get()).collect();
-            let chunk_len: usize = checked_chunk_len(&chunk_shape)?;
-            if self.chunk_offset >= chunk_len {
-                self.current_chunk_indices = None;
-                self.chunk_offset = 0;
-                continue;
-            }
-            break;
+        // Calculate batch slice within subset
+        let start = self.grid_states[primary_grid_idx].subset_offset;
+        let max_len = std::cmp::min(self.batch_size, self.n_rows_left);
+        let len = std::cmp::min(subset_len - start, max_len);
+
+        if len == 0 {
+            self.grid_states[primary_grid_idx].finish_current();
+            return self.read_joined_batch(); // Try next subset
         }
 
-        // We may need to skip “empty” batches after trimming out-of-bounds rows (e.g. sharded edges).
-        loop {
-            let idx = self.current_chunk_indices.as_ref().unwrap();
-            let chunk_shape_nz = primary.chunk_shape(idx).map_err(to_py_err)?;
-            let chunk_shape: Vec<u64> = chunk_shape_nz.iter().map(|x| x.get()).collect();
-            let chunk_len: usize = chunk_shape.iter().product::<u64>() as usize;
+        let strides = compute_strides(&subset_shape);
 
-            let start = self.chunk_offset;
-            let max_len = std::cmp::min(self.batch_size, self.n_rows_left);
-            let len = std::cmp::min(chunk_len - start, max_len);
+        // Read a full batch with ALL columns (consistent schema)
+        let result = self.read_full_batch(
+            primary_grid_idx,
+            &primary_subset,
+            &subset_shape,
+            &subset_origin,
+            &strides,
+            start,
+            len,
+        )?;
 
-            // Origin for this chunk for dims/coords.
-            let origin = primary
-                .chunk_grid()
-                .chunk_origin(idx)
-                .map_err(to_py_err)?
-                .unwrap_or_else(|| vec![0; chunk_shape.len()]);
+        // Update the primary grid's offset
+        self.grid_states[primary_grid_idx].subset_offset += len;
+        if self.grid_states[primary_grid_idx].subset_offset >= subset_len {
+            self.grid_states[primary_grid_idx].finish_current();
+        }
 
-            let strides = compute_strides(&chunk_shape);
+        // Build struct columns for hierarchical stores
+        let result = if self.is_hierarchical {
+            self.add_struct_columns_to_df(
+                result,
+                &primary_subset,
+                &subset_shape,
+                &subset_origin,
+                &strides,
+                start,
+                len,
+            )?
+        } else {
+            result
+        };
 
-            // Identify in-bounds rows (important for sharded stores where shards extend beyond array shape).
-            let mut keep: Vec<usize> = Vec::with_capacity(len);
-            for r in 0..len {
-                let row = start + r;
-                let mut ok = true;
-                for d in 0..chunk_shape.len() {
-                    let local = (row as u64 / strides[d]) % chunk_shape[d];
-                    let global = origin[d] + local;
-                    if global >= array_shape[d] {
-                        ok = false;
-                        break;
-                    }
-                }
-                if ok {
-                    keep.push(r);
-                }
+        Ok(Some(result))
+    }
+
+    /// Read a batch for a specific grid, producing a DataFrame with dims + this grid's variables.
+    /// This is used when reading partial DataFrames to be joined.
+    fn read_single_grid_batch(
+        &self,
+        grid_idx: usize,
+        subset: &zarrs::array_subset::ArraySubset,
+        start: usize,
+        len: usize,
+        dim_cols: &[Column],
+    ) -> PyResult<DataFrame> {
+        let grid_state = &self.grid_states[grid_idx];
+        let dim_names: std::collections::HashSet<&IStr> = self.dims.iter().collect();
+
+        let mut cols: Vec<Column> = dim_cols.to_vec();
+
+        // Read this grid's variables
+        for var_name in &grid_state.variables {
+            if dim_names.contains(var_name) {
+                continue; // Skip dimension coordinates
             }
-
-            // If everything in this slice is out-of-bounds, advance within the chunk and continue.
-            if keep.is_empty() {
-                self.chunk_offset += len;
-                if self.chunk_offset >= chunk_len {
-                    self.chunk_offset = chunk_len;
-                }
-                if self.chunk_offset >= chunk_len {
-                    self.chunk_offset = 0;
-                    self.current_chunk_indices = None;
-                }
+            if !self.should_emit(var_name.as_ref()) {
                 continue;
             }
 
-            // Preload coordinate slices for this chunk range (per dim).
-            let mut coord_slices: Vec<Option<ColumnData>> = Vec::with_capacity(self.dims.len());
-            for (d, dim_name) in self.dims.iter().enumerate() {
-                if let Some(coord_meta) = self.meta.arrays.get(dim_name) {
-                    let coord_arr =
-                        Array::open(self.store.clone(), coord_meta.path.as_ref()).map_err(to_py_err)?;
-                    let dim_start = origin[d];
-                    let dim_len = chunk_shape[d];
-                    let coord = retrieve_1d_subset(&coord_arr, dim_start, dim_len).map_err(|e| {
-                        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                            "error reading coord dim={dim_name} path={} start={dim_start} len={dim_len}: {e}",
-                            coord_meta.path
-                        ))
-                    })?;
-                    coord_slices.push(Some(coord));
-                } else {
-                    coord_slices.push(None);
-                }
+            let var_meta = match self.meta.arrays.get(var_name) {
+                Some(m) => m,
+                None => continue,
+            };
+
+            let arr =
+                Array::open(self.store.clone(), var_meta.path.as_ref()).map_err(to_py_err)?;
+
+            // Read the subset directly
+            let data = retrieve_array_subset(&arr, subset).map_err(to_py_err)?;
+
+            // Slice for batching
+            let sliced = data.slice(start, len);
+            cols.push(sliced.into_series(var_name.as_ref()).into());
+        }
+
+        DataFrame::new(len, cols).map_err(|e| {
+            PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string())
+        })
+    }
+
+    /// Read a batch that includes ALL requested variables (with consistent column order).
+    /// Variables not in the current grid are read from their respective grids using the same
+    /// coordinate range.
+    fn read_full_batch(
+        &self,
+        primary_grid_idx: usize,
+        subset: &zarrs::array_subset::ArraySubset,
+        subset_shape: &[u64],
+        subset_origin: &[u64],
+        strides: &[u64],
+        start: usize,
+        len: usize,
+    ) -> PyResult<DataFrame> {
+        let dim_names: std::collections::HashSet<&IStr> = self.dims.iter().collect();
+        let primary_dims = self.grid_states[primary_grid_idx].signature.dims();
+
+        // Build dimension coordinate columns
+        let mut cols: Vec<Column> = Vec::new();
+
+        for (d, dim_name) in self.dims.iter().enumerate() {
+            if !self.should_emit(dim_name.as_ref()) {
+                continue;
             }
 
-            // Load chunk data for each requested var once.
-            // Store the variable metadata along with the data for proper indexing.
-            // For variables with different chunk sizes, we also store the offset within the var chunk.
-            let mut var_chunks: Vec<(IStr, ColumnData, SmallVec<[IStr; 4]>, Vec<u64>, Vec<u64>)> =
-                Vec::new();
-            for v in &self.vars {
-                if !self.should_emit(v.as_ref()) {
-                    continue;
-                }
-                let var_meta = &self.meta.arrays[v];
-                let path = &var_meta.path;
-                let arr = Array::open(self.store.clone(), path.as_ref()).map_err(to_py_err)?;
+            let dim_start = subset_origin.get(d).copied().unwrap_or(0);
+            let dim_len = subset_shape.get(d).copied().unwrap_or(1);
 
-                // For variables with different dimensionality or chunk sizes,
-                // compute the correct chunk indices and offsets.
-                let (var_chunk_indices, var_offsets) = if var_meta.dims.len() == self.dims.len()
-                    && var_meta.dims.iter().zip(self.dims.iter()).all(|(a, b)| a == b)
-                {
-                    // Same dims - use primary chunk indices directly
-                    (idx.clone(), vec![0; self.dims.len()])
-                } else {
-                    // Different dims or chunk sizes - compute proper mapping
-                    compute_var_chunk_info(
-                        idx,
-                        &chunk_shape,
-                        &self.dims,
-                        &var_meta.dims,
-                        &arr,
-                    )
-                    .map_err(to_py_err)?
-                };
+            let coord_data = if let Some(coord_meta) = self.meta.arrays.get(dim_name) {
+                let coord_arr = Array::open(self.store.clone(), coord_meta.path.as_ref())
+                    .map_err(to_py_err)?;
+                Some(retrieve_1d_subset(&coord_arr, dim_start, dim_len).map_err(to_py_err)?)
+            } else {
+                None
+            };
 
-                // Get the chunk shape for this variable's chunk
-                let var_chunk_shape: Vec<u64> = if var_chunk_indices.is_empty() {
-                    vec![] // scalar
-                } else {
-                    arr.chunk_shape(&var_chunk_indices)
-                        .map_err(to_py_err)?
-                        .iter()
-                        .map(|x| x.get())
-                        .collect()
-                };
+            let time_encoding = self
+                .meta
+                .arrays
+                .get(dim_name)
+                .and_then(|m| m.time_encoding.as_ref());
 
-                // Prevent OOM-abort on absurdly large chunks.
-                if !var_chunk_shape.is_empty() {
-                    let _ = checked_chunk_len(&var_chunk_shape)?;
-                }
-                let data = retrieve_chunk(&arr, &var_chunk_indices).map_err(|e| {
-                    PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                        "error reading var={v} path={path} chunk_indices={var_chunk_indices:?} chunk_shape={var_chunk_shape:?} offsets={var_offsets:?}: {e}"
-                    ))
-                })?;
-                var_chunks.push((
-                    v.clone(),
-                    data,
-                    var_meta.dims.clone(),
-                    var_chunk_shape,
-                    var_offsets,
-                ));
+            let col = build_coord_column(
+                dim_name,
+                d,
+                strides,
+                subset_shape,
+                subset_origin,
+                start,
+                len,
+                coord_data.as_ref(),
+                time_encoding,
+            )?;
+            cols.push(col);
+        }
+
+        // Build a map of which grid each variable belongs to
+        let mut var_to_grid: std::collections::HashMap<&IStr, usize> = std::collections::HashMap::new();
+        for (idx, grid_state) in self.grid_states.iter().enumerate() {
+            for var in &grid_state.variables {
+                var_to_grid.insert(var, idx);
+            }
+        }
+
+        // Add variable columns in self.vars order (consistent across batches)
+        for var_name in &self.vars {
+            if dim_names.contains(var_name) {
+                continue; // Skip dimension coordinates
+            }
+            if !self.should_emit(var_name.as_ref()) {
+                continue;
             }
 
-            // Build output columns.
-            let mut cols: Vec<Column> = Vec::new();
+            let var_meta = match self.meta.arrays.get(var_name) {
+                Some(m) => m,
+                None => continue,
+            };
 
-            // Dim/coord columns.
-            for (d, dim_name) in self.dims.iter().enumerate() {
-                if !self.should_emit(dim_name.as_ref()) {
-                    continue;
-                }
+            // Check if this variable's grid has the same dimensions as the primary grid
+            let var_grid_idx = var_to_grid.get(var_name);
+            let var_dims = var_grid_idx.map(|&idx| self.grid_states[idx].signature.dims().to_vec());
+            let same_dims = var_dims.map_or(false, |d| d == primary_dims);
 
-                // Check for time encoding on this coordinate
-                let time_encoding = self
-                    .meta
-                    .arrays
-                    .get(dim_name)
-                    .and_then(|m| m.time_encoding.as_ref());
+            if same_dims {
+                // Variable shares dims with primary grid - read actual data
+                let arr =
+                    Array::open(self.store.clone(), var_meta.path.as_ref()).map_err(to_py_err)?;
+                let data = retrieve_array_subset(&arr, subset).map_err(to_py_err)?;
+                let sliced = data.slice(start, len);
+                cols.push(sliced.into_series(var_name.as_ref()).into());
+            } else {
+                // Variable has different dims - add null column with correct dtype
+                let var_name_str: &str = var_name.as_ref();
+                let dtype = var_meta.polars_dtype.clone();
+                let null_series = Series::new_null(var_name_str.into(), len)
+                    .cast(&dtype)
+                    .unwrap_or_else(|_| Series::new_null(var_name_str.into(), len));
+                cols.push(null_series.into());
+            }
+        }
 
-                if let Some(te) = time_encoding {
-                    // Build datetime or duration column
-                    let mut out_i64: Vec<i64> = Vec::with_capacity(keep.len());
-                    for &r in &keep {
-                        let row = start + r;
-                        let local = (row as u64 / strides[d]) % chunk_shape[d];
-                        let raw_value = if let Some(coord) = &coord_slices[d] {
-                            coord.get_i64(local as usize)
-                                .unwrap_or((origin[d] + local) as i64)
-                        } else {
-                            (origin[d] + local) as i64
-                        };
-                        // Convert to nanoseconds
-                        let ns = if te.is_duration {
-                            raw_value.saturating_mul(te.unit_ns)
-                        } else {
-                            raw_value
-                                .saturating_mul(te.unit_ns)
-                                .saturating_add(te.epoch_ns)
-                        };
-                        out_i64.push(ns);
-                    }
+        DataFrame::new(len, cols).map_err(|e| {
+            PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string())
+        })
+    }
 
-                    let dim_name_str: &str = dim_name.as_ref();
-                    let series = if te.is_duration {
-                        Series::new(dim_name_str.into(), &out_i64)
-                            .cast(&polars::prelude::DataType::Duration(
-                                polars::prelude::TimeUnit::Nanoseconds,
-                            ))
-                            .unwrap_or_else(|_| Series::new(dim_name_str.into(), out_i64))
+    /// Add struct columns for hierarchical child groups.
+    fn add_struct_columns_to_df(
+        &self,
+        mut df: DataFrame,
+        subset: &zarrs::array_subset::ArraySubset,
+        _subset_shape: &[u64],
+        _subset_origin: &[u64],
+        _strides: &[u64],
+        start: usize,
+        len: usize,
+    ) -> PyResult<DataFrame> {
+        let Some(ref unified) = self.unified_meta else {
+            return Ok(df);
+        };
+
+        for (child_name, child_node) in &unified.root.children {
+            let child_name_str: &str = child_name.as_ref();
+
+            let should_emit = self
+                .with_columns
+                .as_ref()
+                .map_or(true, |cols| cols.contains(&child_name_str.istr()));
+            if !should_emit {
+                continue;
+            }
+
+            let mut field_series: Vec<Series> = Vec::new();
+
+            for var_name in &child_node.data_vars {
+                let var_name_str: &str = var_name.as_ref();
+
+                let child_path_str: &str = child_node.path.as_ref();
+                let full_path = format!(
+                    "{}{}",
+                    child_path_str,
+                    if child_path_str.ends_with('/') || var_name_str.starts_with('/') {
+                        var_name_str.to_string()
                     } else {
-                        Series::new(dim_name_str.into(), &out_i64)
-                            .cast(&polars::prelude::DataType::Datetime(
-                                polars::prelude::TimeUnit::Nanoseconds,
-                                None,
-                            ))
-                            .unwrap_or_else(|_| Series::new(dim_name_str.into(), out_i64))
-                    };
-                    cols.push(series.into());
-                } else if let Some(coord) = &coord_slices[d]
-                    && coord.is_float()
-                {
-                    let mut out_f64: Vec<f64> = Vec::with_capacity(keep.len());
-                    for &r in &keep {
-                        let row = start + r;
-                        let local = (row as u64 / strides[d]) % chunk_shape[d];
-                        out_f64.push(coord.get_f64(local as usize).unwrap());
+                        format!("/{}", var_name_str)
                     }
-                    cols.push(Series::new(<crate::IStr as AsRef<str>>::as_ref(dim_name).into(), out_f64).into());
+                );
+
+                if let Some(arr_meta) = unified.path_to_array.get(&full_path.istr()) {
+                    let arr = Array::open(self.store.clone(), arr_meta.path.as_ref())
+                        .map_err(to_py_err)?;
+
+                    let data = retrieve_array_subset(&arr, subset).map_err(to_py_err)?;
+                    let series = data.slice(start, len).into_series(var_name_str);
+                    field_series.push(series);
                 } else {
-                    let mut out_i64: Vec<i64> = Vec::with_capacity(keep.len());
-                    for &r in &keep {
-                        let row = start + r;
-                        let local = (row as u64 / strides[d]) % chunk_shape[d];
-                        if let Some(coord) = &coord_slices[d] {
-                            if let Some(v) = coord.get_i64(local as usize) {
-                                out_i64.push(v);
-                            } else {
-                                out_i64.push((origin[d] + local) as i64);
-                            }
-                        } else {
-                            out_i64.push((origin[d] + local) as i64);
-                        }
-                    }
-                    cols.push(Series::new(<crate::IStr as AsRef<str>>::as_ref(dim_name).into(), out_i64).into());
+                    let null_series = Series::new_null(var_name_str.into(), len);
+                    field_series.push(null_series);
                 }
             }
 
-            // Variable columns.
-            // For variables with the same dimensionality as the primary, we can slice directly.
-            // For variables with fewer dimensions or different chunk sizes, we need to compute
-            // the correct index by projecting from the primary iteration space.
-            for (name, data, var_dims, var_chunk_shape, var_offsets) in var_chunks {
-                let var_dims_vec: Vec<IStr> = var_dims.iter().cloned().collect();
-                if var_dims_vec.len() == self.dims.len()
-                    && var_dims_vec == self.dims
-                    && var_offsets.iter().all(|&o| o == 0)
-                {
-                    // Same dimensionality and order with zero offsets - direct slice
-                    let sliced = data.slice(start, len);
-                    cols.push(sliced.take_indices(&keep).into_series(name.as_ref()).into());
-                } else {
-                    // Different dimensionality or non-zero offsets - need to map indices
-                    // Build a mapping from primary dim index to variable dim index
-                    let dim_mapping: Vec<Option<usize>> = self
-                        .dims
-                        .iter()
-                        .map(|pd| var_dims.iter().position(|vd| vd == pd))
-                        .collect();
-
-                    let var_strides = compute_strides(&var_chunk_shape);
-
-                    // For each row, compute the index in the variable's chunk
-                    let indices: Vec<usize> = keep
-                        .iter()
-                        .map(|&r| {
-                            let row = start + r;
-                            let mut var_idx: u64 = 0;
-                            for (primary_d, maybe_var_d) in dim_mapping.iter().enumerate() {
-                                if let Some(var_d) = *maybe_var_d {
-                                    // Get local position in primary dimension
-                                    let local =
-                                        (row as u64 / strides[primary_d]) % chunk_shape[primary_d];
-                                    // Add the offset within the variable's chunk and contribution to index
-                                    let local_with_offset = local + var_offsets[var_d];
-                                    var_idx += local_with_offset * var_strides[var_d];
-                                }
-                            }
-                            var_idx as usize
-                        })
-                        .collect();
-
-                    cols.push(data.take_indices(&indices).into_series(name.as_ref()).into());
-                }
+            if !field_series.is_empty() {
+                let struct_chunked =
+                    StructChunked::from_series(child_name_str.into(), len, field_series.iter())
+                        .map_err(|e| {
+                            PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string())
+                        })?;
+                df = df
+                    .hstack(&[struct_chunked.into_series().into()])
+                    .map_err(|e| {
+                        PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string())
+                    })?;
             }
-
-            // Build struct columns for child groups (hierarchical stores only)
-            if self.is_hierarchical {
-                if let Some(ref unified) = self.unified_meta {
-                    for (child_name, child_node) in &unified.root.children {
-                        let child_name_str: &str = child_name.as_ref();
-                        
-                        // Check if this group should be emitted
-                        let should_emit = self.with_columns.as_ref().map_or(true, |cols| {
-                            let child_name_istr: &str = child_name.as_ref();
-                            cols.contains(&child_name_istr.istr())
-                        });
-                        if !should_emit {
-                            continue;
-                        }
-
-                        let mut field_series: Vec<Series> = Vec::new();
-
-                        // Load each data variable in this child group
-                        for var_name in &child_node.data_vars {
-                            let var_name_str: &str = var_name.as_ref();
-                            
-                            // Build the path to find this variable
-                            let child_path_str: &str = child_node.path.as_ref();
-                            let full_path = format!(
-                                "{}{}",
-                                child_path_str,
-                                if child_path_str.ends_with('/') || var_name_str.starts_with('/') {
-                                    var_name_str.to_string()
-                                } else {
-                                    format!("/{}", var_name_str)
-                                }
-                            );
-
-                            // Try to find and load the array
-                            if let Some(arr_meta) = unified.path_to_array.get(&full_path.istr()) {
-                                let arr = Array::open(self.store.clone(), arr_meta.path.as_ref())
-                                    .map_err(to_py_err)?;
-
-                                // Compute chunk indices for this variable
-                                let var_dims: Vec<IStr> = arr_meta.dims.iter().cloned().collect();
-                                let (var_chunk_indices, var_offsets) = if var_dims == self.dims {
-                                    (idx.clone(), vec![0; self.dims.len()])
-                                } else {
-                                    compute_var_chunk_info(
-                                        idx,
-                                        &chunk_shape,
-                                        &self.dims,
-                                        &var_dims,
-                                        &arr,
-                                    )
-                                    .map_err(to_py_err)?
-                                };
-
-                                let var_chunk_shape: Vec<u64> = if var_chunk_indices.is_empty() {
-                                    vec![]
-                                } else {
-                                    arr.chunk_shape(&var_chunk_indices)
-                                        .map_err(to_py_err)?
-                                        .iter()
-                                        .map(|x| x.get())
-                                        .collect()
-                                };
-
-                                let data = retrieve_chunk(&arr, &var_chunk_indices).map_err(to_py_err)?;
-
-                                // Build series with broadcasting if needed
-                                let series = if var_dims == self.dims && var_offsets.iter().all(|&o| o == 0) {
-                                    data.slice(start, len).take_indices(&keep).into_series(var_name_str)
-                                } else {
-                                    let dim_mapping: Vec<Option<usize>> = self
-                                        .dims
-                                        .iter()
-                                        .map(|pd| var_dims.iter().position(|vd| vd == pd))
-                                        .collect();
-                                    let var_strides = compute_strides(&var_chunk_shape);
-
-                                    let indices: Vec<usize> = keep
-                                        .iter()
-                                        .map(|&r| {
-                                            let row = start + r;
-                                            let mut var_idx: u64 = 0;
-                                            for (primary_d, maybe_var_d) in dim_mapping.iter().enumerate() {
-                                                if let Some(var_d) = *maybe_var_d {
-                                                    let local = (row as u64 / strides[primary_d]) % chunk_shape[primary_d];
-                                                    let local_with_offset = local + var_offsets.get(var_d).copied().unwrap_or(0);
-                                                    if var_d < var_strides.len() {
-                                                        var_idx += local_with_offset * var_strides[var_d];
-                                                    }
-                                                }
-                                            }
-                                            var_idx as usize
-                                        })
-                                        .collect();
-
-                                    data.take_indices(&indices).into_series(var_name_str)
-                                };
-
-                                field_series.push(series);
-                            } else {
-                                // Variable not found - create null series
-                                let null_series = Series::new_null(var_name_str.into(), keep.len());
-                                field_series.push(null_series);
-                            }
-                        }
-
-                        // Create struct column from field series
-                        if !field_series.is_empty() {
-                            let struct_chunked = StructChunked::from_series(
-                                child_name_str.into(),
-                                keep.len(),  // Row length, not field count
-                                field_series.iter(),
-                            )
-                            .map_err(|e| {
-                                PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string())
-                            })?;
-                            cols.push(struct_chunked.into_series().into());
-                        }
-                    }
-                }
-            }
-
-            let df = DataFrame::new(keep.len(), cols).map_err(PyPolarsErr::from)?;
-            self.chunk_offset += len;
-            self.n_rows_left = self.n_rows_left.saturating_sub(keep.len());
-            return Ok(Some(PyDataFrame(df)));
         }
+
+        Ok(df)
     }
 }
 
+/// Build a coordinate column for a dimension
+fn build_coord_column(
+    dim_name: &IStr,
+    dim_idx: usize,
+    strides: &[u64],
+    subset_shape: &[u64],
+    subset_origin: &[u64],
+    start: usize,
+    len: usize,
+    coord_data: Option<&ColumnData>,
+    time_encoding: Option<&crate::meta::TimeEncoding>,
+) -> PyResult<Column> {
+    let dim_name_str: &str = dim_name.as_ref();
+    let dim_size = subset_shape.get(dim_idx).copied().unwrap_or(1);
+    let dim_origin = subset_origin.get(dim_idx).copied().unwrap_or(0);
+    let stride = strides.get(dim_idx).copied().unwrap_or(1);
+
+    if let Some(te) = time_encoding {
+        // Build datetime or duration column
+        let mut out_i64: Vec<i64> = Vec::with_capacity(len);
+        for i in 0..len {
+            let row = start + i;
+            let local = (row as u64 / stride) % dim_size;
+            let raw_value = if let Some(coord) = coord_data {
+                coord
+                    .get_i64(local as usize)
+                    .unwrap_or((dim_origin + local) as i64)
+            } else {
+                (dim_origin + local) as i64
+            };
+            let ns = if te.is_duration {
+                raw_value.saturating_mul(te.unit_ns)
+            } else {
+                raw_value
+                    .saturating_mul(te.unit_ns)
+                    .saturating_add(te.epoch_ns)
+            };
+            out_i64.push(ns);
+        }
+
+        let series = if te.is_duration {
+            Series::new(dim_name_str.into(), &out_i64)
+                .cast(&DataType::Duration(TimeUnit::Nanoseconds))
+                .unwrap_or_else(|_| Series::new(dim_name_str.into(), out_i64))
+        } else {
+            Series::new(dim_name_str.into(), &out_i64)
+                .cast(&DataType::Datetime(TimeUnit::Nanoseconds, None))
+                .unwrap_or_else(|_| Series::new(dim_name_str.into(), out_i64))
+        };
+        Ok(series.into())
+    } else if let Some(coord) = coord_data {
+        if coord.is_float() {
+            let mut out_f64: Vec<f64> = Vec::with_capacity(len);
+            for i in 0..len {
+                let row = start + i;
+                let local = (row as u64 / stride) % dim_size;
+                out_f64.push(coord.get_f64(local as usize).unwrap_or(0.0));
+            }
+            Ok(Series::new(dim_name_str.into(), out_f64).into())
+        } else {
+            let mut out_i64: Vec<i64> = Vec::with_capacity(len);
+            for i in 0..len {
+                let row = start + i;
+                let local = (row as u64 / stride) % dim_size;
+                let val = coord
+                    .get_i64(local as usize)
+                    .unwrap_or((dim_origin + local) as i64);
+                out_i64.push(val);
+            }
+            Ok(Series::new(dim_name_str.into(), out_i64).into())
+        }
+    } else {
+        // No coordinate array - use index values
+        let mut out_i64: Vec<i64> = Vec::with_capacity(len);
+        for i in 0..len {
+            let row = start + i;
+            let local = (row as u64 / stride) % dim_size;
+            out_i64.push((dim_origin + local) as i64);
+        }
+        Ok(Series::new(dim_name_str.into(), out_i64).into())
+    }
+}

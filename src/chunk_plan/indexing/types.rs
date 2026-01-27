@@ -11,45 +11,80 @@ pub(crate) struct ChunkId {
     pub(crate) shape: Vec<u64>,
 }
 
-/// Dimension signature - ordered list of dimension names for grouping.
+/// Chunk grid signature - dimensions + chunk shape for grouping.
 ///
-/// Variables with the same dimension signature can share a single selection object.
+/// Variables with the same chunk grid signature can share chunk iteration.
+/// This extends the old DimSignature by also including chunk shape,
+/// so variables with same dims but different chunking are handled separately.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct DimSignature(pub SmallVec<[IStr; 4]>);
+pub struct ChunkGridSignature {
+    /// Dimension names (ordered)
+    dims: SmallVec<[IStr; 4]>,
+    /// Chunk shape per dimension (determines grid layout)
+    chunk_shape: SmallVec<[u64; 4]>,
+}
 
-impl DimSignature {
-    /// Create a new dimension signature from dimension names.
-    pub fn new(dims: impl Into<SmallVec<[IStr; 4]>>) -> Self {
-        Self(dims.into())
+impl ChunkGridSignature {
+    /// Create a new chunk grid signature from dimension names and chunk shape.
+    pub fn new(dims: impl Into<SmallVec<[IStr; 4]>>, chunk_shape: impl Into<SmallVec<[u64; 4]>>) -> Self {
+        Self {
+            dims: dims.into(),
+            chunk_shape: chunk_shape.into(),
+        }
+    }
+
+    /// Create a signature from dims only (with empty chunk shape).
+    /// Used during lazy compilation when chunk info isn't known yet.
+    pub fn from_dims_only(dims: impl Into<SmallVec<[IStr; 4]>>) -> Self {
+        Self {
+            dims: dims.into(),
+            chunk_shape: SmallVec::new(),
+        }
     }
 
     /// Get the dimension names.
     pub fn dims(&self) -> &[IStr] {
-        &self.0
+        &self.dims
+    }
+
+    /// Get the chunk shape.
+    pub fn chunk_shape(&self) -> &[u64] {
+        &self.chunk_shape
     }
 
     /// Get the number of dimensions.
     pub fn len(&self) -> usize {
-        self.0.len()
+        self.dims.len()
     }
 
     /// Check if this signature has no dimensions.
     pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
+        self.dims.is_empty()
+    }
+
+    /// Check if chunk shape is set (non-empty).
+    pub fn has_chunk_shape(&self) -> bool {
+        !self.chunk_shape.is_empty()
+    }
+
+    /// Create a new signature with chunk shape set.
+    pub fn with_chunk_shape(&self, chunk_shape: impl Into<SmallVec<[u64; 4]>>) -> Self {
+        Self {
+            dims: self.dims.clone(),
+            chunk_shape: chunk_shape.into(),
+        }
     }
 }
 
-impl From<SmallVec<[IStr; 4]>> for DimSignature {
-    fn from(dims: SmallVec<[IStr; 4]>) -> Self {
-        Self(dims)
-    }
-}
-
-impl From<&[IStr]> for DimSignature {
+impl From<&[IStr]> for ChunkGridSignature {
     fn from(dims: &[IStr]) -> Self {
-        Self(dims.iter().cloned().collect())
+        Self::from_dims_only(dims.iter().cloned().collect::<SmallVec<[IStr; 4]>>())
     }
 }
+
+/// Type alias for backwards compatibility during transition.
+/// DimSignature is now ChunkGridSignature (with optional chunk_shape).
+pub type DimSignature = ChunkGridSignature;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum BoundKind {

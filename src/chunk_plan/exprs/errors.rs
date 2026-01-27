@@ -1,9 +1,21 @@
+use std::fmt::Display;
+
 use crate::chunk_plan::indexing::types::{IndexRange, ValueRange};
 
 #[derive(Debug)]
 pub(crate) enum CompileError {
     Unsupported(String),
     MissingPrimaryDims(String),
+}
+
+impl Display for CompileError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Format the error as a string
+        match self {
+            CompileError::Unsupported(msg) => write!(f, "unsupported: {msg}"),
+            CompileError::MissingPrimaryDims(msg) => write!(f, "missing primary dims: {msg}"),
+        }
+    }
 }
 
 #[derive(Debug)]

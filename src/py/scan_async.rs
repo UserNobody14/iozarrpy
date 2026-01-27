@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use polars::prelude::{IntoLazy, LazyFrame};
+use polars::prelude::IntoLazy;
 use pyo3::prelude::*;
 use pyo3::types::PyAny;
 use pyo3_async_runtimes::tokio::future_into_py;

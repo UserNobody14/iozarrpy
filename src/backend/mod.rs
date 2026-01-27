@@ -10,11 +10,6 @@ mod caching;
 // mod source;  // TODO: This module was referenced but doesn't exist
 mod py;
 
-pub use traits::{
-    BackendError, CoordChunkData, CoordScalarRaw, DynAsyncBackend, DynSyncBackend,
-    ZarrBackendAsync, ZarrBackendSync,
-};
 
-pub use caching::CachingAsyncBackend;
 
 pub(crate) use py::PyZarrBackend;
