@@ -228,6 +228,7 @@ pub async fn load_zarr_meta_from_opened_async(
 ) -> Result<ZarrMeta, String> {
     let store = opened.store.clone();
     let root_path = opened.root.clone();
+    let root_path_str: &str = root_path.as_ref();
 
     let group = zarrs::group::Group::async_open(
         store.clone(),
@@ -259,11 +260,24 @@ pub async fn load_zarr_meta_from_opened_async(
         };
 
         let path_str = path.as_str();
-        let leaf = leaf_name(path_str);
+        let rel_path = if root_path_str != "/"
+            && path_str.starts_with(root_path_str)
+        {
+            let stripped =
+                &path_str[root_path_str.len()..];
+            if stripped.is_empty() {
+                "/"
+            } else {
+                stripped
+            }
+        } else {
+            path_str
+        };
+        let leaf = leaf_name(rel_path);
 
         // Determine the parent group path
         let parent_path =
-            parent_group_path(path_str);
+            parent_group_path(rel_path);
 
         let array = Array::new_with_metadata(
             store.clone(),
@@ -312,7 +326,7 @@ pub async fn load_zarr_meta_from_opened_async(
 
         // Store in both flat and grouped maps
         all_arrays.insert(
-            path_str.istr(),
+            rel_path.istr(),
             arr_meta.clone(),
         );
         group_arrays
@@ -333,6 +347,7 @@ pub async fn load_zarr_meta_from_opened_async(
         IStr,
         ZarrArrayMeta,
     > = BTreeMap::new();
+    let root_path: &str = "/";
     for (path, arr) in &all_arrays {
         // Store by full path
         path_to_array
@@ -344,7 +359,7 @@ pub async fn load_zarr_meta_from_opened_async(
             parent_group_path(path_str);
         let parent_path: &str =
             parent_istr.as_ref();
-        if parent_path == "/" {
+        if parent_path == root_path {
             let leaf = leaf_name(path_str);
             path_to_array
                 .insert(leaf, arr.clone());
@@ -354,6 +369,16 @@ pub async fn load_zarr_meta_from_opened_async(
     // Compute dimension analysis
     let dim_analysis =
         DimensionAnalysis::compute(&root_node);
+
+    // For flat datasets (no children), allow leaf-name lookup even if paths are nested.
+    if root_node.children.is_empty() {
+        for (path, arr) in &all_arrays {
+            let leaf = leaf_name(path.as_ref());
+            path_to_array
+                .entry(leaf)
+                .or_insert_with(|| arr.clone());
+        }
+    }
 
     Ok(ZarrMeta {
         root: root_node,

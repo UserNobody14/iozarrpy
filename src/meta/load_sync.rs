@@ -14,7 +14,7 @@ use crate::meta::types::{
     ZarrDatasetMeta, ZarrMeta, ZarrNode,
 };
 use crate::store::{
-    open_store, OpenedStore, StoreInput,
+    OpenedStore, StoreInput, open_store,
 };
 use crate::{IStr, IntoIStr};
 
@@ -216,6 +216,7 @@ pub fn load_zarr_meta_from_opened(
 ) -> Result<ZarrMeta, String> {
     let store = opened.store.clone();
     let root_path = opened.root.clone();
+    let root_path_str: &str = root_path.as_ref();
 
     let group = zarrs::group::Group::open(
         store.clone(),
@@ -244,11 +245,24 @@ pub fn load_zarr_meta_from_opened(
         }
 
         let path_str = path.as_str();
-        let leaf = leaf_name(path_str);
+        let rel_path = if root_path_str != "/"
+            && path_str.starts_with(root_path_str)
+        {
+            let stripped =
+                &path_str[root_path_str.len()..];
+            if stripped.is_empty() {
+                "/"
+            } else {
+                stripped
+            }
+        } else {
+            path_str
+        };
+        let leaf = leaf_name(rel_path);
 
         // Determine the parent group path
         let parent_path =
-            parent_group_path(path_str);
+            parent_group_path(rel_path);
 
         let array =
             Array::open(store.clone(), path_str)
@@ -293,7 +307,7 @@ pub fn load_zarr_meta_from_opened(
 
         // Store in both flat and grouped maps
         all_arrays.insert(
-            path_str.istr(),
+            rel_path.istr(),
             arr_meta.clone(),
         );
         group_arrays
@@ -314,6 +328,7 @@ pub fn load_zarr_meta_from_opened(
         IStr,
         ZarrArrayMeta,
     > = BTreeMap::new();
+    let root_path: &str = "/";
     for (path, arr) in &all_arrays {
         // Store by full path
         path_to_array
@@ -325,7 +340,7 @@ pub fn load_zarr_meta_from_opened(
             parent_group_path(path_str);
         let parent_path: &str =
             parent_istr.as_ref();
-        if parent_path == "/" {
+        if parent_path == root_path {
             let leaf = leaf_name(path_str);
             path_to_array
                 .insert(leaf, arr.clone());
@@ -335,6 +350,16 @@ pub fn load_zarr_meta_from_opened(
     // Compute dimension analysis
     let dim_analysis =
         DimensionAnalysis::compute(&root_node);
+
+    // For flat datasets (no children), allow leaf-name lookup even if paths are nested.
+    if root_node.children.is_empty() {
+        for (path, arr) in &all_arrays {
+            let leaf = leaf_name(path.as_ref());
+            path_to_array
+                .entry(leaf)
+                .or_insert_with(|| arr.clone());
+        }
+    }
 
     Ok(ZarrMeta {
         root: root_node,
