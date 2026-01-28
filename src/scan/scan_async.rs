@@ -1,8 +1,8 @@
-use super::chunk_to_df::chunk_to_df;
-use super::open_arrays::open_arrays_async;
+use super::chunk_to_df::chunk_to_df_tree;
+use super::open_arrays::open_arrays_async_unified;
 use super::prelude::*;
 use crate::IntoIStr;
-use crate::chunk_plan::compile_expr_to_grouped_chunk_plan_async;
+use crate::chunk_plan::compile_expr_to_grouped_chunk_plan_unified_async;
 use zarrs::array_subset::ArraySubset;
 
 pub(crate) async fn scan_zarr_df_async(
@@ -19,9 +19,6 @@ pub(crate) async fn scan_zarr_df_async(
         )
         .await
         .map_err(to_py_err)?;
-    // Convert to ZarrDatasetMeta - preserves hierarchical paths from path_to_array
-    let meta = ZarrDatasetMeta::from(&zarr_meta);
-
     // Convert from Python String to IStr at the boundary
     let vars: Vec<IStr> = variables
         .map(|v| {
@@ -30,7 +27,11 @@ pub(crate) async fn scan_zarr_df_async(
                 .collect()
         })
         .unwrap_or_else(|| {
-            meta.data_vars.clone()
+            if zarr_meta.is_hierarchical() {
+                zarr_meta.all_data_var_paths()
+            } else {
+                zarr_meta.root.data_vars.clone()
+            }
         });
     if vars.is_empty() {
         return Err(PyErr::new::<
@@ -41,14 +42,15 @@ pub(crate) async fn scan_zarr_df_async(
         ));
     }
 
-    // Use dataset dims directly
-    let dims = meta.dims.clone();
+    // Use combined dims from unified analysis
+    let dims =
+        zarr_meta.dim_analysis.all_dims.clone();
 
     // Open arrays once (async) for reading.
     let (var_arrays, coord_arrays) =
-        open_arrays_async(
+        open_arrays_async_unified(
             opened_async.store.clone(),
-            &meta,
+            &zarr_meta,
             &vars,
             &dims,
         )
@@ -57,9 +59,9 @@ pub(crate) async fn scan_zarr_df_async(
 
     // Compile chunk plan using truly async I/O (concurrent coordinate resolution).
     let (grouped_plan, _stats) =
-        match compile_expr_to_grouped_chunk_plan_async(
+        match compile_expr_to_grouped_chunk_plan_unified_async(
             &expr,
-            &meta,
+            &zarr_meta,
             opened_async.store.clone(),
         )
         .await
@@ -99,17 +101,25 @@ pub(crate) async fn scan_zarr_df_async(
 
         let mut var_chunk_indices: Vec<Vec<u64>> =
             Vec::new();
-        
+
         // Determine if we should scan all chunks for this variable
-        let should_scan_all = if let Some(subsets) =
+        let should_scan_all = if let Some(
+            subsets,
+        ) =
             grouped_plan.get_plan(var.as_ref())
         {
             // If subsets is empty, it means "select all" (NoSelectionMade case)
-            if subsets.subsets_iter().next().is_none() {
+            if subsets
+                .subsets_iter()
+                .next()
+                .is_none()
+            {
                 true
             } else {
                 // Use the subsets from the plan to select chunks
-                for subset in subsets.subsets_iter() {
+                for subset in
+                    subsets.subsets_iter()
+                {
                     if let Ok(Some(chunks)) = primary
                         .chunks_in_array_subset(subset)
                     {
@@ -131,7 +141,7 @@ pub(crate) async fn scan_zarr_df_async(
             // Variable not in plan or plan is empty - scan all
             grouped_plan.is_empty()
         };
-        
+
         if should_scan_all {
             // Scan all chunks for this variable
             let shape = primary.shape().to_vec();
@@ -171,9 +181,7 @@ pub(crate) async fn scan_zarr_df_async(
         tokio::sync::Semaphore::new(max_conc),
     );
 
-    let meta = Arc::new(meta);
-    let dims = Arc::new(dims);
-    let vars = Arc::new(vars);
+    let meta = Arc::new(zarr_meta);
     let var_arrays = Arc::new(var_arrays);
     let coord_arrays = Arc::new(coord_arrays);
     // Convert with_columns to IStr
@@ -192,8 +200,6 @@ pub(crate) async fn scan_zarr_df_async(
             .unwrap();
         let primary = Arc::clone(&primary);
         let meta = Arc::clone(&meta);
-        let dims = Arc::clone(&dims);
-        let vars = Arc::clone(&vars);
         let var_arrays = Arc::clone(&var_arrays);
         let coord_arrays =
             Arc::clone(&coord_arrays);
@@ -201,12 +207,10 @@ pub(crate) async fn scan_zarr_df_async(
             Arc::clone(&with_columns);
         futs.push(async move {
             let _permit = permit;
-            chunk_to_df(
+            chunk_to_df_tree(
                 idx,
                 primary,
                 meta,
-                dims,
-                vars,
                 var_arrays,
                 coord_arrays,
                 with_columns,

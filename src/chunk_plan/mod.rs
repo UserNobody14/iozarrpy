@@ -14,6 +14,7 @@ mod indexing;
 pub(crate) use exprs::errors::CompileError;
 
 pub(crate) use indexing::selection_to_chunks::selection_to_grouped_chunk_plan;
+pub(crate) use indexing::selection_to_chunks::selection_to_grouped_chunk_plan_unified;
 pub(crate) use indexing::types::ChunkId;
 // Primary entry points (sync)
 pub(crate) use compile_entry::{
@@ -27,6 +28,8 @@ pub(crate) use compile_entry::{
 pub(crate) use compile_entry::{
     compile_expr_to_grouped_chunk_plan,
     compile_expr_to_grouped_chunk_plan_async,
+    compile_expr_to_grouped_chunk_plan_unified,
+    compile_expr_to_grouped_chunk_plan_unified_async,
 };
 pub(crate) use indexing::plan::GroupedChunkPlan;
 pub(crate) use indexing::types::ChunkGridSignature;

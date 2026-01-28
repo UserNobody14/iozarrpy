@@ -655,11 +655,20 @@ fn compile_struct_field_cmp(
         format!("{}/{}", struct_col, field_name)
             .istr();
 
-    // Look up array metadata - check both the path and the field name directly
-    let arr_meta =
-        ctx.meta.arrays.get(&array_path).or_else(
-            || ctx.meta.arrays.get(field_name),
-        );
+    // Look up array metadata using unified meta when available
+    let arr_meta = if let Some(unified) = ctx.unified_meta {
+        let key = unified
+            .normalize_array_path(array_path.as_ref())
+            .ok_or_else(|| {
+                CompileError::Unsupported(format!(
+                    "struct field path '{}' not found in metadata",
+                    array_path
+                ))
+            })?;
+        unified.path_to_array.get(&key)
+    } else {
+        ctx.meta.arrays.get(&array_path)
+    };
 
     let time_encoding = arr_meta
         .and_then(|a| a.time_encoding.as_ref());

@@ -9,6 +9,7 @@ use crate::chunk_plan::{
     ChunkGridSignature, DatasetSelection,
     GroupedChunkPlan,
     selection_to_grouped_chunk_plan,
+    selection_to_grouped_chunk_plan_unified,
 };
 use crate::store::StoreInput;
 use crate::{IStr, IntoIStr};
@@ -31,17 +32,8 @@ impl ZarrSource {
             match crate::meta::open_and_load_zarr_meta_from_input(store_input.clone()) {
                 Ok((opened, unified)) => {
                     let is_hier = unified.is_hierarchical();
-                    let legacy = crate::meta::ZarrDatasetMeta::from(&unified);
-                    // Check if we got any data vars from hierarchical loading
-                    if !legacy.data_vars.is_empty() {
-                        (opened, legacy, Some(unified), is_hier)
-                    } else {
-                        // Hierarchical loading found no data vars, fall back to legacy
-                        let (opened2, legacy2) =
-                            crate::meta::open_and_load_dataset_meta_from_input(store_input)
-                                .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
-                        (opened2, legacy2, None, false)
-                    }
+                    let legacy = unified.planning_meta();
+                    (opened, legacy, Some(unified), is_hier)
                 }
                 Err(_) => {
                     // Hierarchical loading failed, use legacy
@@ -59,11 +51,19 @@ impl ZarrSource {
                 v.into_iter()
                     .map(|s| s.istr())
                     .collect()
+            } else if let Some(ref unified) =
+                unified_meta
+            {
+                if is_hierarchical {
+                    unified.all_data_var_paths()
+                } else {
+                    meta.data_vars.clone()
+                }
             } else {
                 meta.data_vars.clone()
             };
 
-        if vars.is_empty() {
+        if vars.is_empty() && !is_hierarchical {
             return Err(PyErr::new::<
                 pyo3::exceptions::PyValueError,
                 _,
@@ -85,32 +85,51 @@ impl ZarrSource {
         // Build per-grid iteration state for all requested variables
         let grid_states = Vec::new();
 
-        // Get dims from first variable (for backward compat)
-        let dims: Vec<IStr> = meta
-            .arrays
-            .get(&vars[0])
-            .map(|m| {
-                m.dims.iter().cloned().collect()
-            })
-            .filter(|d: &Vec<IStr>| !d.is_empty())
-            .unwrap_or_else(|| {
-                // Fallback: generate dim names
-                let primary_path =
-                    &meta.arrays[&vars[0]].path;
-                if let Ok(primary) = Array::open(
-                    store.clone(),
-                    primary_path.as_ref(),
-                ) {
-                    (0..primary.dimensionality())
-                        .map(|i| {
-                            format!("dim_{i}")
-                                .istr()
-                        })
+        // Get dims from unified analysis for hierarchical stores
+        let dims: Vec<IStr> = if is_hierarchical {
+            unified_meta
+                .as_ref()
+                .map(|m| {
+                    m.dim_analysis
+                        .all_dims
+                        .clone()
+                })
+                .unwrap_or_default()
+        } else {
+            meta.arrays
+                .get(&vars[0])
+                .map(|m| {
+                    m.dims
+                        .iter()
+                        .cloned()
                         .collect()
-                } else {
-                    vec![]
-                }
-            });
+                })
+                .filter(|d: &Vec<IStr>| {
+                    !d.is_empty()
+                })
+                .unwrap_or_else(|| {
+                    // Fallback: generate dim names
+                    let primary_path = &meta
+                        .arrays[&vars[0]]
+                        .path;
+                    if let Ok(primary) =
+                        Array::open(
+                            store.clone(),
+                            primary_path.as_ref(),
+                        )
+                    {
+                        (0..primary
+                            .dimensionality())
+                            .map(|i| {
+                                format!("dim_{i}")
+                                    .istr()
+                            })
+                            .collect()
+                    } else {
+                        vec![]
+                    }
+                })
+        };
 
         let mut source = Self {
             meta,
@@ -129,11 +148,22 @@ impl ZarrSource {
             is_hierarchical,
         };
 
-        let plan = selection_to_grouped_chunk_plan(
-            &DatasetSelection::NoSelectionMade,
-            &source.meta,
-            source.store.clone(),
-        )
+        let plan = if source.is_hierarchical {
+            selection_to_grouped_chunk_plan_unified(
+                &DatasetSelection::NoSelectionMade,
+                source
+                    .unified_meta
+                    .as_ref()
+                    .expect("hierarchical meta missing"),
+                source.store.clone(),
+            )
+        } else {
+            selection_to_grouped_chunk_plan(
+                &DatasetSelection::NoSelectionMade,
+                &source.meta,
+                source.store.clone(),
+            )
+        }
         .map_err(to_py_err)?;
         source.set_grid_states_from_plan(plan);
 
@@ -193,10 +223,32 @@ impl ZarrSource {
             Vec<IStr>,
             GridIterState,
         > = std::collections::BTreeMap::new();
+        let target_dims = if self.is_hierarchical
+        {
+            plan.iter_grids()
+                .map(|(sig, _, _, _)| {
+                    sig.dims().to_vec()
+                })
+                .max_by_key(|d| d.len())
+        } else {
+            None
+        };
+        let use_only_target =
+            target_dims.is_some();
 
         for (sig, vars, subsets, chunk_grid) in
             plan.iter_grids()
         {
+            if use_only_target
+                && target_dims
+                    .as_ref()
+                    .map(|d| {
+                        sig.dims() != d.as_slice()
+                    })
+                    .unwrap_or(false)
+            {
+                continue;
+            }
             // Filter to only requested variables
             let variables: Vec<IStr> = vars
                 .iter()
@@ -225,13 +277,17 @@ impl ZarrSource {
                     )
                 });
             for var in variables {
-                if !entry.variables.contains(&var) {
+                if !entry.variables.contains(&var)
+                {
                     entry.variables.push(var);
                 }
             }
             if entry.pending_subsets.is_empty()
                 && entry.current_subset.is_none()
-                && subsets.subsets_iter().next().is_some()
+                && subsets
+                    .subsets_iter()
+                    .next()
+                    .is_some()
             {
                 entry.add_subsets(
                     subsets

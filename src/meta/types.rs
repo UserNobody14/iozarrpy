@@ -276,12 +276,54 @@ impl ZarrMeta {
         !self.root.children.is_empty()
     }
 
-    /// Get array meta by path (e.g., "temperature" or "model_a/temperature")
+    /// Get array meta by exact path (no normalization).
     pub fn array(
         &self,
         path: &str,
     ) -> Option<&ZarrArrayMeta> {
         self.path_to_array.get(&path.istr())
+    }
+
+    /// Normalize a user path to a canonical key in path_to_array.
+    pub fn normalize_array_path(
+        &self,
+        path: &str,
+    ) -> Option<IStr> {
+        let raw = path.istr();
+        if self.path_to_array.contains_key(&raw) {
+            return Some(raw);
+        }
+
+        let trimmed = path.trim_start_matches('/');
+        let with_slash = format!("/{}", trimmed).istr();
+        if self.path_to_array.contains_key(&with_slash) {
+            return Some(with_slash);
+        }
+
+        let trimmed_key = trimmed.istr();
+        if self.path_to_array.contains_key(&trimmed_key) {
+            return Some(trimmed_key);
+        }
+
+        None
+    }
+
+    /// Get array meta by a normalized path (adds leading '/' if needed).
+    pub fn array_by_path(
+        &self,
+        path: &str,
+    ) -> Option<&ZarrArrayMeta> {
+        let key = self.normalize_array_path(path)?;
+        self.path_to_array.get(&key)
+    }
+
+    /// Legacy meta for planning, includes all data var paths for hierarchical stores.
+    pub fn planning_meta(&self) -> ZarrDatasetMeta {
+        let mut legacy = ZarrDatasetMeta::from(self);
+        if self.is_hierarchical() {
+            legacy.data_vars = self.all_data_var_paths();
+        }
+        legacy
     }
 
     /// All data variable paths (flat: just names, hierarchical: includes "group/var" paths)

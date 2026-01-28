@@ -14,6 +14,7 @@ use crate::reader::{
     retrieve_1d_subset, retrieve_chunk,
 };
 use crate::{IStr, IntoIStr};
+use crate::meta::ZarrNode;
 
 use super::{ZarrSource, to_py_err};
 
@@ -55,7 +56,15 @@ impl ZarrSource {
         self.consume_chunk_budget()?;
 
         let mut cols: Vec<Column> = Vec::new();
-        for v in &self.vars {
+        let vars = if self.is_hierarchical {
+            self.unified_meta
+                .as_ref()
+                .map(|m| m.root.data_vars.as_slice())
+                .unwrap_or(&[])
+        } else {
+            self.vars.as_slice()
+        };
+        for v in vars {
             if !self.should_emit(v.as_ref()) {
                 continue;
             }
@@ -284,8 +293,15 @@ impl ZarrSource {
             .dims()
             .to_vec();
 
-        // Add variable columns in self.vars order (consistent across batches)
-        let vars = self.vars.clone();
+        // Add variable columns in consistent order
+        let vars: Vec<IStr> = if self.is_hierarchical {
+            self.unified_meta
+                .as_ref()
+                .map(|m| m.root.data_vars.clone())
+                .unwrap_or_default()
+        } else {
+            self.vars.clone()
+        };
         for var_name in &vars {
             if dim_names.contains(var_name) {
                 continue; // Skip dimension coordinates
@@ -371,67 +387,118 @@ impl ZarrSource {
         start: usize,
         len: usize,
     ) -> PyResult<DataFrame> {
-        let Some(ref unified) = self.unified_meta
+        let Some(unified) = self.unified_meta.as_ref()
         else {
             return Ok(df);
         };
-        let child_specs: Vec<(IStr, IStr, Vec<IStr>)> =
+        let child_nodes: Vec<(IStr, ZarrNode)> =
             unified
                 .root
                 .children
                 .iter()
                 .map(|(name, node)| {
-                    (
-                        name.clone(),
-                        node.path.clone(),
-                        node.data_vars.clone(),
-                    )
+                    (name.clone(), node.clone())
                 })
                 .collect();
-
-        for (child_name, child_path, child_vars) in
-            child_specs
+        for (child_name, child_node) in
+            child_nodes
         {
-            let child_name_str: &str =
-                child_name.as_ref();
-
-            let should_emit = self
-                .with_columns
-                .as_ref()
-                .map_or(true, |cols| {
-                    cols.contains(
-                        &child_name_str.istr(),
-                    )
-                });
-            if !should_emit {
+            if !self.should_emit_group_path(
+                child_node.path.as_ref(),
+            ) {
                 continue;
             }
 
-            let mut field_series: Vec<Series> =
-                Vec::new();
+            let struct_series =
+                self.build_struct_series_for_node(
+                    &child_name,
+                    &child_node,
+                    subset,
+                    subset_shape,
+                    subset_origin,
+                    start,
+                    len,
+                )?;
 
-            for var_name in &child_vars
-            {
-                let var_name_str: &str =
-                    var_name.as_ref();
+            df = df
+                .hstack(&[struct_series.into()])
+                .map_err(|e| {
+                    PyErr::new::<
+                        pyo3::exceptions::PyValueError,
+                        _,
+                    >(
+                        e.to_string()
+                    )
+                })?;
+        }
 
-                let child_path_str: &str =
-                    child_path.as_ref();
+        Ok(df)
+    }
+
+    fn should_emit_group_path(
+        &self,
+        group_path: &str,
+    ) -> bool {
+        let name = group_path.trim_start_matches('/');
+        self.with_columns
+            .as_ref()
+            .map(|cols| {
+                cols.iter().any(|c| {
+                    let c_str: &str = c.as_ref();
+                    c_str == name
+                        || c_str
+                            .starts_with(&format!(
+                                "{}/",
+                                name
+                            ))
+                })
+            })
+            .unwrap_or(true)
+    }
+
+    fn build_struct_series_for_node(
+        &mut self,
+        group_name: &IStr,
+        node: &ZarrNode,
+        subset: &zarrs::array_subset::ArraySubset,
+        subset_shape: &[u64],
+        subset_origin: &[u64],
+        start: usize,
+        len: usize,
+    ) -> PyResult<Series> {
+        if self.unified_meta.is_none() {
+            let group_name_str: &str = group_name.as_ref();
+            return Ok(Series::new_null(
+                group_name_str.into(),
+                len,
+            ));
+        }
+
+        let group_name_str: &str = group_name.as_ref();
+        let mut field_series: Vec<Series> =
+            Vec::new();
+        let primary_ndim = subset_shape.len();
+
+        for var_name in &node.data_vars {
+            let var_name_str: &str =
+                var_name.as_ref();
+            let var_meta =
+                node.arrays.get(var_name);
+            let dtype = var_meta
+                .map(|m| m.polars_dtype.clone())
+                .unwrap_or(DataType::Null);
+
+            let same_dims = var_meta
+                .map(|m| m.dims.len() == primary_ndim)
+                .unwrap_or(false);
+
+            if same_dims {
+                let node_path_str: &str =
+                    node.path.as_ref();
                 let full_path = format!(
-                    "{}{}",
-                    child_path_str,
-                    if child_path_str
-                        .ends_with('/')
-                        || var_name_str
-                            .starts_with('/')
-                    {
-                        var_name_str.to_string()
-                    } else {
-                        format!(
-                            "/{}",
-                            var_name_str
-                        )
-                    }
+                    "{}/{}",
+                    node_path_str.trim_end_matches('/'),
+                    var_name_str
                 );
 
                 let arr_path = self
@@ -463,48 +530,66 @@ impl ZarrSource {
                             var_name_str,
                         );
                     field_series.push(series);
-                } else {
-                    let null_series =
-                        Series::new_null(
-                            var_name_str.into(),
-                            len,
-                        );
-                    field_series
-                        .push(null_series);
+                    continue;
                 }
             }
 
-            if !field_series.is_empty() {
-                let struct_chunked =
-                    StructChunked::from_series(
-                        child_name_str.into(),
+            let null_series =
+                Series::new_null(
+                    var_name_str.into(),
+                    len,
+                )
+                .cast(&dtype)
+                .unwrap_or_else(|_| {
+                    Series::new_null(
+                        var_name_str.into(),
                         len,
-                        field_series.iter(),
                     )
-                    .map_err(|e| {
-                        PyErr::new::<
-                            pyo3::exceptions::PyValueError,
-                            _,
-                        >(
-                            e.to_string()
-                        )
-                    })?;
-                df = df
-                    .hstack(&[struct_chunked
-                        .into_series()
-                        .into()])
-                    .map_err(|e| {
-                        PyErr::new::<
-                            pyo3::exceptions::PyValueError,
-                            _,
-                        >(
-                            e.to_string()
-                        )
-                    })?;
-            }
+                });
+            field_series.push(null_series);
         }
 
-        Ok(df)
+        for (child_name, child_node) in
+            &node.children
+        {
+            if !self.should_emit_group_path(
+                child_node.path.as_ref(),
+            ) {
+                continue;
+            }
+            let child_series =
+                self.build_struct_series_for_node(
+                    child_name,
+                    child_node,
+                    subset,
+                    subset_shape,
+                    subset_origin,
+                    start,
+                    len,
+                )?;
+            field_series.push(child_series);
+        }
+
+        if field_series.is_empty() {
+            return Ok(Series::new_null(
+                group_name_str.into(),
+                len,
+            ));
+        }
+
+        let struct_chunked =
+            StructChunked::from_series(
+                group_name_str.into(),
+                len,
+                field_series.iter(),
+            )
+            .map_err(|e| {
+                PyErr::new::<
+                    pyo3::exceptions::PyValueError,
+                    _,
+                >(e.to_string())
+            })?;
+        Ok(struct_chunked.into_series())
     }
 }
 

@@ -2,6 +2,7 @@ use pyo3::prelude::*;
 use pyo3::types::PyAny;
 
 use crate::chunk_plan::compile_expr_to_grouped_chunk_plan;
+use crate::chunk_plan::compile_expr_to_grouped_chunk_plan_unified;
 use crate::IntoIStr;
 
 use super::{
@@ -35,7 +36,19 @@ impl ZarrSource {
 
         // Compile Expr -> GroupedChunkPlan (per-grid subsets)
         let plan_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            compile_expr_to_grouped_chunk_plan(&expr, &self.meta, self.store.clone())
+            if let Some(meta) = &self.unified_meta {
+                compile_expr_to_grouped_chunk_plan_unified(
+                    &expr,
+                    meta,
+                    self.store.clone(),
+                )
+            } else {
+                compile_expr_to_grouped_chunk_plan(
+                    &expr,
+                    &self.meta,
+                    self.store.clone(),
+                )
+            }
         }))
         .map_err(|e| panic_to_py_err(e, "panic while compiling predicate chunk plan"))?;
 

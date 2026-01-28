@@ -1,6 +1,7 @@
 use super::prelude::*;
 use crate::IntoIStr;
 use crate::meta::dims::dims_for_array;
+use futures::future::BoxFuture;
 
 pub(crate) async fn chunk_to_df(
     idx: Vec<u64>,
@@ -692,8 +693,8 @@ pub(crate) async fn chunk_to_df_tree(
             continue;
         }
 
-        let struct_col =
-            build_group_struct_column(
+        let struct_series =
+            build_group_struct_series(
                 child_name,
                 child_node,
                 &idx,
@@ -706,7 +707,7 @@ pub(crate) async fn chunk_to_df_tree(
             )
             .await?;
 
-        cols.push(struct_col);
+        cols.push(struct_series.into());
     }
 
     Ok(DataFrame::new(height, cols)
@@ -933,72 +934,77 @@ fn build_var_column_with_broadcast(
     }
 }
 
-async fn build_group_struct_column(
-    group_name: &IStr,
-    node: &ZarrNode,
-    idx: &[u64],
-    output_dims: &[IStr],
-    output_strides: &[u64],
-    output_chunk_shape: &[u64],
-    keep: &[usize],
-    var_arrays: &[(IStr, Arc<AsyncArray>)],
-    _meta: &ZarrMeta,
-) -> Result<Column, PyErr> {
-    let group_name_str: &str =
-        group_name.as_ref();
-    let mut field_series: Vec<Series> =
-        Vec::new();
+fn build_group_struct_series<'a>(
+    group_name: &'a IStr,
+    node: &'a ZarrNode,
+    idx: &'a [u64],
+    output_dims: &'a [IStr],
+    output_strides: &'a [u64],
+    output_chunk_shape: &'a [u64],
+    keep: &'a [usize],
+    var_arrays: &'a [(IStr, Arc<AsyncArray>)],
+    meta: &'a ZarrMeta,
+) -> BoxFuture<'a, Result<Series, PyErr>> {
+    Box::pin(async move {
+        let group_name_str: &str =
+            group_name.as_ref();
+        let mut field_series: Vec<Series> =
+            Vec::new();
 
-    // Load each data variable in this child group
-    for var_name in &node.data_vars {
-        // Build the path to find this variable in var_arrays
-        let node_path_str: &str =
-            node.path.as_ref();
-        let var_path = format!(
-            "{}/{}",
-            node_path_str.trim_start_matches('/'),
-            var_name
-        );
+        // Load each data variable in this child group
+        for var_name in &node.data_vars {
+            // Build the path to find this variable in var_arrays
+            let node_path_str: &str =
+                node.path.as_ref();
+            let var_path = format!(
+                "{}/{}",
+                node_path_str
+                    .trim_start_matches('/'),
+                var_name
+            );
 
-        let arr_opt =
-            var_arrays.iter().find(|(n, _)| {
-                let n_str: &str = n.as_ref();
-                let var_str: &str =
-                    var_name.as_ref();
-                n_str == var_path
-                    || n_str == var_str
-            });
+            let arr_opt = var_arrays.iter().find(
+                |(n, _)| {
+                    let n_str: &str = n.as_ref();
+                    let var_str: &str =
+                        var_name.as_ref();
+                    n_str == var_path
+                        || n_str == var_str
+                },
+            );
 
-        if let Some((_, arr)) = arr_opt {
-            let var_meta =
-                node.arrays.get(var_name);
+            if let Some((_, arr)) = arr_opt {
+                let var_meta =
+                    node.arrays.get(var_name);
 
-            // Retrieve chunk data
-            let data =
-                retrieve_chunk_async(arr, idx)
-                    .await
-                    .map_err(to_py_err)?;
+                // Retrieve chunk data
+                let data = retrieve_chunk_async(
+                    arr, idx,
+                )
+                .await
+                .map_err(to_py_err)?;
 
-            let var_dims: Vec<IStr> = var_meta
-                .map(|m| {
-                    m.dims
-                        .iter()
-                        .cloned()
-                        .collect()
-                })
-                .unwrap_or_default();
+                let var_dims: Vec<IStr> =
+                    var_meta
+                        .map(|m| {
+                            m.dims
+                                .iter()
+                                .cloned()
+                                .collect()
+                        })
+                        .unwrap_or_default();
 
-            let var_chunk_shape: Vec<u64> = arr
-                .chunk_shape(idx)
-                .map(|s| {
-                    s.iter()
-                        .map(|x| x.get())
-                        .collect()
-                })
-                .unwrap_or_default();
+                let var_chunk_shape: Vec<u64> =
+                    arr.chunk_shape(idx)
+                        .map(|s| {
+                            s.iter()
+                                .map(|x| x.get())
+                                .collect()
+                        })
+                        .unwrap_or_default();
 
-            // Build the series with broadcasting
-            let series =
+                // Build the series with broadcasting
+                let series =
                 build_var_series_with_broadcast(
                     var_name.as_ref(),
                     &data,
@@ -1010,40 +1016,62 @@ async fn build_group_struct_column(
                     keep,
                 );
 
-            field_series.push(series);
-        } else {
-            // Variable not found - create null series
-            let var_name_str: &str =
-                var_name.as_ref();
+                field_series.push(series);
+            } else {
+                // Variable not found - create null series
+                let var_name_str: &str =
+                    var_name.as_ref();
+                let null_series =
+                    Series::new_null(
+                        var_name_str.into(),
+                        keep.len(),
+                    );
+                field_series.push(null_series);
+            }
+        }
+
+        // Recursively add nested child groups as struct fields
+        for (child_name, child_node) in
+            &node.children
+        {
+            let child_series =
+                build_group_struct_series(
+                    child_name,
+                    child_node,
+                    idx,
+                    output_dims,
+                    output_strides,
+                    output_chunk_shape,
+                    keep,
+                    var_arrays,
+                    meta,
+                )
+                .await?;
+            field_series.push(child_series);
+        }
+
+        // Create struct column from the field series
+        if field_series.is_empty() {
+            // Empty struct
             let null_series = Series::new_null(
-                var_name_str.into(),
+                group_name_str.into(),
                 keep.len(),
             );
-            field_series.push(null_series);
-        }
-    }
-
-    // Create struct column from the field series
-    if field_series.is_empty() {
-        // Empty struct
-        let null_series = Series::new_null(
-            group_name_str.into(),
-            keep.len(),
-        );
-        Ok(null_series.into())
-    } else {
-        let struct_chunked = StructChunked::from_series(
-            group_name_str.into(),
-            field_series.len(),
-            field_series.iter(),
-        )
-        .map_err(|e| {
-            PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                e.to_string(),
+            Ok(null_series)
+        } else {
+            let struct_chunked = StructChunked::from_series(
+                group_name_str.into(),
+                field_series.len(),
+                field_series.iter(),
             )
-        })?;
-        Ok(struct_chunked.into_series().into())
-    }
+            .map_err(|e| {
+                PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                    e.to_string(),
+                )
+            })?;
+            Ok(struct_chunked.into_series())
+        }
+    })
 }
 
 fn build_var_series_with_broadcast(
