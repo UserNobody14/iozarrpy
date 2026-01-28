@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use url::Url;
@@ -27,6 +27,28 @@ pub fn open_store_from_object_store_async(
     store: Arc<dyn ObjectStore>,
     prefix: Option<String>,
 ) -> AsyncOpenedStore {
+    if let Some(ref p) = prefix {
+        let path = Path::new(p);
+        if path.is_absolute() && path.exists() {
+            if let Ok(opened) =
+                open_filesystem_store_async(p)
+            {
+                return opened;
+            }
+        }
+        if !path.is_absolute() {
+            let abs = format!("/{p}");
+            if Path::new(&abs).exists() {
+                if let Ok(opened) =
+                    open_filesystem_store_async(
+                        &abs,
+                    )
+                {
+                    return opened;
+                }
+            }
+        }
+    }
     let async_store: AsyncReadableWritableListableStorage =
         Arc::new(AsyncObjectStore::new(store));
     let root = prefix

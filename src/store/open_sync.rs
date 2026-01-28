@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use tokio::runtime::Runtime;
@@ -27,6 +27,20 @@ pub fn open_store_from_object_store(
     store: Arc<dyn ObjectStore>,
     prefix: Option<String>,
 ) -> Result<OpenedStore, String> {
+    if let Some(ref p) = prefix {
+        let path = Path::new(p);
+        if path.is_absolute() && path.exists() {
+            return open_filesystem_store(p);
+        }
+        if !path.is_absolute() {
+            let abs = format!("/{p}");
+            if Path::new(&abs).exists() {
+                return open_filesystem_store(
+                    &abs,
+                );
+            }
+        }
+    }
     let async_store: AsyncReadableWritableListableStorage =
         Arc::new(AsyncObjectStore::new(store));
     let rt = Arc::new(Runtime::new().map_err(|e| {

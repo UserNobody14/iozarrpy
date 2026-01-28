@@ -64,6 +64,7 @@ dev = [
     # Needed for FFI-plugin planning tests and for real-world Expr shapes.
     "interpolars>=0.1.0",
     "gcsfs>=2026.1.0",
+    "obstore>=0.8.2",
 ]
 
 build = [
