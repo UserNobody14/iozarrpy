@@ -8,20 +8,20 @@
 //!
 //! This enables efficient I/O batching and concurrent resolution for async stores.
 
-use crate::chunk_plan::exprs::compile_node_lazy;
-use crate::chunk_plan::exprs::LazyCompileCtx;
-use crate::chunk_plan::exprs::CompileError;
-use crate::chunk_plan::indexing::MonotonicCoordResolver;
-use crate::chunk_plan::prelude::*;
-use crate::chunk_plan::indexing::selection::DatasetSelection;
-use crate::chunk_plan::indexing::lazy_selection::LazyDatasetSelection;
-use crate::chunk_plan::indexing::lazy_materialize::{
-    collect_requests_with_meta, materialize, MergedCache,
-};
-use crate::chunk_plan::indexing::SyncCoordResolver;
-use crate::chunk_plan::indexing::AsyncMonotonicResolver;
-use crate::chunk_plan::indexing::AsyncCoordResolver;
 use crate::IStr;
+use crate::chunk_plan::exprs::CompileError;
+use crate::chunk_plan::exprs::LazyCompileCtx;
+use crate::chunk_plan::exprs::compile_node_lazy;
+use crate::chunk_plan::indexing::AsyncCoordResolver;
+use crate::chunk_plan::indexing::AsyncMonotonicResolver;
+use crate::chunk_plan::indexing::MonotonicCoordResolver;
+use crate::chunk_plan::indexing::SyncCoordResolver;
+use crate::chunk_plan::indexing::lazy_materialize::{
+    MergedCache, collect_requests_with_meta, materialize,
+};
+use crate::chunk_plan::indexing::lazy_selection::LazyDatasetSelection;
+use crate::chunk_plan::indexing::selection::DatasetSelection;
+use crate::chunk_plan::prelude::*;
 
 /// Statistics about the planning process.
 pub(crate) struct PlannerStats {
@@ -34,22 +34,34 @@ pub(crate) struct PlannerStats {
 /// This replaces the old pattern of extracting dims from a "primary variable".
 /// Dimensions are taken from `meta.dims` and lengths are derived from
 /// coordinate arrays or the first matching data array.
-fn compute_dims_and_lengths(meta: &ZarrDatasetMeta) -> (Vec<IStr>, Vec<u64>) {
+fn compute_dims_and_lengths(
+    meta: &ZarrDatasetMeta,
+) -> (Vec<IStr>, Vec<u64>) {
     let dims = meta.dims.clone();
     let dim_lengths: Vec<u64> = dims
         .iter()
         .map(|d| {
             // First try: look for a 1D coordinate array with this dimension name
-            if let Some(coord_array) = meta.arrays.get(d) {
-                if let Some(&len) = coord_array.shape.first() {
+            if let Some(coord_array) =
+                meta.arrays.get(d)
+            {
+                if let Some(&len) =
+                    coord_array.shape.first()
+                {
                     return len;
                 }
             }
             // Second try: look for any array that has this dimension and get its size
             for (_, arr_meta) in &meta.arrays {
-                if let Some(pos) = arr_meta.dims.iter().position(|dim| dim == d) {
-                    if pos < arr_meta.shape.len() {
-                        return arr_meta.shape[pos];
+                if let Some(pos) = arr_meta
+                    .dims
+                    .iter()
+                    .position(|dim| dim == d)
+                {
+                    if pos < arr_meta.shape.len()
+                    {
+                        return arr_meta.shape
+                            [pos];
                     }
                 }
             }
@@ -60,26 +72,33 @@ fn compute_dims_and_lengths(meta: &ZarrDatasetMeta) -> (Vec<IStr>, Vec<u64>) {
     (dims, dim_lengths)
 }
 
-fn default_vars_for_dataset_selection(meta: &ZarrDatasetMeta) -> Vec<IStr> {
-    let mut out: std::collections::BTreeSet<IStr> = std::collections::BTreeSet::new();
-    
+fn default_vars_for_dataset_selection(
+    meta: &ZarrDatasetMeta,
+) -> Vec<IStr> {
+    let mut out: std::collections::BTreeSet<
+        IStr,
+    > = std::collections::BTreeSet::new();
+
     // Include root-level data vars
     out.extend(meta.data_vars.iter().cloned());
-    
+
     // Include all array paths from meta.arrays (includes hierarchical paths)
     // Filter to only include paths that look like variables (not coordinate arrays)
     for (path, _arr_meta) in &meta.arrays {
         // Skip dimension coordinate arrays (1D arrays where the dim name == array name)
-        let is_coord = meta.dims.iter().any(|d| d == path);
+        let is_coord =
+            meta.dims.iter().any(|d| d == path);
         if !is_coord {
             // Include hierarchical paths (contain '/')
             let path_str: &str = path.as_ref();
-            if path_str.contains('/') && !path_str.starts_with('/') {
+            if path_str.contains('/')
+                && !path_str.starts_with('/')
+            {
                 out.insert(path.clone());
             }
         }
     }
-    
+
     // Also include 1D dimension coordinate arrays (e.g. `time`, `x`, `y`) if present.
     for d in &meta.dims {
         if meta.arrays.contains_key(d) {
@@ -102,10 +121,17 @@ pub(crate) fn compile_expr_to_lazy_selection(
     expr: &Expr,
     meta: &ZarrDatasetMeta,
 ) -> Result<LazyDatasetSelection, CompileError> {
-    let (dims, dim_lengths) = compute_dims_and_lengths(meta);
+    let (dims, dim_lengths) =
+        compute_dims_and_lengths(meta);
 
-    let vars = default_vars_for_dataset_selection(meta);
-    let mut ctx = LazyCompileCtx::new(meta, &dims, &dim_lengths, &vars);
+    let vars =
+        default_vars_for_dataset_selection(meta);
+    let mut ctx = LazyCompileCtx::new(
+        meta,
+        &dims,
+        &dim_lengths,
+        &vars,
+    );
     compile_node_lazy(expr, &mut ctx)
 }
 
@@ -118,25 +144,43 @@ pub(crate) fn resolve_lazy_selection_sync(
     lazy_selection: &LazyDatasetSelection,
     meta: &ZarrDatasetMeta,
     store: zarrs::storage::ReadableWritableListableStorage,
-) -> Result<(DatasetSelection, PlannerStats), CompileError> {
-    let (dims, dim_lengths) = compute_dims_and_lengths(meta);
+) -> Result<
+    (DatasetSelection, PlannerStats),
+    CompileError,
+> {
+    let (dims, dim_lengths) =
+        compute_dims_and_lengths(meta);
 
     // Collect requests, handling index-only dimensions immediately
     let (requests, immediate_cache) =
-        collect_requests_with_meta(lazy_selection, meta, &dim_lengths, &dims);
+        collect_requests_with_meta(
+            lazy_selection,
+            meta,
+            &dim_lengths,
+            &dims,
+        );
 
     // Resolve remaining requests using the monotonic resolver
-    let mut resolver = MonotonicCoordResolver::new(meta, store);
-    let resolved_cache = resolver.resolve_batch(&requests, meta);
+    let mut resolver =
+        MonotonicCoordResolver::new(meta, store);
+    let resolved_cache =
+        resolver.resolve_batch(&requests, meta);
 
     // Merge caches and materialize
-    let merged = MergedCache::new(&*resolved_cache, &immediate_cache);
+    let merged = MergedCache::new(
+        &*resolved_cache,
+        &immediate_cache,
+    );
     let selection = materialize(
         lazy_selection,
         meta,
-        &merged
-    ).map_err(|e| {
-        CompileError::Unsupported(format!("materialization failed: {}", e))
+        &merged,
+    )
+    .map_err(|e| {
+        CompileError::Unsupported(format!(
+            "materialization failed: {}",
+            e
+        ))
     })?;
 
     // Drop the resolved_cache before borrowing resolver immutably
@@ -156,11 +200,20 @@ pub(crate) fn compile_expr_to_dataset_selection(
     expr: &Expr,
     meta: &ZarrDatasetMeta,
     store: zarrs::storage::ReadableWritableListableStorage,
-) -> Result<(DatasetSelection, PlannerStats), CompileError> {
-    let lazy_selection = compile_expr_to_lazy_selection(expr, meta)?;
-    resolve_lazy_selection_sync(&lazy_selection, meta, store)
+) -> Result<
+    (DatasetSelection, PlannerStats),
+    CompileError,
+> {
+    let lazy_selection =
+        compile_expr_to_lazy_selection(
+            expr, meta,
+        )?;
+    resolve_lazy_selection_sync(
+        &lazy_selection,
+        meta,
+        store,
+    )
 }
-
 
 // ============================================================================
 // Asynchronous resolution
@@ -171,21 +224,44 @@ pub(crate) async fn resolve_lazy_selection_async(
     lazy_selection: &LazyDatasetSelection,
     meta: &ZarrDatasetMeta,
     store: zarrs::storage::AsyncReadableWritableListableStorage,
-) -> Result<(DatasetSelection, PlannerStats), CompileError> {
-    let (dims, dim_lengths) = compute_dims_and_lengths(meta);
+) -> Result<
+    (DatasetSelection, PlannerStats),
+    CompileError,
+> {
+    let (dims, dim_lengths) =
+        compute_dims_and_lengths(meta);
 
     // Collect requests, handling index-only dimensions immediately
     let (requests, immediate_cache) =
-        collect_requests_with_meta(lazy_selection, meta, &dim_lengths, &dims);
+        collect_requests_with_meta(
+            lazy_selection,
+            meta,
+            &dim_lengths,
+            &dims,
+        );
 
     // Resolve remaining requests using the async monotonic resolver
-    let resolver = AsyncMonotonicResolver::new(store);
-    let resolved_cache = resolver.resolve_batch(requests, meta).await;
+    let resolver =
+        AsyncMonotonicResolver::new(store);
+    let resolved_cache = resolver
+        .resolve_batch(requests, meta)
+        .await;
 
     // Merge caches and materialize
-    let merged = MergedCache::new(&*resolved_cache, &immediate_cache);
-    let selection = materialize(lazy_selection, meta, &merged).map_err(|e| {
-        CompileError::Unsupported(format!("materialization failed: {}", e))
+    let merged = MergedCache::new(
+        &*resolved_cache,
+        &immediate_cache,
+    );
+    let selection = materialize(
+        lazy_selection,
+        meta,
+        &merged,
+    )
+    .map_err(|e| {
+        CompileError::Unsupported(format!(
+            "materialization failed: {}",
+            e
+        ))
     })?;
 
     // Async resolver doesn't track read count currently
@@ -199,11 +275,21 @@ pub(crate) async fn compile_expr_to_dataset_selection_async(
     expr: &Expr,
     meta: &ZarrDatasetMeta,
     store: zarrs::storage::AsyncReadableWritableListableStorage,
-) -> Result<(DatasetSelection, PlannerStats), CompileError> {
-    let lazy_selection = compile_expr_to_lazy_selection(expr, meta)?;
-    resolve_lazy_selection_async(&lazy_selection, meta, store).await
+) -> Result<
+    (DatasetSelection, PlannerStats),
+    CompileError,
+> {
+    let lazy_selection =
+        compile_expr_to_lazy_selection(
+            expr, meta,
+        )?;
+    resolve_lazy_selection_async(
+        &lazy_selection,
+        meta,
+        store,
+    )
+    .await
 }
-
 
 // ============================================================================
 // Unified ZarrMeta entry points
@@ -215,17 +301,21 @@ pub(crate) fn compile_expr_to_lazy_selection_unified(
     meta: &crate::meta::ZarrMeta,
 ) -> Result<LazyDatasetSelection, CompileError> {
     let legacy_meta = ZarrDatasetMeta::from(meta);
-    compile_expr_to_lazy_selection(expr, &legacy_meta)
+    compile_expr_to_lazy_selection(
+        expr,
+        &legacy_meta,
+    )
 }
 
 // ============================================================================
 // GroupedChunkPlan entry points (heterogeneous chunk grids)
 // ============================================================================
 
-use crate::chunk_plan::indexing::selection_to_chunks::{
-    selection_to_grouped_chunk_plan, selection_to_grouped_chunk_plan_async,
-};
 use crate::chunk_plan::indexing::GroupedChunkPlan;
+use crate::chunk_plan::indexing::selection_to_chunks::{
+    selection_to_grouped_chunk_plan,
+    selection_to_grouped_chunk_plan_async,
+};
 
 /// Compile an expression to a grouped chunk plan (sync).
 ///
@@ -235,9 +325,20 @@ pub(crate) fn compile_expr_to_grouped_chunk_plan(
     expr: &Expr,
     meta: &ZarrDatasetMeta,
     store: zarrs::storage::ReadableWritableListableStorage,
-) -> Result<(GroupedChunkPlan, PlannerStats), CompileError> {
-    let (selection, stats) = compile_expr_to_dataset_selection(expr, meta, store.clone())?;
-    let grouped_plan = selection_to_grouped_chunk_plan(&selection, meta, store)?;
+) -> Result<
+    (GroupedChunkPlan, PlannerStats),
+    CompileError,
+> {
+    let (selection, stats) =
+        compile_expr_to_dataset_selection(
+            expr,
+            meta,
+            store.clone(),
+        )?;
+    let grouped_plan =
+        selection_to_grouped_chunk_plan(
+            &selection, meta, store,
+        )?;
     Ok((grouped_plan, stats))
 }
 
@@ -249,8 +350,21 @@ pub(crate) async fn compile_expr_to_grouped_chunk_plan_async(
     expr: &Expr,
     meta: &ZarrDatasetMeta,
     store: zarrs::storage::AsyncReadableWritableListableStorage,
-) -> Result<(GroupedChunkPlan, PlannerStats), CompileError> {
-    let (selection, stats) = compile_expr_to_dataset_selection_async(expr, meta, store.clone()).await?;
-    let grouped_plan = selection_to_grouped_chunk_plan_async(&selection, meta, store).await?;
+) -> Result<
+    (GroupedChunkPlan, PlannerStats),
+    CompileError,
+> {
+    let (selection, stats) =
+        compile_expr_to_dataset_selection_async(
+            expr,
+            meta,
+            store.clone(),
+        )
+        .await?;
+    let grouped_plan =
+        selection_to_grouped_chunk_plan_async(
+            &selection, meta, store,
+        )
+        .await?;
     Ok((grouped_plan, stats))
 }

@@ -31,17 +31,30 @@ impl<'a> LazyCompileCtx<'a> {
     }
 
     /// Get the index of a dimension by name.
-    pub(crate) fn dim_index(&self, dim: &str) -> Option<usize> {
-        self.dims.iter().position(|d| <IStr as AsRef<str>>::as_ref(d) == dim)
+    pub(crate) fn dim_index(
+        &self,
+        dim: &str,
+    ) -> Option<usize> {
+        self.dims.iter().position(|d| {
+            <IStr as AsRef<str>>::as_ref(d) == dim
+        })
     }
 
     /// Get the length of a dimension by index.
-    pub(crate) fn dim_length(&self, idx: usize) -> Option<u64> {
+    pub(crate) fn dim_length(
+        &self,
+        idx: usize,
+    ) -> Option<u64> {
         self.dim_lengths.get(idx).copied()
     }
 
     /// Check if a column is a dimension.
-    pub(crate) fn is_dimension(&self, col: &str) -> bool {
-        self.dims.iter().any(|d| <IStr as AsRef<str>>::as_ref(d) == col)
+    pub(crate) fn is_dimension(
+        &self,
+        col: &str,
+    ) -> bool {
+        self.dims.iter().any(|d| {
+            <IStr as AsRef<str>>::as_ref(d) == col
+        })
     }
 }

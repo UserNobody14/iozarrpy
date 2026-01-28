@@ -22,7 +22,10 @@ pub(crate) struct ResolutionRequest {
 
 impl ResolutionRequest {
     /// Create a new resolution request.
-    pub(crate) fn new(dim: &str, value_range: ValueRange) -> Self {
+    pub(crate) fn new(
+        dim: &str,
+        value_range: ValueRange,
+    ) -> Self {
         Self {
             dim: dim.istr(),
             value_range,
@@ -30,7 +33,10 @@ impl ResolutionRequest {
     }
 
     /// Create a new resolution request from an already interned dimension name.
-    pub(crate) fn new_interned(dim: IStr, value_range: ValueRange) -> Self {
+    pub(crate) fn new_interned(
+        dim: IStr,
+        value_range: ValueRange,
+    ) -> Self {
         Self { dim, value_range }
     }
 }
@@ -41,14 +47,17 @@ pub(crate) struct InterpolationRequest {
     /// The dimension name.
     pub(crate) dim: IStr,
     /// The target coordinate values that need bracketing indices.
-    pub(crate) points: Arc<Vec<super::types::CoordScalar>>,
+    pub(crate) points:
+        Arc<Vec<super::types::CoordScalar>>,
 }
 
 impl InterpolationRequest {
     /// Create a new interpolation request.
     pub(crate) fn new(
         dim: &str,
-        points: Arc<Vec<super::types::CoordScalar>>,
+        points: Arc<
+            Vec<super::types::CoordScalar>,
+        >,
     ) -> Self {
         Self {
             dim: dim.istr(),
@@ -61,7 +70,9 @@ impl InterpolationRequest {
 ///
 /// This is returned by resolvers after batch resolution and is used during
 /// materialization to look up resolved index ranges.
-pub(crate) trait ResolutionCache: std::fmt::Debug {
+pub(crate) trait ResolutionCache:
+    std::fmt::Debug
+{
     /// Get the resolved index range for a request.
     ///
     /// Returns:
@@ -69,13 +80,19 @@ pub(crate) trait ResolutionCache: std::fmt::Debug {
     /// - `Some(None)` if resolution was attempted but no range could be determined
     ///   (e.g., non-monotonic coordinate array)
     /// - `None` if the request was not found in the cache
-    fn get(&self, request: &ResolutionRequest) -> Option<Option<IndexRange>>;
+    fn get(
+        &self,
+        request: &ResolutionRequest,
+    ) -> Option<Option<IndexRange>>;
 }
 
 /// A simple HashMap-based resolution cache.
 #[derive(Debug, Default)]
 pub(crate) struct HashMapCache {
-    cache: HashMap<ResolutionRequest, Option<IndexRange>>,
+    cache: HashMap<
+        ResolutionRequest,
+        Option<IndexRange>,
+    >,
 }
 
 impl HashMapCache {
@@ -85,7 +102,11 @@ impl HashMapCache {
     }
 
     /// Insert a resolved result into the cache.
-    pub(crate) fn insert(&mut self, request: ResolutionRequest, result: Option<IndexRange>) {
+    pub(crate) fn insert(
+        &mut self,
+        request: ResolutionRequest,
+        result: Option<IndexRange>,
+    ) {
         self.cache.insert(request, result);
     }
 
@@ -97,7 +118,10 @@ impl HashMapCache {
 }
 
 impl ResolutionCache for HashMapCache {
-    fn get(&self, request: &ResolutionRequest) -> Option<Option<IndexRange>> {
+    fn get(
+        &self,
+        request: &ResolutionRequest,
+    ) -> Option<Option<IndexRange>> {
         self.cache.get(request).copied()
     }
 }
@@ -123,7 +147,9 @@ pub(crate) trait SyncCoordResolver {
 /// Implementors resolve a batch of value ranges to index ranges asynchronously,
 /// enabling concurrent I/O for multiple dimensions.
 #[async_trait::async_trait]
-pub(crate) trait AsyncCoordResolver: Send + Sync {
+pub(crate) trait AsyncCoordResolver:
+    Send + Sync
+{
     /// Resolve a batch of requests asynchronously.
     ///
     /// Returns a cache containing the results. Requests that couldn't be resolved
@@ -145,12 +171,23 @@ pub(crate) enum ResolutionError {
 }
 
 impl std::fmt::Display for ResolutionError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
         match self {
             ResolutionError::NotFound(req) => {
-                write!(f, "resolution request not found in cache: {:?}", req)
+                write!(
+                    f,
+                    "resolution request not found in cache: {:?}",
+                    req
+                )
             }
-            ResolutionError::Unresolvable(msg) => write!(f, "unresolvable: {}", msg),
+            ResolutionError::Unresolvable(
+                msg,
+            ) => {
+                write!(f, "unresolvable: {}", msg)
+            }
         }
     }
 }

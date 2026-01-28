@@ -8,8 +8,14 @@ mod adapters;
 mod open_async;
 mod open_sync;
 
-pub use open_async::{open_store_async, open_store_from_object_store_async, AsyncOpenedStore};
-pub use open_sync::{open_store, open_store_from_object_store, OpenedStore};
+pub use open_async::{
+    AsyncOpenedStore, open_store_async,
+    open_store_from_object_store_async,
+};
+pub use open_sync::{
+    OpenedStore, open_store,
+    open_store_from_object_store,
+};
 
 /// Input type for store parameters that can be either a URL string or an ObjectStore instance.
 #[derive(Clone)]
@@ -29,11 +35,15 @@ impl StoreInput {
     /// `AnyObjectStore` handles both:
     /// - `PyObjectStore` - stores created from rainbear's registered builders (full pooling)
     /// - `PyExternalObjectStore` - stores from external libs like obstore (recreated, no shared pool)
-    pub fn from_py(store: &Bound<'_, PyAny>, prefix: Option<String>) -> PyResult<Self> {
+    pub fn from_py(
+        store: &Bound<'_, PyAny>,
+        prefix: Option<String>,
+    ) -> PyResult<Self> {
         if let Ok(s) = store.extract::<String>() {
             Ok(StoreInput::Url(s))
         } else {
-            let any_store: AnyObjectStore = store.extract()?;
+            let any_store: AnyObjectStore =
+                store.extract()?;
             Ok(StoreInput::ObjectStore {
                 store: any_store.into_dyn(),
                 prefix,
@@ -42,21 +52,33 @@ impl StoreInput {
     }
 
     /// Open as an async store.
-    pub fn open_async(self) -> Result<AsyncOpenedStore, String> {
+    pub fn open_async(
+        self,
+    ) -> Result<AsyncOpenedStore, String> {
         match self {
             StoreInput::Url(url) => open_store_async(&url),
             StoreInput::ObjectStore { store, prefix } => {
-                Ok(open_store_from_object_store_async(store, prefix))
+                Ok(open_store_from_object_store_async(
+                    store, prefix,
+                ))
             }
         }
     }
 
     /// Open as a sync store.
-    pub fn open_sync(self) -> Result<OpenedStore, String> {
+    pub fn open_sync(
+        self,
+    ) -> Result<OpenedStore, String> {
         match self {
-            StoreInput::Url(url) => open_store(&url),
-            StoreInput::ObjectStore { store, prefix } => open_store_from_object_store(store, prefix),
+            StoreInput::Url(url) => {
+                open_store(&url)
+            }
+            StoreInput::ObjectStore {
+                store,
+                prefix,
+            } => open_store_from_object_store(
+                store, prefix,
+            ),
         }
     }
 }
-

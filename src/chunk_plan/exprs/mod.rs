@@ -4,16 +4,16 @@
 //! containing unresolved value-based constraints. These are later batch-resolved
 //! and materialized into concrete `DatasetSelection`.
 
+pub mod compile_ctx;
 pub mod compile_node;
 pub mod compile_node_lazy;
-pub mod compile_ctx;
-pub mod literals;
-pub mod expr_utils;
 pub mod errors;
+pub mod expr_utils;
+pub mod literals;
 
-pub(crate) use crate::chunk_plan::indexing::selection::SetOperations;
 pub(crate) use crate::chunk_plan::indexing::Emptyable;
-pub(crate) use errors::CompileError;
+pub(crate) use crate::chunk_plan::indexing::selection::SetOperations;
 pub(crate) use compile_ctx::LazyCompileCtx;
 pub(crate) use compile_node_lazy::compile_node_lazy;
+pub(crate) use errors::CompileError;
 pub(crate) use literals::apply_time_encoding;

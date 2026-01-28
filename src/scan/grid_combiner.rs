@@ -4,8 +4,8 @@
 //! read from separate grids. This module provides utilities to join the results
 //! on dimension columns.
 
-use polars::prelude::*;
 use crate::IStr;
+use polars::prelude::*;
 
 /// Combines DataFrames from multiple grids by joining on dimension columns.
 ///
@@ -23,38 +23,50 @@ pub fn join_grid_dataframes(
         return Ok(DataFrame::empty());
     }
     if dfs.len() == 1 {
-        return Ok(dfs.into_iter().next().unwrap());
+        return Ok(dfs
+            .into_iter()
+            .next()
+            .unwrap());
     }
 
-    let dim_col_strs: Vec<&str> = dim_columns.iter().map(|s| s.as_ref()).collect();
-    
+    let dim_col_strs: Vec<&str> = dim_columns
+        .iter()
+        .map(|s| s.as_ref())
+        .collect();
+
     let mut iter = dfs.into_iter();
     let mut result = iter.next().unwrap();
-    
+
     // Join each subsequent DataFrame on dimension columns
     for df in iter {
         // Get the column names that are NOT dimension columns (these are the variable columns)
-        let right_var_cols: Vec<&str> = df.get_column_names()
+        let right_var_cols: Vec<&str> = df
+            .get_column_names()
             .into_iter()
             .map(|name| name.as_str())
-            .filter(|name| !dim_col_strs.contains(name))
+            .filter(|name| {
+                !dim_col_strs.contains(name)
+            })
             .collect();
-        
+
         if right_var_cols.is_empty() {
             // No new columns to add, skip
             continue;
         }
-        
+
         // Perform outer join on dimension columns
         result = result.join(
             &df,
             &dim_col_strs,
             &dim_col_strs,
-            JoinArgs::new(JoinType::Full).with_coalesce(JoinCoalesce::CoalesceColumns),
+            JoinArgs::new(JoinType::Full)
+                .with_coalesce(
+                    JoinCoalesce::CoalesceColumns,
+                ),
             None,
         )?;
     }
-    
+
     Ok(result)
 }
 
@@ -69,35 +81,44 @@ pub fn join_grid_lazyframes(
         return Ok(DataFrame::empty().lazy());
     }
     if lfs.len() == 1 {
-        return Ok(lfs.into_iter().next().unwrap());
+        return Ok(lfs
+            .into_iter()
+            .next()
+            .unwrap());
     }
 
-    let dim_exprs: Vec<Expr> = dim_columns.iter().map(|s| {
-        let name: &str = s.as_ref();
-        col(name)
-    }).collect();
-    
+    let dim_exprs: Vec<Expr> = dim_columns
+        .iter()
+        .map(|s| {
+            let name: &str = s.as_ref();
+            col(name)
+        })
+        .collect();
+
     let mut iter = lfs.into_iter();
     let mut result = iter.next().unwrap();
-    
+
     // Join each subsequent LazyFrame on dimension columns
     for lf in iter {
         result = result.join(
             lf,
             dim_exprs.clone(),
             dim_exprs.clone(),
-            JoinArgs::new(JoinType::Full).with_coalesce(JoinCoalesce::CoalesceColumns),
+            JoinArgs::new(JoinType::Full)
+                .with_coalesce(
+                    JoinCoalesce::CoalesceColumns,
+                ),
         );
     }
-    
+
     Ok(result)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use polars::df;
     use crate::IntoIStr;
+    use polars::df;
 
     #[test]
     fn test_join_single_df() {
@@ -105,11 +126,16 @@ mod tests {
             "y" => [0i64, 0, 1, 1],
             "x" => [0i64, 1, 0, 1],
             "temp" => [1.0f64, 2.0, 3.0, 4.0],
-        }.unwrap();
-        
+        }
+        .unwrap();
+
         let dims = vec!["y".istr(), "x".istr()];
-        let result = join_grid_dataframes(vec![df.clone()], &dims).unwrap();
-        
+        let result = join_grid_dataframes(
+            vec![df.clone()],
+            &dims,
+        )
+        .unwrap();
+
         assert_eq!(result.height(), 4);
         assert_eq!(result.width(), 3);
     }
@@ -120,17 +146,23 @@ mod tests {
             "y" => [0i64, 0, 1, 1],
             "x" => [0i64, 1, 0, 1],
             "temp" => [1.0f64, 2.0, 3.0, 4.0],
-        }.unwrap();
-        
+        }
+        .unwrap();
+
         let df2 = df! {
             "y" => [0i64, 0, 1, 1],
             "x" => [0i64, 1, 0, 1],
             "pressure" => [100.0f64, 200.0, 300.0, 400.0],
-        }.unwrap();
-        
+        }
+        .unwrap();
+
         let dims = vec!["y".istr(), "x".istr()];
-        let result = join_grid_dataframes(vec![df1, df2], &dims).unwrap();
-        
+        let result = join_grid_dataframes(
+            vec![df1, df2],
+            &dims,
+        )
+        .unwrap();
+
         assert_eq!(result.height(), 4);
         assert_eq!(result.width(), 4); // y, x, temp, pressure
     }

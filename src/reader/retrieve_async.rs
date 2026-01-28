@@ -75,7 +75,9 @@ pub(crate) async fn retrieve_chunk_async(
                 .await
                 .map_err(to_string_err)?,
         )),
-        other => Err(format!("unsupported zarr dtype: {other}")),
+        other => {
+            Err(format!("unsupported zarr dtype: {other}"))
+        }
     }
 }
 
@@ -93,12 +95,21 @@ pub(crate) async fn retrieve_1d_subset_async(
     if len == 0 {
         let id = array.data_type().identifier();
         return ColumnData::empty_for_dtype(id)
-            .ok_or_else(|| format!("unsupported zarr dtype: {id}"));
+            .ok_or_else(|| {
+                format!(
+                    "unsupported zarr dtype: {id}"
+                )
+            });
     }
 
     // Get chunk grid info for dimension 0 (1D array).
-    let chunk_shape = array.chunk_shape(&[0]).map_err(to_string_err)?;
-    let chunk_size = chunk_shape.first().map(|s| s.get()).unwrap_or(len);
+    let chunk_shape = array
+        .chunk_shape(&[0])
+        .map_err(to_string_err)?;
+    let chunk_size = chunk_shape
+        .first()
+        .map(|s| s.get())
+        .unwrap_or(len);
 
     let end = start + len;
     let first_chunk = start / chunk_size;
@@ -106,12 +117,22 @@ pub(crate) async fn retrieve_1d_subset_async(
 
     let id = array.data_type().identifier();
     let mut result =
-        ColumnData::empty_for_dtype(id).ok_or_else(|| format!("unsupported zarr dtype: {id}"))?;
+        ColumnData::empty_for_dtype(id)
+            .ok_or_else(|| {
+                format!(
+                    "unsupported zarr dtype: {id}"
+                )
+            })?;
 
     for chunk_idx in first_chunk..=last_chunk {
-        let chunk_data = retrieve_chunk_async(array, &[chunk_idx]).await?;
+        let chunk_data = retrieve_chunk_async(
+            array,
+            &[chunk_idx],
+        )
+        .await?;
         let chunk_start = chunk_idx * chunk_size;
-        let chunk_end = chunk_start + chunk_data.len() as u64;
+        let chunk_end =
+            chunk_start + chunk_data.len() as u64;
 
         // Calculate slice within this chunk.
         let slice_start = if start > chunk_start {
@@ -125,19 +146,25 @@ pub(crate) async fn retrieve_1d_subset_async(
             chunk_data.len()
         };
 
-        if slice_start == 0 && slice_end == chunk_data.len() {
+        if slice_start == 0
+            && slice_end == chunk_data.len()
+        {
             // Take the whole chunk.
             result.extend(chunk_data);
         } else {
             // Take a slice.
-            result.extend(chunk_data.slice(slice_start, slice_end - slice_start));
+            result.extend(chunk_data.slice(
+                slice_start,
+                slice_end - slice_start,
+            ));
         }
     }
 
     Ok(result)
 }
 
-fn to_string_err<E: std::fmt::Display>(e: E) -> String {
+fn to_string_err<E: std::fmt::Display>(
+    e: E,
+) -> String {
     e.to_string()
 }
-

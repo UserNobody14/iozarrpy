@@ -5,60 +5,99 @@ use zarrs::array_subset::ArraySubset;
 
 use crate::IStr;
 
-use super::grouped_selection::{ArraySelectionType, DatasetSelectionBase, GroupedSelection};
+use super::grouped_selection::{
+    ArraySelectionType, DatasetSelectionBase,
+    GroupedSelection,
+};
 
 /// Dataset-level selection: type alias for the generic `DatasetSelectionBase`.
 ///
 /// This groups variables by their dimension signature to avoid duplication.
-pub(crate) type DatasetSelection = DatasetSelectionBase<DataArraySelection>;
+pub(crate) type DatasetSelection =
+    DatasetSelectionBase<DataArraySelection>;
 
 /// Trait for dataset selections that can iterate over variables.
 pub trait DSelection {
-    fn vars(&self) -> impl Iterator<Item = (&str, &DataArraySelection)>;
+    fn vars(
+        &self,
+    ) -> impl Iterator<
+        Item = (&str, &DataArraySelection),
+    >;
 }
 
-impl DSelection for GroupedSelection<DataArraySelection> {
-    fn vars(&self) -> impl Iterator<Item = (&str, &DataArraySelection)> {
-        Box::new(GroupedSelection::vars(self)) as Box<dyn Iterator<Item = _>>
+impl DSelection
+    for GroupedSelection<DataArraySelection>
+{
+    fn vars(
+        &self,
+    ) -> impl Iterator<
+        Item = (&str, &DataArraySelection),
+    > {
+        Box::new(GroupedSelection::vars(self))
+            as Box<dyn Iterator<Item = _>>
     }
 }
 
 impl DSelection for DatasetSelection {
-    fn vars(&self) -> impl Iterator<Item = (&str, &DataArraySelection)> {
+    fn vars(
+        &self,
+    ) -> impl Iterator<
+        Item = (&str, &DataArraySelection),
+    > {
         match self {
-            Self::Selection(selection) => Box::new(selection.vars()) as Box<dyn Iterator<Item = (&str, &DataArraySelection)>>,
-            Self::NoSelectionMade => Box::new(std::iter::empty()),
-            Self::Empty => Box::new(std::iter::empty()),
+            Self::Selection(selection) => Box::new(
+                selection.vars(),
+            )
+                as Box<
+                    dyn Iterator<
+                        Item = (
+                            &str,
+                            &DataArraySelection,
+                        ),
+                    >,
+                >,
+            Self::NoSelectionMade => {
+                Box::new(std::iter::empty())
+            }
+            Self::Empty => {
+                Box::new(std::iter::empty())
+            }
         }
     }
 }
 
 /// Selection for a single array, expressed as a disjunction (OR) of hyper-rectangles.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(
+    Debug, Clone, Default, PartialEq, Eq,
+)]
 pub(crate) struct DataArraySelection {
     /// SmallVec of dimension names wrapped in Arc for cheap cloning in set operations.
     /// Each name's position in the vec labels its index.
     /// So if we had [a, b, c], a would be our label for dim 0, b would be 1, c would be 2.
     dims: Arc<SmallVec<[IStr; 4]>>,
     /// List of associated ArraySubsets
-    subsets: ArraySubsetList
+    subsets: ArraySubsetList,
 }
 
 impl DataArraySelection {
-    pub(crate) fn subsets_iter(&self) -> impl Iterator<Item = &ArraySubset> {
+    pub(crate) fn subsets_iter(
+        &self,
+    ) -> impl Iterator<Item = &ArraySubset> {
         self.subsets.0.iter()
     }
 
-    pub (crate) fn from_subsets(dims: &[IStr], subsets: ArraySubsetList) -> Self {
+    pub(crate) fn from_subsets(
+        dims: &[IStr],
+        subsets: ArraySubsetList,
+    ) -> Self {
         Self {
-            dims: Arc::new(dims.iter().cloned().collect()),
+            dims: Arc::new(
+                dims.iter().cloned().collect(),
+            ),
             subsets,
         }
     }
-
 }
-
-
 
 pub trait Emptyable {
     fn empty() -> Self;
@@ -72,7 +111,6 @@ pub trait SetOperations: Emptyable {
     fn difference(&self, other: &Self) -> Self;
     fn exclusive_or(&self, other: &Self) -> Self;
 }
-
 
 // Note: Emptyable and SetOperations for DatasetSelection are provided by
 // the generic DatasetSelectionBase<Sel> implementation in grouped_selection.rs
@@ -101,8 +139,10 @@ impl ArraySelectionType for DataArraySelection {
 }
 
 impl SetOperations for DataArraySelection {
-
-    fn union(&self, other: &DataArraySelection) -> DataArraySelection {
+    fn union(
+        &self,
+        other: &DataArraySelection,
+    ) -> DataArraySelection {
         if self.is_empty() && other.is_empty() {
             return DataArraySelection {
                 dims: self.dims.clone(),
@@ -123,11 +163,16 @@ impl SetOperations for DataArraySelection {
         }
         DataArraySelection {
             dims: self.dims.clone(),
-            subsets: self.subsets.union(&other.subsets),
+            subsets: self
+                .subsets
+                .union(&other.subsets),
         }
     }
 
-    fn intersect(&self, other: &DataArraySelection) -> DataArraySelection {
+    fn intersect(
+        &self,
+        other: &DataArraySelection,
+    ) -> DataArraySelection {
         if self.is_empty() || other.is_empty() {
             return DataArraySelection {
                 dims: self.dims.clone(),
@@ -136,11 +181,16 @@ impl SetOperations for DataArraySelection {
         }
         DataArraySelection {
             dims: self.dims.clone(),
-            subsets: self.subsets.intersect(&other.subsets),
+            subsets: self
+                .subsets
+                .intersect(&other.subsets),
         }
     }
 
-    fn difference(&self, other: &DataArraySelection) -> DataArraySelection {
+    fn difference(
+        &self,
+        other: &DataArraySelection,
+    ) -> DataArraySelection {
         if self.is_empty() {
             return DataArraySelection {
                 dims: self.dims.clone(),
@@ -155,7 +205,9 @@ impl SetOperations for DataArraySelection {
         }
         DataArraySelection {
             dims: self.dims.clone(),
-            subsets: self.subsets.difference(&other.subsets),
+            subsets: self
+                .subsets
+                .difference(&other.subsets),
         }
     }
 
@@ -168,15 +220,22 @@ impl SetOperations for DataArraySelection {
     //     DataArraySelection(out)
     // }
 
-    fn exclusive_or(&self, other: &DataArraySelection) -> DataArraySelection {
-        self.difference(other).union(&other.difference(self))
+    fn exclusive_or(
+        &self,
+        other: &DataArraySelection,
+    ) -> DataArraySelection {
+        self.difference(other)
+            .union(&other.difference(self))
     }
 }
 
+#[derive(
+    Debug, Clone, Default, PartialEq, Eq,
+)]
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-
-pub (crate) struct ArraySubsetList(Vec<ArraySubset>);
+pub(crate) struct ArraySubsetList(
+    Vec<ArraySubset>,
+);
 
 impl From<Vec<ArraySubset>> for ArraySubsetList {
     fn from(subsets: Vec<ArraySubset>) -> Self {
@@ -184,8 +243,12 @@ impl From<Vec<ArraySubset>> for ArraySubsetList {
     }
 }
 
-impl From<DataArraySelection> for ArraySubsetList {
-    fn from(selection: DataArraySelection) -> Self {
+impl From<DataArraySelection>
+    for ArraySubsetList
+{
+    fn from(
+        selection: DataArraySelection,
+    ) -> Self {
         selection.subsets
     }
 }
@@ -194,19 +257,31 @@ impl ArraySubsetList {
     pub(crate) fn new() -> Self {
         Self(Vec::new())
     }
-    pub(crate) fn push(&mut self, subset: ArraySubset) {
+    pub(crate) fn push(
+        &mut self,
+        subset: ArraySubset,
+    ) {
         self.0.push(subset);
     }
-    pub(crate) fn extend(&mut self, other: &ArraySubsetList) {
+    pub(crate) fn extend(
+        &mut self,
+        other: &ArraySubsetList,
+    ) {
         self.0.extend(other.0.iter().cloned());
     }
-    pub(crate) fn subsets_iter(&self) -> impl Iterator<Item = &ArraySubset> {
+    pub(crate) fn subsets_iter(
+        &self,
+    ) -> impl Iterator<Item = &ArraySubset> {
         self.0.iter()
     }
-    pub(crate) fn num_elements_usize(&self) -> usize {
-        self.0.iter().map(|s| s.num_elements_usize()).sum()
+    pub(crate) fn num_elements_usize(
+        &self,
+    ) -> usize {
+        self.0
+            .iter()
+            .map(|s| s.num_elements_usize())
+            .sum()
     }
-    
 }
 
 impl Emptyable for ArraySubsetList {
@@ -227,98 +302,151 @@ impl Emptyable for ArraySubset {
     }
 }
 
-
 /// Compute the difference of two hyper-rectangles A \ B.
 /// Returns a list of non-overlapping rectangles that together form A \ B.
 ///
 /// The algorithm "peels off" slices of A that don't overlap with B,
 /// dimension by dimension. This produces at most n rectangles for n dimensions.
-fn hyper_rectangle_difference(a: &ArraySubset, b: &ArraySubset) -> Vec<ArraySubset> {
+fn hyper_rectangle_difference(
+    a: &ArraySubset,
+    b: &ArraySubset,
+) -> Vec<ArraySubset> {
     let ndim = a.shape().len();
     if ndim != b.shape().len() {
         return vec![a.clone()];
     }
-    
+
     // Check if there's any overlap
     match a.overlap(b) {
-        Ok(overlap) if overlap.is_empty() => return vec![a.clone()],
+        Ok(overlap) if overlap.is_empty() => {
+            return vec![a.clone()];
+        }
         Err(_) => return vec![a.clone()],
         _ => {}
     }
-    
+
     let a_ranges = a.to_ranges();
     let b_ranges = b.to_ranges();
-    
+
     let mut result = Vec::new();
     // Track the "remaining" part of A as we peel off pieces
     let mut remaining_ranges = a_ranges.clone();
-    
+
     for dim in 0..ndim {
         let a_range = &remaining_ranges[dim];
         let b_range = &b_ranges[dim];
-        
+
         // Part of A before B in this dimension
-        if a_range.start < b_range.start && b_range.start < a_range.end {
-            let mut piece = remaining_ranges.clone();
-            piece[dim] = a_range.start..b_range.start;
-            result.push(ArraySubset::new_with_ranges(&piece));
+        if a_range.start < b_range.start
+            && b_range.start < a_range.end
+        {
+            let mut piece =
+                remaining_ranges.clone();
+            piece[dim] =
+                a_range.start..b_range.start;
+            result.push(
+                ArraySubset::new_with_ranges(
+                    &piece,
+                ),
+            );
         }
-        
+
         // Part of A after B in this dimension
-        if a_range.end > b_range.end && b_range.end > a_range.start {
-            let mut piece = remaining_ranges.clone();
+        if a_range.end > b_range.end
+            && b_range.end > a_range.start
+        {
+            let mut piece =
+                remaining_ranges.clone();
             piece[dim] = b_range.end..a_range.end;
-            result.push(ArraySubset::new_with_ranges(&piece));
+            result.push(
+                ArraySubset::new_with_ranges(
+                    &piece,
+                ),
+            );
         }
-        
+
         // Narrow remaining to the overlap in this dimension for next iteration
-        remaining_ranges[dim] = a_range.start.max(b_range.start)..a_range.end.min(b_range.end);
+        remaining_ranges[dim] =
+            a_range.start.max(b_range.start)
+                ..a_range.end.min(b_range.end);
         if remaining_ranges[dim].is_empty() {
             // No overlap in this dimension, we've already captured all of A
             break;
         }
     }
-    
+
     // Filter out any empty subsets
-    result.into_iter().filter(|s| !s.is_empty()).collect()
+    result
+        .into_iter()
+        .filter(|s| !s.is_empty())
+        .collect()
 }
 
 impl SetOperations for ArraySubset {
-    fn union(&self, other: &ArraySubset) -> ArraySubset {
+    fn union(
+        &self,
+        other: &ArraySubset,
+    ) -> ArraySubset {
         // Union of two rectangles isn't a single rectangle in general
         // Return the bounding box as a conservative over-approximation
         // (The real union is handled at ArraySubsetList level)
-        self.overlap(other).unwrap_or_else(|_| ArraySubset::empty())
+        self.overlap(other).unwrap_or_else(|_| {
+            ArraySubset::empty()
+        })
     }
-    fn intersect(&self, other: &ArraySubset) -> ArraySubset {
-        self.overlap(other).unwrap_or_else(|_| ArraySubset::empty())
+    fn intersect(
+        &self,
+        other: &ArraySubset,
+    ) -> ArraySubset {
+        self.overlap(other).unwrap_or_else(|_| {
+            ArraySubset::empty()
+        })
     }
-    fn difference(&self, other: &ArraySubset) -> ArraySubset {
+    fn difference(
+        &self,
+        other: &ArraySubset,
+    ) -> ArraySubset {
         // Single-rectangle difference returns multiple rectangles
         // This method is not ideal - use hyper_rectangle_difference directly
         // For now, return empty if they overlap, otherwise return self
         match self.overlap(other) {
-            Ok(overlap) if !overlap.is_empty() => ArraySubset::new_empty(self.shape().len()),
+            Ok(overlap)
+                if !overlap.is_empty() =>
+            {
+                ArraySubset::new_empty(
+                    self.shape().len(),
+                )
+            }
             _ => self.clone(),
         }
     }
-    fn exclusive_or(&self, _other: &ArraySubset) -> ArraySubset {
+    fn exclusive_or(
+        &self,
+        _other: &ArraySubset,
+    ) -> ArraySubset {
         // XOR can't be represented as single rectangle
         ArraySubset::new_empty(self.shape().len())
     }
 }
 
 impl SetOperations for ArraySubsetList {
-    fn union(&self, other: &ArraySubsetList) -> ArraySubsetList {
+    fn union(
+        &self,
+        other: &ArraySubsetList,
+    ) -> ArraySubsetList {
         let mut out = self.0.clone();
         out.extend(other.0.iter().cloned());
         Self(out)
     }
-    fn intersect(&self, other: &ArraySubsetList) -> ArraySubsetList {
+    fn intersect(
+        &self,
+        other: &ArraySubsetList,
+    ) -> ArraySubsetList {
         let mut out = Vec::new();
         for a in &self.0 {
             for b in &other.0 {
-                if let Ok(overlap) = a.overlap(b) {
+                if let Ok(overlap) = a.overlap(b)
+                {
                     if !overlap.is_empty() {
                         out.push(overlap);
                     }
@@ -327,27 +455,34 @@ impl SetOperations for ArraySubsetList {
         }
         Self(out)
     }
-    fn difference(&self, other: &ArraySubsetList) -> ArraySubsetList {
+    fn difference(
+        &self,
+        other: &ArraySubsetList,
+    ) -> ArraySubsetList {
         // For A \ B where A and B are both lists of rectangles:
         // Start with all rectangles from A, then subtract each rectangle from B
         let mut current = self.0.clone();
-        
+
         for b in &other.0 {
             let mut next = Vec::new();
             for a in &current {
                 // Subtract b from a, which may produce multiple rectangles
-                let diff = hyper_rectangle_difference(a, b);
+                let diff =
+                    hyper_rectangle_difference(
+                        a, b,
+                    );
                 next.extend(diff);
             }
             current = next;
         }
-        
+
         Self(current)
     }
-    fn exclusive_or(&self, other: &ArraySubsetList) -> ArraySubsetList {
-        self.difference(other).union(&other.difference(self))
+    fn exclusive_or(
+        &self,
+        other: &ArraySubsetList,
+    ) -> ArraySubsetList {
+        self.difference(other)
+            .union(&other.difference(self))
     }
 }
-
-
-

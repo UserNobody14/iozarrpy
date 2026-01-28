@@ -4,14 +4,14 @@ use std::sync::Arc;
 use smallvec::SmallVec;
 use zarrs::array::Array;
 
-use crate::chunk_plan::CompileError;
-use crate::chunk_plan::indexing::selection::ArraySubsetList;
 use super::DatasetSelection;
 use super::plan::GroupedChunkPlan;
 use super::types::ChunkGridSignature;
+use crate::chunk_plan::CompileError;
+use crate::chunk_plan::indexing::selection::ArraySubsetList;
 
-use crate::meta::ZarrDatasetMeta;
 use crate::IntoIStr;
+use crate::meta::ZarrDatasetMeta;
 
 /// Convert a DatasetSelection to a GroupedChunkPlan.
 ///
@@ -26,64 +26,100 @@ pub(crate) fn selection_to_grouped_chunk_plan(
     meta: &ZarrDatasetMeta,
     store: zarrs::storage::ReadableWritableListableStorage,
 ) -> Result<GroupedChunkPlan, CompileError> {
-    let mut grouped_plan = GroupedChunkPlan::new();
-    
+    let mut grouped_plan =
+        GroupedChunkPlan::new();
+
     // Cache for grid signatures to avoid duplicate Arc allocations
-    let mut sig_cache: BTreeMap<ChunkGridSignature, Arc<ChunkGridSignature>> = BTreeMap::new();
-    
+    let mut sig_cache: BTreeMap<
+        ChunkGridSignature,
+        Arc<ChunkGridSignature>,
+    > = BTreeMap::new();
+
     // For NoSelectionMade, we need to include all data variables with "all chunks"
-    let vars_to_process: Vec<(&str, Option<&super::selection::DataArraySelection>)> = match selection {
+    let vars_to_process: Vec<(
+        &str,
+        Option<
+            &super::selection::DataArraySelection,
+        >,
+    )> = match selection {
         DatasetSelection::NoSelectionMade => {
             // Include all data variables with None (meaning "all")
-            meta.data_vars.iter().map(|v| (v.as_ref(), None)).collect()
+            meta.data_vars
+                .iter()
+                .map(|v| (v.as_ref(), None))
+                .collect()
         }
         DatasetSelection::Empty => {
             // No variables, return empty plan
             return Ok(grouped_plan);
         }
-        DatasetSelection::Selection(grouped_sel) => {
+        DatasetSelection::Selection(
+            grouped_sel,
+        ) => {
             // Include variables from the selection
-            grouped_sel.vars().map(|(v, sel)| (v, Some(sel))).collect()
+            grouped_sel
+                .vars()
+                .map(|(v, sel)| (v, Some(sel)))
+                .collect()
         }
     };
-    
+
     for (var, maybe_sel) in vars_to_process {
         let var_key = var.istr();
-        let Some(var_meta) = meta.arrays.get(&var_key) else {
+        let Some(var_meta) =
+            meta.arrays.get(&var_key)
+        else {
             continue;
         };
-        
+
         // Open the array to get chunk grid info
-        let arr = Array::open(store.clone(), var_meta.path.as_ref()).map_err(|e| {
-            CompileError::Unsupported(format!("failed to open array '{var}': {e}"))
+        let arr = Array::open(
+            store.clone(),
+            var_meta.path.as_ref(),
+        )
+        .map_err(|e| {
+            CompileError::Unsupported(format!(
+                "failed to open array '{var}': {e}"
+            ))
         })?;
-        
-        let zero = vec![0u64; arr.dimensionality()];
+
+        let zero =
+            vec![0u64; arr.dimensionality()];
         let chunk_shape_nz = arr
             .chunk_shape(&zero)
-            .map_err(|e| CompileError::Unsupported(e.to_string()))?;
-        let chunk_shape: SmallVec<[u64; 4]> = chunk_shape_nz
-            .iter()
-            .map(|nz| nz.get())
-            .collect();
-        
+            .map_err(|e| {
+                CompileError::Unsupported(
+                    e.to_string(),
+                )
+            })?;
+        let chunk_shape: SmallVec<[u64; 4]> =
+            chunk_shape_nz
+                .iter()
+                .map(|nz| nz.get())
+                .collect();
+
         // Create the chunk grid signature
-        let sig = ChunkGridSignature::new(var_meta.dims.clone(), chunk_shape);
+        let sig = ChunkGridSignature::new(
+            var_meta.dims.clone(),
+            chunk_shape,
+        );
         let sig_arc = sig_cache
             .entry(sig.clone())
             .or_insert_with(|| Arc::new(sig))
             .clone();
-        
+
         // Compute chunk indices based on selection
-        let chunk_plan = if let Some(sel) = maybe_sel {
-            sel.clone().into()
-        } else {
-            ArraySubsetList::new()
-        };
-        
-        grouped_plan.insert(var_key, sig_arc, chunk_plan);
+        let chunk_plan =
+            if let Some(sel) = maybe_sel {
+                sel.clone().into()
+            } else {
+                ArraySubsetList::new()
+            };
+
+        grouped_plan
+            .insert(var_key, sig_arc, chunk_plan);
     }
-    
+
     Ok(grouped_plan)
 }
 
@@ -93,61 +129,92 @@ pub(crate) async fn selection_to_grouped_chunk_plan_async(
     meta: &ZarrDatasetMeta,
     store: zarrs::storage::AsyncReadableWritableListableStorage,
 ) -> Result<GroupedChunkPlan, CompileError> {
-    let mut grouped_plan = GroupedChunkPlan::new();
-    
+    let mut grouped_plan =
+        GroupedChunkPlan::new();
+
     // Cache for grid signatures
-    let mut sig_cache: BTreeMap<ChunkGridSignature, Arc<ChunkGridSignature>> = BTreeMap::new();
-    
+    let mut sig_cache: BTreeMap<
+        ChunkGridSignature,
+        Arc<ChunkGridSignature>,
+    > = BTreeMap::new();
+
     // For NoSelectionMade, include all data variables
-    let vars_to_process: Vec<(&str, Option<&super::selection::DataArraySelection>)> = match selection {
-        DatasetSelection::NoSelectionMade => {
-            meta.data_vars.iter().map(|v| (v.as_ref(), None)).collect()
-        }
+    let vars_to_process: Vec<(
+        &str,
+        Option<
+            &super::selection::DataArraySelection,
+        >,
+    )> = match selection {
+        DatasetSelection::NoSelectionMade => meta
+            .data_vars
+            .iter()
+            .map(|v| (v.as_ref(), None))
+            .collect(),
         DatasetSelection::Empty => {
             return Ok(grouped_plan);
         }
-        DatasetSelection::Selection(grouped_sel) => {
-            grouped_sel.vars().map(|(v, sel)| (v, Some(sel))).collect()
-        }
+        DatasetSelection::Selection(
+            grouped_sel,
+        ) => grouped_sel
+            .vars()
+            .map(|(v, sel)| (v, Some(sel)))
+            .collect(),
     };
-    
+
     for (var, maybe_sel) in vars_to_process {
         let var_key = var.istr();
-        let Some(var_meta) = meta.arrays.get(&var_key) else {
+        let Some(var_meta) =
+            meta.arrays.get(&var_key)
+        else {
             continue;
         };
-        
+
         // Open the array async
-        let arr = zarrs::array::Array::async_open(store.clone(), var_meta.path.as_ref())
-            .await
-            .map_err(|e| {
-                CompileError::Unsupported(format!("failed to open array '{var}': {e}"))
-            })?;
-        
-        let zero = vec![0u64; arr.dimensionality()];
+        let arr = zarrs::array::Array::async_open(
+            store.clone(),
+            var_meta.path.as_ref(),
+        )
+        .await
+        .map_err(|e| {
+            CompileError::Unsupported(format!(
+                "failed to open array '{var}': {e}"
+            ))
+        })?;
+
+        let zero =
+            vec![0u64; arr.dimensionality()];
         let chunk_shape_nz = arr
             .chunk_shape(&zero)
-            .map_err(|e| CompileError::Unsupported(e.to_string()))?;
-        let chunk_shape: SmallVec<[u64; 4]> = chunk_shape_nz
-            .iter()
-            .map(|nz| nz.get())
-            .collect();
-        
-        let sig = ChunkGridSignature::new(var_meta.dims.clone(), chunk_shape);
+            .map_err(|e| {
+                CompileError::Unsupported(
+                    e.to_string(),
+                )
+            })?;
+        let chunk_shape: SmallVec<[u64; 4]> =
+            chunk_shape_nz
+                .iter()
+                .map(|nz| nz.get())
+                .collect();
+
+        let sig = ChunkGridSignature::new(
+            var_meta.dims.clone(),
+            chunk_shape,
+        );
         let sig_arc = sig_cache
             .entry(sig.clone())
             .or_insert_with(|| Arc::new(sig))
             .clone();
-        
-        let chunk_plan = if let Some(sel) = maybe_sel {
-            sel.clone().into()
-        } else {
-            ArraySubsetList::new()
-        };  
-        
-        grouped_plan.insert(var_key, sig_arc, chunk_plan);
+
+        let chunk_plan =
+            if let Some(sel) = maybe_sel {
+                sel.clone().into()
+            } else {
+                ArraySubsetList::new()
+            };
+
+        grouped_plan
+            .insert(var_key, sig_arc, chunk_plan);
     }
-    
+
     Ok(grouped_plan)
 }
-

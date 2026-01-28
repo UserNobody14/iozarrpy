@@ -12,8 +12,8 @@ use smallvec::SmallVec;
 use super::grouped_selection::ArraySelectionType;
 use super::selection::Emptyable;
 use super::types::ValueRange;
-use std::ops::Range;
 use crate::{IStr, IntoIStr};
+use std::ops::Range;
 
 /// A per-dimension constraint in value-space (deferred resolution).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -29,7 +29,9 @@ pub(crate) enum LazyDimConstraint {
     UnresolvedInterpolation(Arc<ValueRange>),
     /// Interpolation with multiple target points - each needs bracketing indices.
     /// The resolution will union the bracketing ranges for each point with clamping.
-    UnresolvedInterpolationPoints(Arc<Vec<super::types::CoordScalar>>),
+    UnresolvedInterpolationPoints(
+        Arc<Vec<super::types::CoordScalar>>,
+    ),
     /// Already resolved (optimization for pre-computed constraints).
     Resolved(Range<u64>),
 }
@@ -44,13 +46,14 @@ impl LazyDimConstraint {
             || matches!(self, LazyDimConstraint::UnresolvedInterpolation(vr) if vr.empty)
             || matches!(self, LazyDimConstraint::UnresolvedInterpolationPoints(pts) if pts.is_empty())
     }
-
 }
 
 /// Conjunction (AND) of per-dimension lazy constraints.
 ///
 /// Missing dimension keys mean "all indices along that dimension".
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(
+    Debug, Clone, Default, PartialEq, Eq,
+)]
 pub(crate) struct LazyHyperRectangle {
     dims: BTreeMap<IStr, LazyDimConstraint>,
     empty: bool,
@@ -76,7 +79,11 @@ impl LazyHyperRectangle {
     /// Returns true if this rectangle is proven empty.
     #[inline]
     pub(crate) fn is_empty(&self) -> bool {
-        self.empty || self.dims.values().any(|c| c.is_empty())
+        self.empty
+            || self
+                .dims
+                .values()
+                .any(|c| c.is_empty())
     }
 
     /// Returns true if this rectangle represents "select all" (no constraints).
@@ -86,37 +93,67 @@ impl LazyHyperRectangle {
     }
 
     /// Get constraint for a specific dimension.
-    pub(crate) fn get_dim(&self, dim: &str) -> Option<&LazyDimConstraint> {
+    pub(crate) fn get_dim(
+        &self,
+        dim: &str,
+    ) -> Option<&LazyDimConstraint> {
         self.dims.get(&dim.istr())
     }
 
     /// Iterate over all dimension constraints.
-    pub(crate) fn dims(&self) -> impl Iterator<Item = (&IStr, &LazyDimConstraint)> {
+    pub(crate) fn dims(
+        &self,
+    ) -> impl Iterator<
+        Item = (&IStr, &LazyDimConstraint),
+    > {
         self.dims.iter()
     }
 
     /// Add a constraint to a dimension.
-    pub(crate) fn with_dim(mut self, dim: IStr, constraint: LazyDimConstraint) -> Self {
+    pub(crate) fn with_dim(
+        mut self,
+        dim: IStr,
+        constraint: LazyDimConstraint,
+    ) -> Self {
         if constraint.is_empty() {
             self.empty = true;
             self.dims.clear();
             return self;
         }
-        if !self.empty && !matches!(constraint, LazyDimConstraint::All) {
+        if !self.empty
+            && !matches!(
+                constraint,
+                LazyDimConstraint::All
+            )
+        {
             self.dims.insert(dim, constraint);
         }
         self
     }
 
     /// Add a constraint from a string dimension name.
-    pub(crate) fn with_dim_str(self, dim: &str, constraint: LazyDimConstraint) -> Self {
+    pub(crate) fn with_dim_str(
+        self,
+        dim: &str,
+        constraint: LazyDimConstraint,
+    ) -> Self {
         self.with_dim(dim.istr(), constraint)
     }
 
     /// Create a rectangle from a map of constraints.
-    pub(crate) fn with_dims(constraints: BTreeMap<IStr, LazyDimConstraint>) -> Self {
-        let empty = constraints.values().any(|c| c.is_empty());
-        Self { dims: constraints, empty }
+    pub(crate) fn with_dims(
+        constraints: BTreeMap<
+            IStr,
+            LazyDimConstraint,
+        >,
+    ) -> Self {
+        let empty = constraints
+            .values()
+            .any(|c| c.is_empty());
+        Self {
+            dims: constraints,
+            empty,
+        }
     }
 }
 
@@ -129,10 +166,16 @@ pub(crate) enum LazyArraySelection {
     Rectangles(SmallVec<[LazyHyperRectangle; 4]>),
     /// Deferred difference operation (A \ B).
     /// Stored because computing difference may require resolution of both sides.
-    Difference(Box<LazyArraySelection>, Box<LazyArraySelection>),
+    Difference(
+        Box<LazyArraySelection>,
+        Box<LazyArraySelection>,
+    ),
     /// Deferred union operation (A | B).
     /// Stored when we can't easily flatten the union (e.g., union of Differences).
-    Union(Box<LazyArraySelection>, Box<LazyArraySelection>),
+    Union(
+        Box<LazyArraySelection>,
+        Box<LazyArraySelection>,
+    ),
 }
 
 impl Default for LazyArraySelection {
@@ -155,7 +198,9 @@ impl LazyArraySelection {
     }
 
     /// Create a selection from a single rectangle.
-    pub(crate) fn from_rectangle(rect: LazyHyperRectangle) -> Self {
+    pub(crate) fn from_rectangle(
+        rect: LazyHyperRectangle,
+    ) -> Self {
         if rect.is_empty() {
             Self::empty()
         } else {
@@ -168,10 +213,17 @@ impl LazyArraySelection {
     /// Returns true if this selection is proven empty.
     pub(crate) fn is_empty(&self) -> bool {
         match self {
-            Self::Rectangles(rects) => rects.is_empty() || rects.iter().all(|r| r.is_empty()),
+            Self::Rectangles(rects) => {
+                rects.is_empty()
+                    || rects
+                        .iter()
+                        .all(|r| r.is_empty())
+            }
             // For difference/union, we can't determine emptiness without resolution
             Self::Difference(_, _) => false,
-            Self::Union(a, b) => a.is_empty() && b.is_empty(),
+            Self::Union(a, b) => {
+                a.is_empty() && b.is_empty()
+            }
         }
     }
 
@@ -179,18 +231,22 @@ impl LazyArraySelection {
     pub(crate) fn is_all(&self) -> bool {
         match self {
             Self::Rectangles(rects) => {
-                rects.len() == 1 && rects[0].is_all()
+                rects.len() == 1
+                    && rects[0].is_all()
             }
-            Self::Difference(_, _) | Self::Union(_, _) => false,
+            Self::Difference(_, _)
+            | Self::Union(_, _) => false,
         }
     }
-
 }
 
 /// Dataset-level lazy selection: type alias for the generic `DatasetSelectionBase`.
 ///
 /// This groups variables by their dimension signature to avoid duplication.
-pub(crate) type LazyDatasetSelection = super::grouped_selection::DatasetSelectionBase<LazyArraySelection>;
+pub(crate) type LazyDatasetSelection =
+    super::grouped_selection::DatasetSelectionBase<
+        LazyArraySelection,
+    >;
 
 /// Create a lazy dataset selection for the given variables with all indices selected.
 ///
@@ -210,7 +266,9 @@ pub(crate) fn lazy_dataset_for_vars_with_selection(
     meta: &crate::meta::ZarrDatasetMeta,
     sel: LazyArraySelection,
 ) -> LazyDatasetSelection {
-    LazyDatasetSelection::for_vars_with_selection(vars, meta, sel)
+    LazyDatasetSelection::for_vars_with_selection(
+        vars, meta, sel,
+    )
 }
 
 // ============================================================================
@@ -229,16 +287,20 @@ impl Emptyable for Range<u64> {
 }
 impl SetOperations for Range<u64> {
     fn union(&self, other: &Self) -> Self {
-        self.start.min(other.start)..self.end.max(other.end)
+        self.start.min(other.start)
+            ..self.end.max(other.end)
     }
     fn intersect(&self, other: &Self) -> Self {
-        self.start.max(other.start)..self.end.min(other.end)
+        self.start.max(other.start)
+            ..self.end.min(other.end)
     }
     fn difference(&self, other: &Self) -> Self {
-        self.start.max(other.start)..self.end.min(other.end)
+        self.start.max(other.start)
+            ..self.end.min(other.end)
     }
     fn exclusive_or(&self, other: &Self) -> Self {
-        self.start.max(other.start)..self.end.min(other.end)
+        self.start.max(other.start)
+            ..self.end.min(other.end)
     }
 }
 
@@ -254,11 +316,20 @@ impl SetOperations for LazyDimConstraint {
     fn union(&self, other: &Self) -> Self {
         // Union of constraints: the less restrictive one wins
         match (self, other) {
-            (LazyDimConstraint::Empty, x) | (x, LazyDimConstraint::Empty) => x.clone(),
-            (LazyDimConstraint::All, _) | (_, LazyDimConstraint::All) => LazyDimConstraint::All,
-            (LazyDimConstraint::Resolved(a), LazyDimConstraint::Resolved(b)) => {
-                LazyDimConstraint::Resolved(a.union(b))
+            (LazyDimConstraint::Empty, x)
+            | (x, LazyDimConstraint::Empty) => {
+                x.clone()
             }
+            (LazyDimConstraint::All, _)
+            | (_, LazyDimConstraint::All) => {
+                LazyDimConstraint::All
+            }
+            (
+                LazyDimConstraint::Resolved(a),
+                LazyDimConstraint::Resolved(b),
+            ) => LazyDimConstraint::Resolved(
+                a.union(b),
+            ),
             // Can't merge unresolved constraints without resolution - return All conservatively
             _ => LazyDimConstraint::All,
         }
@@ -327,16 +398,29 @@ impl SetOperations for LazyDimConstraint {
 
     fn difference(&self, other: &Self) -> Self {
         match (self, other) {
-            (LazyDimConstraint::Empty, _) => LazyDimConstraint::Empty,
-            (x, LazyDimConstraint::Empty) => x.clone(),
-            (_, LazyDimConstraint::All) => LazyDimConstraint::Empty,
-            (LazyDimConstraint::All, _) => LazyDimConstraint::All, // Can't compute A \ B without knowing B
-            (LazyDimConstraint::Resolved(a), LazyDimConstraint::Resolved(b)) => {
+            (LazyDimConstraint::Empty, _) => {
+                LazyDimConstraint::Empty
+            }
+            (x, LazyDimConstraint::Empty) => {
+                x.clone()
+            }
+            (_, LazyDimConstraint::All) => {
+                LazyDimConstraint::Empty
+            }
+            (LazyDimConstraint::All, _) => {
+                LazyDimConstraint::All
+            } // Can't compute A \ B without knowing B
+            (
+                LazyDimConstraint::Resolved(a),
+                LazyDimConstraint::Resolved(b),
+            ) => {
                 let result = a.difference(b);
                 if result.is_empty() {
                     LazyDimConstraint::Empty
                 } else {
-                    LazyDimConstraint::Resolved(result)
+                    LazyDimConstraint::Resolved(
+                        result,
+                    )
                 }
             }
             // Can't compute difference with unresolved - return self conservatively
@@ -345,9 +429,9 @@ impl SetOperations for LazyDimConstraint {
     }
 
     fn exclusive_or(&self, other: &Self) -> Self {
-        self.difference(other).union(&other.difference(self))
+        self.difference(other)
+            .union(&other.difference(self))
     }
-
 }
 
 impl Emptyable for LazyArraySelection {
@@ -368,13 +452,22 @@ impl SetOperations for LazyArraySelection {
         }
 
         match (self, other) {
-            (LazyArraySelection::Rectangles(a), LazyArraySelection::Rectangles(b)) => {
+            (
+                LazyArraySelection::Rectangles(a),
+                LazyArraySelection::Rectangles(b),
+            ) => {
                 let mut combined = a.clone();
-                combined.extend(b.iter().cloned());
-                LazyArraySelection::Rectangles(combined)
+                combined
+                    .extend(b.iter().cloned());
+                LazyArraySelection::Rectangles(
+                    combined,
+                )
             }
             // For complex cases with Difference/Union, store as deferred Union
-            _ => LazyArraySelection::Union(Box::new(self.clone()), Box::new(other.clone())),
+            _ => LazyArraySelection::Union(
+                Box::new(self.clone()),
+                Box::new(other.clone()),
+            ),
         }
     }
 
@@ -384,24 +477,37 @@ impl SetOperations for LazyArraySelection {
         }
 
         match (self, other) {
-            (LazyArraySelection::Rectangles(a), LazyArraySelection::Rectangles(b)) => {
+            (
+                LazyArraySelection::Rectangles(a),
+                LazyArraySelection::Rectangles(b),
+            ) => {
                 let mut result = SmallVec::new();
                 for rect_a in a.iter() {
                     for rect_b in b.iter() {
-                        if rect_a.is_empty() || rect_b.is_empty() {
+                        if rect_a.is_empty()
+                            || rect_b.is_empty()
+                        {
                             continue;
                         }
                         // Intersect the two rectangles
-                        let intersected = intersect_lazy_rectangles(rect_a, rect_b);
-                        if !intersected.is_empty() {
-                            result.push(intersected);
+                        let intersected =
+                            intersect_lazy_rectangles(
+                                rect_a, rect_b,
+                            );
+                        if !intersected.is_empty()
+                        {
+                            result.push(
+                                intersected,
+                            );
                         }
                     }
                 }
                 if result.is_empty() {
                     LazyArraySelection::empty()
                 } else {
-                    LazyArraySelection::Rectangles(result)
+                    LazyArraySelection::Rectangles(
+                        result,
+                    )
                 }
             }
             // For Difference types, defer intersection
@@ -427,11 +533,15 @@ impl SetOperations for LazyArraySelection {
         }
 
         // Store as deferred difference for materialization
-        LazyArraySelection::Difference(Box::new(self.clone()), Box::new(other.clone()))
+        LazyArraySelection::Difference(
+            Box::new(self.clone()),
+            Box::new(other.clone()),
+        )
     }
 
     fn exclusive_or(&self, other: &Self) -> Self {
-        self.difference(other).union(&other.difference(self))
+        self.difference(other)
+            .union(&other.difference(self))
     }
 }
 
@@ -445,7 +555,10 @@ impl ArraySelectionType for LazyArraySelection {
 // the generic DatasetSelectionBase<Sel> implementation in grouped_selection.rs
 
 /// Intersect two lazy hyper-rectangles.
-fn intersect_lazy_rectangles(a: &LazyHyperRectangle, b: &LazyHyperRectangle) -> LazyHyperRectangle {
+fn intersect_lazy_rectangles(
+    a: &LazyHyperRectangle,
+    b: &LazyHyperRectangle,
+) -> LazyHyperRectangle {
     if a.is_empty() || b.is_empty() {
         return LazyHyperRectangle::empty();
     }
@@ -453,20 +566,37 @@ fn intersect_lazy_rectangles(a: &LazyHyperRectangle, b: &LazyHyperRectangle) -> 
     let mut result = LazyHyperRectangle::all();
 
     // Collect all dimension names from both rectangles
-    let all_dims: std::collections::BTreeSet<&IStr> =
-        a.dims.keys().chain(b.dims.keys()).collect();
+    let all_dims: std::collections::BTreeSet<
+        &IStr,
+    > = a
+        .dims
+        .keys()
+        .chain(b.dims.keys())
+        .collect();
 
     for dim in all_dims {
-        let constraint_a = a.dims.get(dim).cloned().unwrap_or(LazyDimConstraint::All);
-        let constraint_b = b.dims.get(dim).cloned().unwrap_or(LazyDimConstraint::All);
-        let intersected = constraint_a.intersect(&constraint_b);
+        let constraint_a =
+            a.dims.get(dim).cloned().unwrap_or(
+                LazyDimConstraint::All,
+            );
+        let constraint_b =
+            b.dims.get(dim).cloned().unwrap_or(
+                LazyDimConstraint::All,
+            );
+        let intersected =
+            constraint_a.intersect(&constraint_b);
 
         if intersected.is_empty() {
             return LazyHyperRectangle::empty();
         }
 
-        if !matches!(intersected, LazyDimConstraint::All) {
-            result.dims.insert(dim.clone(), intersected);
+        if !matches!(
+            intersected,
+            LazyDimConstraint::All
+        ) {
+            result
+                .dims
+                .insert(dim.clone(), intersected);
         }
     }
 

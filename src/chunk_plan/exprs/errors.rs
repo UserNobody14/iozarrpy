@@ -1,6 +1,8 @@
 use std::fmt::Display;
 
-use crate::chunk_plan::indexing::types::{IndexRange, ValueRange};
+use crate::chunk_plan::indexing::types::{
+    IndexRange, ValueRange,
+};
 
 #[derive(Debug)]
 pub(crate) enum CompileError {
@@ -9,11 +11,23 @@ pub(crate) enum CompileError {
 }
 
 impl Display for CompileError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
         // Format the error as a string
         match self {
-            CompileError::Unsupported(msg) => write!(f, "unsupported: {msg}"),
-            CompileError::MissingPrimaryDims(msg) => write!(f, "missing primary dims: {msg}"),
+            CompileError::Unsupported(msg) => {
+                write!(f, "unsupported: {msg}")
+            }
+            CompileError::MissingPrimaryDims(
+                msg,
+            ) => {
+                write!(
+                    f,
+                    "missing primary dims: {msg}"
+                )
+            }
         }
     }
 }
@@ -27,14 +41,23 @@ pub(crate) enum ResolveError {
 }
 
 impl std::fmt::Display for ResolveError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
         match self {
             ResolveError::UnsupportedCoordDtype(dt) => {
                 write!(f, "unsupported coord dtype: {dt}")
             }
-            ResolveError::MissingCoord(dim) => write!(f, "missing coord array: {dim}"),
-            ResolveError::OutOfBounds => write!(f, "coord index out of bounds"),
-            ResolveError::Zarr(msg) => write!(f, "zarr error: {msg}"),
+            ResolveError::MissingCoord(dim) => {
+                write!(f, "missing coord array: {dim}")
+            }
+            ResolveError::OutOfBounds => {
+                write!(f, "coord index out of bounds")
+            }
+            ResolveError::Zarr(msg) => {
+                write!(f, "zarr error: {msg}")
+            }
         }
     }
 }
@@ -48,4 +71,3 @@ pub(crate) trait CoordIndexResolver {
         range: &ValueRange,
     ) -> Result<Option<IndexRange>, ResolveError>;
 }
-

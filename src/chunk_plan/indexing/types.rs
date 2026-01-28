@@ -16,7 +16,15 @@ pub(crate) struct ChunkId {
 /// Variables with the same chunk grid signature can share chunk iteration.
 /// This extends the old DimSignature by also including chunk shape,
 /// so variables with same dims but different chunking are handled separately.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+)]
 pub struct ChunkGridSignature {
     /// Dimension names (ordered)
     dims: SmallVec<[IStr; 4]>,
@@ -26,7 +34,10 @@ pub struct ChunkGridSignature {
 
 impl ChunkGridSignature {
     /// Create a new chunk grid signature from dimension names and chunk shape.
-    pub fn new(dims: impl Into<SmallVec<[IStr; 4]>>, chunk_shape: impl Into<SmallVec<[u64; 4]>>) -> Self {
+    pub fn new(
+        dims: impl Into<SmallVec<[IStr; 4]>>,
+        chunk_shape: impl Into<SmallVec<[u64; 4]>>,
+    ) -> Self {
         Self {
             dims: dims.into(),
             chunk_shape: chunk_shape.into(),
@@ -35,7 +46,9 @@ impl ChunkGridSignature {
 
     /// Create a signature from dims only (with empty chunk shape).
     /// Used during lazy compilation when chunk info isn't known yet.
-    pub fn from_dims_only(dims: impl Into<SmallVec<[IStr; 4]>>) -> Self {
+    pub fn from_dims_only(
+        dims: impl Into<SmallVec<[IStr; 4]>>,
+    ) -> Self {
         Self {
             dims: dims.into(),
             chunk_shape: SmallVec::new(),
@@ -68,7 +81,10 @@ impl ChunkGridSignature {
     }
 
     /// Create a new signature with chunk shape set.
-    pub fn with_chunk_shape(&self, chunk_shape: impl Into<SmallVec<[u64; 4]>>) -> Self {
+    pub fn with_chunk_shape(
+        &self,
+        chunk_shape: impl Into<SmallVec<[u64; 4]>>,
+    ) -> Self {
         Self {
             dims: self.dims.clone(),
             chunk_shape: chunk_shape.into(),
@@ -78,7 +94,11 @@ impl ChunkGridSignature {
 
 impl From<&[IStr]> for ChunkGridSignature {
     fn from(dims: &[IStr]) -> Self {
-        Self::from_dims_only(dims.iter().cloned().collect::<SmallVec<[IStr; 4]>>())
+        Self::from_dims_only(
+            dims.iter()
+                .cloned()
+                .collect::<SmallVec<[IStr; 4]>>(),
+        )
     }
 }
 
@@ -86,7 +106,9 @@ impl From<&[IStr]> for ChunkGridSignature {
 /// DimSignature is now ChunkGridSignature (with optional chunk_shape).
 pub type DimSignature = ChunkGridSignature;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash,
+)]
 pub(crate) enum BoundKind {
     Inclusive,
     Exclusive,
@@ -107,11 +129,26 @@ pub(crate) enum CoordScalar {
 impl PartialEq for CoordScalar {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
-            (CoordScalar::I64(a), CoordScalar::I64(b)) => a == b,
-            (CoordScalar::U64(a), CoordScalar::U64(b)) => a == b,
-            (CoordScalar::F64(a), CoordScalar::F64(b)) => a.to_bits() == b.to_bits(),
-            (CoordScalar::DatetimeNs(a), CoordScalar::DatetimeNs(b)) => a == b,
-            (CoordScalar::DurationNs(a), CoordScalar::DurationNs(b)) => a == b,
+            (
+                CoordScalar::I64(a),
+                CoordScalar::I64(b),
+            ) => a == b,
+            (
+                CoordScalar::U64(a),
+                CoordScalar::U64(b),
+            ) => a == b,
+            (
+                CoordScalar::F64(a),
+                CoordScalar::F64(b),
+            ) => a.to_bits() == b.to_bits(),
+            (
+                CoordScalar::DatetimeNs(a),
+                CoordScalar::DatetimeNs(b),
+            ) => a == b,
+            (
+                CoordScalar::DurationNs(a),
+                CoordScalar::DurationNs(b),
+            ) => a == b,
             _ => false,
         }
     }
@@ -125,9 +162,15 @@ impl Hash for CoordScalar {
         match self {
             CoordScalar::I64(v) => v.hash(state),
             CoordScalar::U64(v) => v.hash(state),
-            CoordScalar::F64(v) => v.to_bits().hash(state),
-            CoordScalar::DatetimeNs(v) => v.hash(state),
-            CoordScalar::DurationNs(v) => v.hash(state),
+            CoordScalar::F64(v) => {
+                v.to_bits().hash(state)
+            }
+            CoordScalar::DatetimeNs(v) => {
+                v.hash(state)
+            }
+            CoordScalar::DurationNs(v) => {
+                v.hash(state)
+            }
         }
     }
 }
@@ -135,34 +178,67 @@ impl Hash for CoordScalar {
 impl CoordScalar {
     fn as_i128_orderable(&self) -> Option<i128> {
         match self {
-            CoordScalar::I64(v) => Some(*v as i128),
-            CoordScalar::U64(v) => Some(*v as i128),
-            CoordScalar::DatetimeNs(v) => Some(*v as i128),
-            CoordScalar::DurationNs(v) => Some(*v as i128),
+            CoordScalar::I64(v) => {
+                Some(*v as i128)
+            }
+            CoordScalar::U64(v) => {
+                Some(*v as i128)
+            }
+            CoordScalar::DatetimeNs(v) => {
+                Some(*v as i128)
+            }
+            CoordScalar::DurationNs(v) => {
+                Some(*v as i128)
+            }
             CoordScalar::F64(_) => None,
         }
     }
 
-    pub(crate) fn partial_cmp(&self, other: &CoordScalar) -> Option<std::cmp::Ordering> {
+    pub(crate) fn partial_cmp(
+        &self,
+        other: &CoordScalar,
+    ) -> Option<std::cmp::Ordering> {
         match (self, other) {
-            (CoordScalar::F64(a), CoordScalar::F64(b)) => a.partial_cmp(b),
-            (CoordScalar::F64(a), b) => Some((*a).partial_cmp(&(b.as_i128_orderable()? as f64))?),
-            (a, CoordScalar::F64(b)) => Some((a.as_i128_orderable()? as f64).partial_cmp(b)?),
-            _ => Some(self.as_i128_orderable()?.cmp(&other.as_i128_orderable()?)),
+            (
+                CoordScalar::F64(a),
+                CoordScalar::F64(b),
+            ) => a.partial_cmp(b),
+            (CoordScalar::F64(a), b) => {
+                Some((*a).partial_cmp(
+                    &(b.as_i128_orderable()?
+                        as f64),
+                )?)
+            }
+            (a, CoordScalar::F64(b)) => Some(
+                (a.as_i128_orderable()? as f64)
+                    .partial_cmp(b)?,
+            ),
+            _ => Some(
+                self.as_i128_orderable()?.cmp(
+                    &other.as_i128_orderable()?,
+                ),
+            ),
         }
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
+#[derive(
+    Debug, Clone, Default, PartialEq, Eq, Hash,
+)]
 pub(crate) struct ValueRange {
-    pub(crate) min: Option<(CoordScalar, BoundKind)>,
-    pub(crate) max: Option<(CoordScalar, BoundKind)>,
+    pub(crate) min:
+        Option<(CoordScalar, BoundKind)>,
+    pub(crate) max:
+        Option<(CoordScalar, BoundKind)>,
     pub(crate) eq: Option<CoordScalar>,
     pub(crate) empty: bool,
 }
 
 impl ValueRange {
-    pub(crate) fn intersect(&self, other: &ValueRange) -> ValueRange {
+    pub(crate) fn intersect(
+        &self,
+        other: &ValueRange,
+    ) -> ValueRange {
         if self.empty || other.empty {
             return ValueRange {
                 empty: true,
@@ -171,7 +247,9 @@ impl ValueRange {
         }
         let mut out = ValueRange::default();
         out.eq = match (&self.eq, &other.eq) {
-            (Some(a), Some(b)) if a == b => Some(a.clone()),
+            (Some(a), Some(b)) if a == b => {
+                Some(a.clone())
+            }
             (Some(_), Some(_)) => {
                 out.empty = true;
                 return out;
@@ -181,16 +259,29 @@ impl ValueRange {
             (None, None) => None,
         };
 
-        out.min = pick_tighter_min(self.min.clone(), other.min.clone());
-        out.max = pick_tighter_max(self.max.clone(), other.max.clone());
+        out.min = pick_tighter_min(
+            self.min.clone(),
+            other.min.clone(),
+        );
+        out.max = pick_tighter_max(
+            self.max.clone(),
+            other.max.clone(),
+        );
 
         // If we have an equality constraint, ensure it's compatible with min/max.
         if let Some(eq) = &out.eq {
-            if let Some((min_v, min_k)) = &out.min {
+            if let Some((min_v, min_k)) = &out.min
+            {
                 let ord = eq.partial_cmp(min_v);
                 let ok = match (ord, min_k) {
-                    (Some(std::cmp::Ordering::Greater), _) => true,
-                    (Some(std::cmp::Ordering::Equal), BoundKind::Inclusive) => true,
+                    (
+                        Some(std::cmp::Ordering::Greater),
+                        _,
+                    ) => true,
+                    (
+                        Some(std::cmp::Ordering::Equal),
+                        BoundKind::Inclusive,
+                    ) => true,
                     _ => false,
                 };
                 if !ok {
@@ -198,11 +289,17 @@ impl ValueRange {
                     return out;
                 }
             }
-            if let Some((max_v, max_k)) = &out.max {
+            if let Some((max_v, max_k)) = &out.max
+            {
                 let ord = eq.partial_cmp(max_v);
                 let ok = match (ord, max_k) {
-                    (Some(std::cmp::Ordering::Less), _) => true,
-                    (Some(std::cmp::Ordering::Equal), BoundKind::Inclusive) => true,
+                    (Some(std::cmp::Ordering::Less), _) => {
+                        true
+                    }
+                    (
+                        Some(std::cmp::Ordering::Equal),
+                        BoundKind::Inclusive,
+                    ) => true,
                     _ => false,
                 };
                 if !ok {
@@ -223,19 +320,27 @@ fn pick_tighter_min(
     match (a, b) {
         (None, None) => None,
         (Some(x), None) | (None, Some(x)) => Some(x),
-        (Some((av, ak)), Some((bv, bk))) => match av.partial_cmp(&bv) {
-            Some(std::cmp::Ordering::Less) => Some((bv, bk)),
-            Some(std::cmp::Ordering::Greater) => Some((av, ak)),
-            Some(std::cmp::Ordering::Equal) => Some((
-                av,
-                if ak == BoundKind::Exclusive || bk == BoundKind::Exclusive {
-                    BoundKind::Exclusive
-                } else {
-                    BoundKind::Inclusive
-                },
-            )),
-            None => None,
-        },
+        (Some((av, ak)), Some((bv, bk))) => {
+            match av.partial_cmp(&bv) {
+                Some(std::cmp::Ordering::Less) => {
+                    Some((bv, bk))
+                }
+                Some(std::cmp::Ordering::Greater) => {
+                    Some((av, ak))
+                }
+                Some(std::cmp::Ordering::Equal) => Some((
+                    av,
+                    if ak == BoundKind::Exclusive
+                        || bk == BoundKind::Exclusive
+                    {
+                        BoundKind::Exclusive
+                    } else {
+                        BoundKind::Inclusive
+                    },
+                )),
+                None => None,
+            }
+        }
     }
 }
 
@@ -246,23 +351,33 @@ fn pick_tighter_max(
     match (a, b) {
         (None, None) => None,
         (Some(x), None) | (None, Some(x)) => Some(x),
-        (Some((av, ak)), Some((bv, bk))) => match av.partial_cmp(&bv) {
-            Some(std::cmp::Ordering::Less) => Some((av, ak)),
-            Some(std::cmp::Ordering::Greater) => Some((bv, bk)),
-            Some(std::cmp::Ordering::Equal) => Some((
-                av,
-                if ak == BoundKind::Exclusive || bk == BoundKind::Exclusive {
-                    BoundKind::Exclusive
-                } else {
-                    BoundKind::Inclusive
-                },
-            )),
-            None => None,
-        },
+        (Some((av, ak)), Some((bv, bk))) => {
+            match av.partial_cmp(&bv) {
+                Some(std::cmp::Ordering::Less) => {
+                    Some((av, ak))
+                }
+                Some(std::cmp::Ordering::Greater) => {
+                    Some((bv, bk))
+                }
+                Some(std::cmp::Ordering::Equal) => Some((
+                    av,
+                    if ak == BoundKind::Exclusive
+                        || bk == BoundKind::Exclusive
+                    {
+                        BoundKind::Exclusive
+                    } else {
+                        BoundKind::Inclusive
+                    },
+                )),
+                None => None,
+            }
+        }
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash,
+)]
 pub(crate) struct IndexRange {
     pub(crate) start: u64,
     pub(crate) end_exclusive: u64,
@@ -281,9 +396,16 @@ pub(crate) struct DimChunkRange {
 }
 
 impl DimChunkRange {
-    pub(crate) fn intersect(&self, other: &DimChunkRange) -> Option<DimChunkRange> {
-        let s = self.start_chunk.max(other.start_chunk);
-        let e = self.end_chunk_inclusive.min(other.end_chunk_inclusive);
+    pub(crate) fn intersect(
+        &self,
+        other: &DimChunkRange,
+    ) -> Option<DimChunkRange> {
+        let s = self
+            .start_chunk
+            .max(other.start_chunk);
+        let e = self
+            .end_chunk_inclusive
+            .min(other.end_chunk_inclusive);
         if e < s {
             None
         } else {
@@ -294,4 +416,3 @@ impl DimChunkRange {
         }
     }
 }
-

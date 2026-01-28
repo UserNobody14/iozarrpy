@@ -5,11 +5,9 @@
 //! - [`CachingAsyncBackend`] - default caching implementation
 //! - [`PyZarrBackend`] - Python-exposed backend class with scan methods
 
-mod traits;
 mod caching;
+mod traits;
 // mod source;  // TODO: This module was referenced but doesn't exist
 mod py;
-
-
 
 pub(crate) use py::PyZarrBackend;

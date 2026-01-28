@@ -9,17 +9,19 @@ use crate::chunk_plan::ChunkGridSignature;
 use crate::meta::{ZarrDatasetMeta, ZarrMeta};
 use crate::IStr;
 
-pub(super) const DEFAULT_BATCH_SIZE: usize = 10_000;
+pub(super) const DEFAULT_BATCH_SIZE: usize =
+    10_000;
 
 /// Iteration state for a single chunk grid signature.
-/// 
+///
 /// Each grid has its own variables and pending element subsets to read.
 #[derive(Debug)]
 pub(super) struct GridIterState {
     pub signature: Arc<ChunkGridSignature>,
     pub variables: Vec<IStr>,
     /// Pending array subsets (element ranges) to read
-    pub pending_subsets: std::collections::VecDeque<ArraySubset>,
+    pub pending_subsets:
+        std::collections::VecDeque<ArraySubset>,
     /// Current subset being processed
     pub current_subset: Option<ArraySubset>,
     /// Offset within current subset (for batching)
@@ -27,39 +29,50 @@ pub(super) struct GridIterState {
 }
 
 impl GridIterState {
-    pub fn new(signature: Arc<ChunkGridSignature>, variables: Vec<IStr>) -> Self {
+    pub fn new(
+        signature: Arc<ChunkGridSignature>,
+        variables: Vec<IStr>,
+    ) -> Self {
         Self {
             signature,
             variables,
-            pending_subsets: std::collections::VecDeque::new(),
+            pending_subsets:
+                std::collections::VecDeque::new(),
             current_subset: None,
             subset_offset: 0,
         }
     }
-    
+
     /// Add subsets from an ArraySubsetList
-    pub fn add_subsets(&mut self, subsets: impl Iterator<Item = ArraySubset>) {
+    pub fn add_subsets(
+        &mut self,
+        subsets: impl Iterator<Item = ArraySubset>,
+    ) {
         self.pending_subsets.extend(subsets);
     }
-    
+
     /// Get the next subset to process, advancing if current is exhausted
-    pub fn advance(&mut self) -> Option<&ArraySubset> {
+    pub fn advance(
+        &mut self,
+    ) -> Option<&ArraySubset> {
         if self.current_subset.is_none() {
-            self.current_subset = self.pending_subsets.pop_front();
+            self.current_subset =
+                self.pending_subsets.pop_front();
             self.subset_offset = 0;
         }
         self.current_subset.as_ref()
     }
-    
+
     /// Mark current subset as done, move to next
     pub fn finish_current(&mut self) {
         self.current_subset = None;
         self.subset_offset = 0;
     }
-    
+
     /// Check if this grid has any work left
     pub fn is_exhausted(&self) -> bool {
-        self.current_subset.is_none() && self.pending_subsets.is_empty()
+        self.current_subset.is_none()
+            && self.pending_subsets.is_empty()
     }
 }
 
@@ -69,7 +82,8 @@ pub struct ZarrSource {
     pub(super) meta: ZarrDatasetMeta,
     /// Unified hierarchical metadata (when available)
     pub(super) unified_meta: Option<ZarrMeta>,
-    pub(super) store: zarrs::storage::ReadableWritableListableStorage,
+    pub(super) store:
+        zarrs::storage::ReadableWritableListableStorage,
 
     pub(super) dims: Vec<IStr>,
     pub(super) vars: Vec<IStr>,
@@ -87,31 +101,54 @@ pub struct ZarrSource {
 
     // Optional cap on number of chunks we will read (for debugging / safety).
     pub(super) chunks_left: Option<usize>,
-    
+
     /// True if this is a hierarchical (DataTree) store
     pub(super) is_hierarchical: bool,
 }
 
-pub(super) fn to_py_err<E: std::fmt::Display>(e: E) -> PyErr {
-    PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string())
+pub(super) fn to_py_err<E: std::fmt::Display>(
+    e: E,
+) -> PyErr {
+    PyErr::new::<pyo3::exceptions::PyValueError, _>(
+        e.to_string(),
+    )
 }
 
-pub(super) fn panic_to_py_err(e: Box<dyn std::any::Any + Send>, msg2: &str) -> PyErr {
-    let msg = if let Some(s) = e.downcast_ref::<&str>() {
+pub(super) fn panic_to_py_err(
+    e: Box<dyn std::any::Any + Send>,
+    msg2: &str,
+) -> PyErr {
+    let msg = if let Some(s) =
+        e.downcast_ref::<&str>()
+    {
         format!("{msg2}: {}", s.to_string())
-    } else if let Some(s) = e.downcast_ref::<String>() {
+    } else if let Some(s) =
+        e.downcast_ref::<String>()
+    {
         format!("{msg2}: {}", s.clone())
     } else {
         format!("{msg2}: {e:?}")
     };
-    PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(msg)
+    PyErr::new::<
+        pyo3::exceptions::PyRuntimeError,
+        _,
+    >(msg)
 }
 
 impl ZarrSource {
-    pub(super) fn should_emit(&self, name: &str) -> bool {
+    pub(super) fn should_emit(
+        &self,
+        name: &str,
+    ) -> bool {
         self.with_columns
             .as_ref()
-            .map(|s| s.iter().any(|c| <IStr as AsRef<str>>::as_ref(c) == name))
+            .map(|s| {
+                s.iter().any(|c| {
+                    <IStr as AsRef<str>>::as_ref(
+                        c,
+                    ) == name
+                })
+            })
             .unwrap_or(true)
     }
 }
@@ -120,7 +157,6 @@ impl ZarrSource {
 // `zarr_source` so they can access `ZarrSource` private fields (like the old
 // `include!` layout allowed).
 mod zarr_source_new;
-mod zarr_source_predicate;
 mod zarr_source_next;
+mod zarr_source_predicate;
 mod zarr_source_pymethods;
-

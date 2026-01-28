@@ -5,11 +5,11 @@
 //! - Lazy selection types and materialization
 //! - Chunk plan computation from selections
 
+pub mod index_ranges;
 pub mod plan;
 pub mod selection;
 pub mod selection_to_chunks;
 pub mod types;
-pub mod index_ranges;
 
 // Sync monotonic coordinate resolver
 pub mod monotonic_scalar;
@@ -31,11 +31,11 @@ pub mod lazy_materialize;
 // Resolver traits
 pub mod resolver_traits;
 pub(crate) use resolver_traits::{
-    AsyncCoordResolver, SyncCoordResolver
+    AsyncCoordResolver, SyncCoordResolver,
 };
 
 // Core types re-exports
-pub(crate) use selection::{
-    Emptyable, DatasetSelection
-};
 pub(crate) use plan::GroupedChunkPlan;
+pub(crate) use selection::{
+    DatasetSelection, Emptyable,
+};

@@ -1,7 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use polars::prelude::{DataType as PlDataType, Field, Schema};
+use polars::prelude::{
+    DataType as PlDataType, Field, Schema,
+};
 use smallvec::SmallVec;
 
 use crate::{IStr, IntoIStr};
@@ -19,7 +21,8 @@ pub struct ZarrMeta {
     /// Dimension analysis across the entire tree
     pub dim_analysis: DimensionAnalysis,
     /// Fast lookup: array path (e.g., "model_a/temperature") -> array metadata
-    pub path_to_array: BTreeMap<IStr, ZarrArrayMeta>,
+    pub path_to_array:
+        BTreeMap<IStr, ZarrArrayMeta>,
 }
 
 /// A node in the zarr hierarchy (group or root).
@@ -54,8 +57,12 @@ impl DimensionAnalysis {
     /// Recursively collects dimensions from all nodes in the tree.
     pub fn compute(root: &ZarrNode) -> Self {
         let mut all_dims: Vec<IStr> = Vec::new();
-        let mut node_dims: BTreeMap<IStr, Vec<IStr>> = BTreeMap::new();
-        let mut dim_lengths: BTreeMap<IStr, u64> = BTreeMap::new();
+        let mut node_dims: BTreeMap<
+            IStr,
+            Vec<IStr>,
+        > = BTreeMap::new();
+        let mut dim_lengths: BTreeMap<IStr, u64> =
+            BTreeMap::new();
 
         // Collect root dims first (they define primary order)
         let root_dims = root.local_dims.clone();
@@ -66,7 +73,12 @@ impl DimensionAnalysis {
         }
 
         // Recursively collect from all nodes
-        Self::collect_node(root, &mut all_dims, &mut node_dims, &mut dim_lengths);
+        Self::collect_node(
+            root,
+            &mut all_dims,
+            &mut node_dims,
+            &mut dim_lengths,
+        );
 
         Self {
             all_dims,
@@ -83,7 +95,10 @@ impl DimensionAnalysis {
         dim_lengths: &mut BTreeMap<IStr, u64>,
     ) {
         // Record this node's dimensions
-        node_dims.insert(node.path.clone(), node.local_dims.clone());
+        node_dims.insert(
+            node.path.clone(),
+            node.local_dims.clone(),
+        );
 
         // Add any new dimensions not yet seen
         for dim in &node.local_dims {
@@ -94,42 +109,74 @@ impl DimensionAnalysis {
 
         // Infer dim lengths from array shapes
         for (_, arr) in &node.arrays {
-            for (i, dim) in arr.dims.iter().enumerate() {
+            for (i, dim) in
+                arr.dims.iter().enumerate()
+            {
                 if i < arr.shape.len() {
-                    dim_lengths.entry(dim.clone()).or_insert(arr.shape[i]);
+                    dim_lengths
+                        .entry(dim.clone())
+                        .or_insert(arr.shape[i]);
                 }
             }
         }
 
         // Recurse into children
         for (_, child) in &node.children {
-            Self::collect_node(child, all_dims, node_dims, dim_lengths);
+            Self::collect_node(
+                child,
+                all_dims,
+                node_dims,
+                dim_lengths,
+            );
         }
     }
 
     /// Map a node's local dims to output dim positions.
     /// For each output dim, returns Some(index) if the node has that dim, None otherwise.
-    pub fn node_dim_positions(&self, node_path: &str) -> Vec<Option<usize>> {
+    pub fn node_dim_positions(
+        &self,
+        node_path: &str,
+    ) -> Vec<Option<usize>> {
         let empty = Vec::new();
-        let local_dims = self.node_dims.get(&node_path.istr()).unwrap_or(&empty);
+        let local_dims = self
+            .node_dims
+            .get(&node_path.istr())
+            .unwrap_or(&empty);
         self.all_dims
             .iter()
-            .map(|out_dim| local_dims.iter().position(|nd| nd == out_dim))
+            .map(|out_dim| {
+                local_dims
+                    .iter()
+                    .position(|nd| nd == out_dim)
+            })
             .collect()
     }
 
     /// Check if node shares any dims with root
-    pub fn shares_dims_with_root(&self, node_path: &str) -> bool {
+    pub fn shares_dims_with_root(
+        &self,
+        node_path: &str,
+    ) -> bool {
         let empty = Vec::new();
-        let local_dims = self.node_dims.get(&node_path.istr()).unwrap_or(&empty);
-        local_dims.iter().any(|d| self.root_dims.contains(d))
+        let local_dims = self
+            .node_dims
+            .get(&node_path.istr())
+            .unwrap_or(&empty);
+        local_dims
+            .iter()
+            .any(|d| self.root_dims.contains(d))
     }
 
     /// Get the total number of elements for the combined output grid
     pub fn total_elements(&self) -> u64 {
         self.all_dims
             .iter()
-            .map(|d| self.dim_lengths.get(d).copied().unwrap_or(1))
+            .map(|d| {
+                self.dim_lengths
+                    .get(d)
+                    .copied()
+                    .unwrap_or(1)
+            })
             .product()
     }
 
@@ -137,7 +184,12 @@ impl DimensionAnalysis {
     pub fn output_shape(&self) -> Vec<u64> {
         self.all_dims
             .iter()
-            .map(|d| self.dim_lengths.get(d).copied().unwrap_or(1))
+            .map(|d| {
+                self.dim_lengths
+                    .get(d)
+                    .copied()
+                    .unwrap_or(1)
+            })
             .collect()
     }
 
@@ -166,18 +218,29 @@ impl DimensionAnalysis {
         source_shape: &[u64],
     ) -> u64 {
         let output_shape = self.output_shape();
-        let output_strides = compute_strides(&output_shape);
-        let source_strides = compute_strides(source_shape);
+        let output_strides =
+            compute_strides(&output_shape);
+        let source_strides =
+            compute_strides(source_shape);
 
         let mut source_idx: u64 = 0;
 
-        for (src_d, src_dim) in source_dims.iter().enumerate() {
+        for (src_d, src_dim) in
+            source_dims.iter().enumerate()
+        {
             // Find this source dimension in the output dimensions
-            if let Some(out_d) = self.all_dims.iter().position(|od| od == src_dim) {
+            if let Some(out_d) = self
+                .all_dims
+                .iter()
+                .position(|od| od == src_dim)
+            {
                 // Extract coordinate for this dimension from output row
-                let coord = (output_row / output_strides[out_d]) % output_shape[out_d];
+                let coord = (output_row
+                    / output_strides[out_d])
+                    % output_shape[out_d];
                 if src_d < source_strides.len() {
-                    source_idx += coord * source_strides[src_d];
+                    source_idx += coord
+                        * source_strides[src_d];
                 }
             }
             // If source dim not in output dims, it's an error in metadata
@@ -188,16 +251,21 @@ impl DimensionAnalysis {
 }
 
 /// Compute strides for row-major indexing of an N-dimensional array.
-/// 
+///
 /// For shape [a, b, c], strides are [b*c, c, 1].
 #[inline]
-pub fn compute_strides(shape: &[u64]) -> Vec<u64> {
+pub fn compute_strides(
+    shape: &[u64],
+) -> Vec<u64> {
     if shape.is_empty() {
         return vec![];
     }
     let mut strides = vec![1u64; shape.len()];
-    for i in (0..shape.len().saturating_sub(1)).rev() {
-        strides[i] = strides[i + 1] * shape[i + 1];
+    for i in
+        (0..shape.len().saturating_sub(1)).rev()
+    {
+        strides[i] =
+            strides[i + 1] * shape[i + 1];
     }
     strides
 }
@@ -209,47 +277,71 @@ impl ZarrMeta {
     }
 
     /// Get array meta by path (e.g., "temperature" or "model_a/temperature")
-    pub fn array(&self, path: &str) -> Option<&ZarrArrayMeta> {
+    pub fn array(
+        &self,
+        path: &str,
+    ) -> Option<&ZarrArrayMeta> {
         self.path_to_array.get(&path.istr())
     }
 
     /// All data variable paths (flat: just names, hierarchical: includes "group/var" paths)
-    pub fn all_data_var_paths(&self) -> Vec<IStr> {
+    pub fn all_data_var_paths(
+        &self,
+    ) -> Vec<IStr> {
         let mut out = Vec::new();
-        self.collect_data_var_paths(&self.root, &mut out);
+        self.collect_data_var_paths(
+            &self.root, &mut out,
+        );
         out
     }
 
-    fn collect_data_var_paths(&self, node: &ZarrNode, out: &mut Vec<IStr>) {
+    fn collect_data_var_paths(
+        &self,
+        node: &ZarrNode,
+        out: &mut Vec<IStr>,
+    ) {
         // Root node data vars use just the var name
         let path_str: &str = node.path.as_ref();
         let prefix = if path_str == "/" {
             String::new()
         } else {
-            format!("{}/", path_str.trim_start_matches('/'))
+            format!(
+                "{}/",
+                path_str.trim_start_matches('/')
+            )
         };
 
         for var in &node.data_vars {
             let path = if prefix.is_empty() {
                 var.clone()
             } else {
-                format!("{}{}", prefix, var).istr()
+                format!("{}{}", prefix, var)
+                    .istr()
             };
             out.push(path);
         }
 
         for (_, child) in &node.children {
-            self.collect_data_var_paths(child, out);
+            self.collect_data_var_paths(
+                child, out,
+            );
         }
     }
 
     /// Generate a Polars schema for the tidy DataFrame output.
-    /// 
+    ///
     /// For flat datasets, this is the same as ZarrDatasetMeta::tidy_schema.
     /// For hierarchical datasets, child groups become struct columns.
-    pub fn tidy_schema(&self, variables: Option<&[IStr]>) -> Schema {
+    pub fn tidy_schema(
+        &self,
+        variables: Option<&[IStr]>,
+    ) -> Schema {
         let var_set: Option<BTreeSet<&str>> =
-            variables.map(|v| v.iter().map(|s| s.as_ref()).collect());
+            variables.map(|v| {
+                v.iter()
+                    .map(|s| s.as_ref())
+                    .collect()
+            });
 
         let mut fields: Vec<Field> = Vec::new();
 
@@ -261,34 +353,68 @@ impl ZarrMeta {
                 .map(|m| m.polars_dtype.clone())
                 .unwrap_or(PlDataType::Int64);
             let dim_str: &str = dim.as_ref();
-            fields.push(Field::new(dim_str.into(), dtype));
+            fields.push(Field::new(
+                dim_str.into(),
+                dtype,
+            ));
         }
 
         // Add root data variable columns
         for var in &self.root.data_vars {
             let var_str: &str = var.as_ref();
-            if var_set.as_ref().map_or(true, |vs| vs.contains(var_str)) {
-                if let Some(m) = self.root.arrays.get(var) {
-                    fields.push(Field::new(var_str.into(), m.polars_dtype.clone()));
+            if var_set
+                .as_ref()
+                .map_or(true, |vs| {
+                    vs.contains(var_str)
+                })
+            {
+                if let Some(m) =
+                    self.root.arrays.get(var)
+                {
+                    fields.push(Field::new(
+                        var_str.into(),
+                        m.polars_dtype.clone(),
+                    ));
                 }
             }
         }
 
         // Add child group struct columns
-        for (child_name, child_node) in &self.root.children {
-            let child_name_str: &str = child_name.as_ref();
+        for (child_name, child_node) in
+            &self.root.children
+        {
+            let child_name_str: &str =
+                child_name.as_ref();
             // Check if this group or any of its vars are in the selection
-            let should_include = var_set.as_ref().map_or(true, |vs| {
-                vs.contains(child_name_str)
-                    || child_node.data_vars.iter().any(|v| {
-                        let v_str: &str = v.as_ref();
-                        vs.contains(v_str) || vs.contains(&format!("{}/{}", child_name_str, v_str).as_str())
-                    })
-            });
+            let should_include =
+                var_set.as_ref().map_or(true, |vs| {
+                    vs.contains(child_name_str)
+                        || child_node.data_vars.iter().any(
+                            |v| {
+                                let v_str: &str =
+                                    v.as_ref();
+                                vs.contains(v_str)
+                                    || vs.contains(
+                                        &format!(
+                                            "{}/{}",
+                                            child_name_str,
+                                            v_str
+                                        )
+                                        .as_str(),
+                                    )
+                            },
+                        )
+                });
 
             if should_include {
-                let struct_dtype = self.node_to_struct_dtype(child_node);
-                fields.push(Field::new(child_name_str.into(), struct_dtype));
+                let struct_dtype = self
+                    .node_to_struct_dtype(
+                        child_node,
+                    );
+                fields.push(Field::new(
+                    child_name_str.into(),
+                    struct_dtype,
+                ));
             }
         }
 
@@ -296,22 +422,38 @@ impl ZarrMeta {
     }
 
     /// Convert a ZarrNode to a Struct dtype for schema generation.
-    fn node_to_struct_dtype(&self, node: &ZarrNode) -> PlDataType {
-        let mut struct_fields: Vec<Field> = Vec::new();
+    fn node_to_struct_dtype(
+        &self,
+        node: &ZarrNode,
+    ) -> PlDataType {
+        let mut struct_fields: Vec<Field> =
+            Vec::new();
 
         // Add data variable fields
         for var in &node.data_vars {
-            if let Some(arr_meta) = node.arrays.get(var) {
+            if let Some(arr_meta) =
+                node.arrays.get(var)
+            {
                 let var_str: &str = var.as_ref();
-                struct_fields.push(Field::new(var_str.into(), arr_meta.polars_dtype.clone()));
+                struct_fields.push(Field::new(
+                    var_str.into(),
+                    arr_meta.polars_dtype.clone(),
+                ));
             }
         }
 
         // Recursively add nested child groups
-        for (child_name, child_node) in &node.children {
-            let child_name_str: &str = child_name.as_ref();
-            let nested_dtype = self.node_to_struct_dtype(child_node);
-            struct_fields.push(Field::new(child_name_str.into(), nested_dtype));
+        for (child_name, child_node) in
+            &node.children
+        {
+            let child_name_str: &str =
+                child_name.as_ref();
+            let nested_dtype = self
+                .node_to_struct_dtype(child_node);
+            struct_fields.push(Field::new(
+                child_name_str.into(),
+                nested_dtype,
+            ));
         }
 
         PlDataType::Struct(struct_fields)
@@ -331,15 +473,33 @@ impl ZarrNode {
     }
 
     /// Recursively iterate over all arrays in this node and descendants
-    pub fn all_arrays(&self) -> Box<dyn Iterator<Item = (&IStr, &ZarrArrayMeta)> + '_> {
+    pub fn all_arrays(
+        &self,
+    ) -> Box<
+        dyn Iterator<
+                Item = (&IStr, &ZarrArrayMeta),
+            > + '_,
+    > {
         let local = self.arrays.iter();
-        let children_iter = self.children.values().flat_map(|c| c.all_arrays());
+        let children_iter = self
+            .children
+            .values()
+            .flat_map(|c| c.all_arrays());
         Box::new(local.chain(children_iter))
     }
 
     /// Recursively iterate over all nodes (including self)
-    pub fn all_nodes(&self) -> Box<dyn Iterator<Item = &ZarrNode> + '_> {
-        Box::new(std::iter::once(self).chain(self.children.values().flat_map(|c| c.all_nodes())))
+    pub fn all_nodes(
+        &self,
+    ) -> Box<dyn Iterator<Item = &ZarrNode> + '_>
+    {
+        Box::new(
+            std::iter::once(self).chain(
+                self.children
+                    .values()
+                    .flat_map(|c| c.all_nodes()),
+            ),
+        )
     }
 }
 
@@ -383,8 +543,16 @@ pub struct ZarrDatasetMeta {
 }
 
 impl ZarrDatasetMeta {
-    pub fn tidy_schema(&self, variables: Option<&[IStr]>) -> Schema {
-        let var_set: Option<BTreeSet<&str>> = variables.map(|v| v.iter().map(|s| s.as_ref()).collect());
+    pub fn tidy_schema(
+        &self,
+        variables: Option<&[IStr]>,
+    ) -> Schema {
+        let var_set: Option<BTreeSet<&str>> =
+            variables.map(|v| {
+                v.iter()
+                    .map(|s| s.as_ref())
+                    .collect()
+            });
 
         let mut fields: Vec<Field> = Vec::new();
 
@@ -394,30 +562,48 @@ impl ZarrDatasetMeta {
                 .get(dim)
                 .map(|m| m.polars_dtype.clone())
                 .unwrap_or(PlDataType::Int64);
-            fields.push(Field::new((<IStr as AsRef<str>>::as_ref(dim)).into(), dtype));
+            fields.push(Field::new(
+                (<IStr as AsRef<str>>::as_ref(
+                    dim,
+                ))
+                .into(),
+                dtype,
+            ));
         }
 
-        let vars_iter: Box<dyn Iterator<Item = &str>> = if let Some(var_set) = &var_set {
+        let vars_iter: Box<
+            dyn Iterator<Item = &str>,
+        > = if let Some(var_set) = &var_set {
             Box::new(
                 self.data_vars
                     .iter()
                     .map(|s| s.as_ref())
-                    .filter(|v| var_set.contains(v)),
+                    .filter(|v| {
+                        var_set.contains(v)
+                    }),
             )
         } else {
-            Box::new(self.data_vars.iter().map(|s| s.as_ref()))
+            Box::new(
+                self.data_vars
+                    .iter()
+                    .map(|s| s.as_ref()),
+            )
         };
 
         for v in vars_iter {
-            if let Some(m) = self.arrays.get(&v.istr()) {
-                fields.push(Field::new(v.into(), m.polars_dtype.clone()));
+            if let Some(m) =
+                self.arrays.get(&v.istr())
+            {
+                fields.push(Field::new(
+                    v.into(),
+                    m.polars_dtype.clone(),
+                ));
             }
         }
 
         fields.into_iter().collect()
     }
 }
-
 
 // =============================================================================
 // Conversions between ZarrMeta and ZarrDatasetMeta
@@ -431,11 +617,15 @@ impl From<ZarrDatasetMeta> for ZarrMeta {
         root.local_dims = legacy.dims.clone();
         root.data_vars = legacy.data_vars.clone();
 
-        let dim_analysis = DimensionAnalysis::compute(&root);
+        let dim_analysis =
+            DimensionAnalysis::compute(&root);
 
         let mut path_to_array = BTreeMap::new();
         for (name, arr) in &legacy.arrays {
-            path_to_array.insert(name.clone(), arr.clone());
+            path_to_array.insert(
+                name.clone(),
+                arr.clone(),
+            );
         }
 
         ZarrMeta {
@@ -448,7 +638,7 @@ impl From<ZarrDatasetMeta> for ZarrMeta {
 
 impl From<&ZarrMeta> for ZarrDatasetMeta {
     /// Convert a ZarrMeta back to flat ZarrDatasetMeta.
-    /// 
+    ///
     /// This preserves hierarchical paths in `arrays` by including:
     /// - Full path with leading slash (e.g., `/model_a/temperature`)
     /// - Path without leading slash (e.g., `model_a/temperature`)
@@ -458,24 +648,39 @@ impl From<&ZarrMeta> for ZarrDatasetMeta {
     /// Use `arrays` to look up variables by path.
     fn from(meta: &ZarrMeta) -> Self {
         let mut arrays = BTreeMap::new();
-        
+
         // Add all paths from path_to_array
         for (path, arr) in &meta.path_to_array {
             let path_str: &str = path.as_ref();
-            arrays.insert(path.clone(), arr.clone());
-            
+            arrays.insert(
+                path.clone(),
+                arr.clone(),
+            );
+
             // Also add without leading slash for user convenience
             if path_str.starts_with('/') {
-                let no_slash = path_str.trim_start_matches('/').istr();
-                arrays.entry(no_slash).or_insert_with(|| arr.clone());
+                let no_slash = path_str
+                    .trim_start_matches('/')
+                    .istr();
+                arrays
+                    .entry(no_slash)
+                    .or_insert_with(|| {
+                        arr.clone()
+                    });
             }
         }
-        
+
         ZarrDatasetMeta {
             arrays,
-            dims: meta.dim_analysis.root_dims.clone(),
+            dims: meta
+                .dim_analysis
+                .root_dims
+                .clone(),
             // Keep only root-level data vars for schema compatibility
-            data_vars: meta.root.data_vars.clone(),
+            data_vars: meta
+                .root
+                .data_vars
+                .clone(),
         }
     }
 }

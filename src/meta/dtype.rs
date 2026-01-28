@@ -1,4 +1,6 @@
-use polars::prelude::{DataType as PlDataType, TimeUnit};
+use polars::prelude::{
+    DataType as PlDataType, TimeUnit,
+};
 
 use crate::meta::types::TimeEncoding;
 
@@ -8,9 +10,14 @@ pub(crate) fn zarr_dtype_to_polars(
 ) -> PlDataType {
     if let Some(te) = time_encoding {
         return if te.is_duration {
-            PlDataType::Duration(TimeUnit::Nanoseconds)
+            PlDataType::Duration(
+                TimeUnit::Nanoseconds,
+            )
         } else {
-            PlDataType::Datetime(TimeUnit::Nanoseconds, None)
+            PlDataType::Datetime(
+                TimeUnit::Nanoseconds,
+                None,
+            )
         };
     }
 
@@ -24,11 +31,12 @@ pub(crate) fn zarr_dtype_to_polars(
         "uint16" => PlDataType::UInt16,
         "uint32" => PlDataType::UInt32,
         "uint64" => PlDataType::UInt64,
-        "float16" | "bfloat16" => PlDataType::Float32,
+        "float16" | "bfloat16" => {
+            PlDataType::Float32
+        }
         "float32" => PlDataType::Float32,
         "float64" => PlDataType::Float64,
         "string" => PlDataType::String,
         _ => PlDataType::Binary,
     }
 }
-

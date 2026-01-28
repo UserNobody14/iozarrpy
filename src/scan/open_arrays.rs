@@ -15,7 +15,7 @@ pub(crate) async fn open_arrays_async(
         Vec<(IStr, Arc<Array<dyn zarrs::storage::AsyncReadableWritableListableStorageTraits>>)>,
     ),
     String,
-> {
+>{
     // Open coord arrays (dims) and variable arrays in parallel.
     let mut coord_futs = FuturesUnordered::new();
     for d in dims {
@@ -24,8 +24,16 @@ pub(crate) async fn open_arrays_async(
             let d_name = d.clone();
             let st = store.clone();
             coord_futs.push(async move {
-                let arr = Array::async_open(st, path.as_ref()).await.map_err(to_string_err)?;
-                Ok::<_, String>((d_name, Arc::new(arr)))
+                let arr = Array::async_open(
+                    st,
+                    path.as_ref(),
+                )
+                .await
+                .map_err(to_string_err)?;
+                Ok::<_, String>((
+                    d_name,
+                    Arc::new(arr),
+                ))
             });
         }
     }
@@ -39,8 +47,16 @@ pub(crate) async fn open_arrays_async(
         let v_name = v.clone();
         let st = store.clone();
         var_futs.push(async move {
-            let arr = Array::async_open(st, path.as_ref()).await.map_err(to_string_err)?;
-            Ok::<_, String>((v_name, Arc::new(arr)))
+            let arr = Array::async_open(
+                st,
+                path.as_ref(),
+            )
+            .await
+            .map_err(to_string_err)?;
+            Ok::<_, String>((
+                v_name,
+                Arc::new(arr),
+            ))
         });
     }
 

@@ -5,11 +5,15 @@ use pyo3_polars::PySchema;
 use zarrs::array::Array;
 use zarrs::array_subset::ArraySubset;
 
-use crate::chunk_plan::{ChunkGridSignature, GroupedChunkPlan};
+use crate::chunk_plan::{
+    ChunkGridSignature, GroupedChunkPlan,
+};
 use crate::store::StoreInput;
 use crate::{IStr, IntoIStr};
 
-use super::{GridIterState, DEFAULT_BATCH_SIZE, ZarrSource};
+use super::{
+    GridIterState, ZarrSource, DEFAULT_BATCH_SIZE,
+};
 
 impl ZarrSource {
     pub(super) fn new_impl(
@@ -47,14 +51,20 @@ impl ZarrSource {
 
         let store = opened.store.clone();
 
-        let vars: Vec<IStr> = if let Some(v) = variables {
-            v.into_iter().map(|s| s.istr()).collect()
-        } else {
-            meta.data_vars.clone()
-        };
+        let vars: Vec<IStr> =
+            if let Some(v) = variables {
+                v.into_iter()
+                    .map(|s| s.istr())
+                    .collect()
+            } else {
+                meta.data_vars.clone()
+            };
 
         if vars.is_empty() {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            return Err(PyErr::new::<
+                pyo3::exceptions::PyValueError,
+                _,
+            >(
                 "no variables found/selected",
             ));
         }
@@ -70,19 +80,33 @@ impl ZarrSource {
         };
 
         // Build per-grid iteration state for all requested variables
-        let grid_states = build_initial_grid_states(&meta, &vars, &store)?;
-        
+        let grid_states =
+            build_initial_grid_states(
+                &meta, &vars, &store,
+            )?;
+
         // Get dims from first variable (for backward compat)
         let dims: Vec<IStr> = meta
             .arrays
             .get(&vars[0])
-            .map(|m| m.dims.iter().cloned().collect())
+            .map(|m| {
+                m.dims.iter().cloned().collect()
+            })
             .filter(|d: &Vec<IStr>| !d.is_empty())
             .unwrap_or_else(|| {
                 // Fallback: generate dim names
-                let primary_path = &meta.arrays[&vars[0]].path;
-                if let Ok(primary) = Array::open(store.clone(), primary_path.as_ref()) {
-                    (0..primary.dimensionality()).map(|i| format!("dim_{i}").istr()).collect()
+                let primary_path =
+                    &meta.arrays[&vars[0]].path;
+                if let Ok(primary) = Array::open(
+                    store.clone(),
+                    primary_path.as_ref(),
+                ) {
+                    (0..primary.dimensionality())
+                        .map(|i| {
+                            format!("dim_{i}")
+                                .istr()
+                        })
+                        .collect()
                 } else {
                     vec![]
                 }
@@ -106,10 +130,15 @@ impl ZarrSource {
         })
     }
 
-    pub(super) fn consume_chunk_budget(&mut self) -> PyResult<()> {
+    pub(super) fn consume_chunk_budget(
+        &mut self,
+    ) -> PyResult<()> {
         if let Some(left) = self.chunks_left {
             if left == 0 {
-                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                return Err(PyErr::new::<
+                    pyo3::exceptions::PyValueError,
+                    _,
+                >(
                     "max_chunks_to_read limit hit",
                 ));
             }
@@ -122,47 +151,63 @@ impl ZarrSource {
         // Use unified meta for schema if available (supports struct columns)
         // For hierarchical stores, pass None to include all child groups as struct columns
         // unless specific variables were selected by the user
-        let schema = if let Some(ref unified) = self.unified_meta {
+        let schema = if let Some(ref unified) =
+            self.unified_meta
+        {
             if self.is_hierarchical {
                 // For hierarchical stores, always show full schema with struct columns
                 // The with_columns filter will be applied during data retrieval
                 unified.tidy_schema(None)
             } else {
-                unified.tidy_schema(Some(&self.vars))
+                unified
+                    .tidy_schema(Some(&self.vars))
             }
         } else {
-            self.meta.tidy_schema(Some(&self.vars))
+            self.meta
+                .tidy_schema(Some(&self.vars))
         };
         PySchema(Arc::new(schema))
     }
-    
+
     /// Rebuild grid states from a new GroupedChunkPlan (after predicate pushdown)
-    pub(super) fn set_grid_states_from_plan(&mut self, plan: GroupedChunkPlan) {
+    pub(super) fn set_grid_states_from_plan(
+        &mut self,
+        plan: GroupedChunkPlan,
+    ) {
         use std::collections::HashSet;
-        
+
         // Only include variables that were requested
-        let requested: HashSet<&IStr> = self.vars.iter().collect();
+        let requested: HashSet<&IStr> =
+            self.vars.iter().collect();
         let mut grid_states = Vec::new();
-        
-        for (sig, vars, subsets) in plan.iter_grids() {
+
+        for (sig, vars, subsets) in
+            plan.iter_grids()
+        {
             // Filter to only requested variables
             let variables: Vec<IStr> = vars
                 .iter()
-                .filter(|v| requested.contains(*v))
+                .filter(|v| {
+                    requested.contains(*v)
+                })
                 .map(|v| (*v).clone())
                 .collect();
-            
+
             // Skip grids with no requested variables
             if variables.is_empty() {
                 continue;
             }
-            
+
             let sig_arc = Arc::new(sig.clone());
-            let mut state = GridIterState::new(sig_arc, variables);
-            state.add_subsets(subsets.subsets_iter().cloned());
+            let mut state = GridIterState::new(
+                sig_arc, variables,
+            );
+            state.add_subsets(
+                subsets.subsets_iter().cloned(),
+            );
             grid_states.push(state);
         }
-        
+
         self.grid_states = grid_states;
         self.current_grid_idx = 0;
     }
@@ -175,57 +220,103 @@ fn build_initial_grid_states(
     store: &zarrs::storage::ReadableWritableListableStorage,
 ) -> PyResult<Vec<GridIterState>> {
     use std::collections::BTreeMap;
-    
+
     // Group variables by their chunk grid signature
-    let mut grids: BTreeMap<ChunkGridSignature, Vec<IStr>> = BTreeMap::new();
-    
+    let mut grids: BTreeMap<
+        ChunkGridSignature,
+        Vec<IStr>,
+    > = BTreeMap::new();
+
     for var in vars {
-        let Some(var_meta) = meta.arrays.get(var) else {
+        let Some(var_meta) = meta.arrays.get(var)
+        else {
             continue;
         };
-        
-        let arr = Array::open(store.clone(), var_meta.path.as_ref())
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
-        
+
+        let arr = Array::open(
+            store.clone(),
+            var_meta.path.as_ref(),
+        )
+        .map_err(|e| {
+            PyErr::new::<
+                pyo3::exceptions::PyValueError,
+                _,
+            >(e.to_string())
+        })?;
+
         // Get chunk shape from first chunk
-        let zero = vec![0u64; arr.dimensionality()];
-        let chunk_shape: Vec<u64> = if arr.dimensionality() > 0 {
-            arr.chunk_shape(&zero)
-                .map(|cs| cs.iter().map(|x| x.get()).collect())
-                .unwrap_or_else(|_| arr.shape().to_vec())
-        } else {
-            vec![]
-        };
-        
-        let sig = ChunkGridSignature::new(var_meta.dims.clone(), chunk_shape);
-        grids.entry(sig).or_default().push(var.clone());
+        let zero =
+            vec![0u64; arr.dimensionality()];
+        let chunk_shape: Vec<u64> =
+            if arr.dimensionality() > 0 {
+                arr.chunk_shape(&zero)
+                    .map(|cs| {
+                        cs.iter()
+                            .map(|x| x.get())
+                            .collect()
+                    })
+                    .unwrap_or_else(|_| {
+                        arr.shape().to_vec()
+                    })
+            } else {
+                vec![]
+            };
+
+        let sig = ChunkGridSignature::new(
+            var_meta.dims.clone(),
+            chunk_shape,
+        );
+        grids
+            .entry(sig)
+            .or_default()
+            .push(var.clone());
     }
-    
+
     // Build grid states with full array subsets (scan all)
     let mut grid_states = Vec::new();
-    
+
     for (sig, variables) in grids {
         // Get array shape for the first variable in this grid
         let first_var = &variables[0];
         let var_meta = &meta.arrays[first_var];
-        let arr = Array::open(store.clone(), var_meta.path.as_ref())
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
-        
+        let arr = Array::open(
+            store.clone(),
+            var_meta.path.as_ref(),
+        )
+        .map_err(|e| {
+            PyErr::new::<
+                pyo3::exceptions::PyValueError,
+                _,
+            >(e.to_string())
+        })?;
+
         let shape = arr.shape().to_vec();
-        
-        let mut state = GridIterState::new(Arc::new(sig), variables);
-        
+
+        let mut state = GridIterState::new(
+            Arc::new(sig),
+            variables,
+        );
+
         // Add full array as a single subset (scan all)
         if !shape.is_empty() {
-            let full_subset = ArraySubset::new_with_start_shape(
-                vec![0u64; shape.len()],
-                shape,
-            ).map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
-            state.pending_subsets.push_back(full_subset);
+            let full_subset =
+                ArraySubset::new_with_start_shape(
+                    vec![0u64; shape.len()],
+                    shape,
+                )
+                .map_err(|e| {
+                    PyErr::new::<
+                        pyo3::exceptions::PyValueError,
+                        _,
+                    >(e.to_string())
+                })?;
+            state
+                .pending_subsets
+                .push_back(full_subset);
         }
-        
+
         grid_states.push(state);
     }
-    
+
     Ok(grid_states)
 }
