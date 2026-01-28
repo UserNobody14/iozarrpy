@@ -622,12 +622,8 @@ fn compile_value_range_to_lazy_selection(
     // Check if this is a dimension
     let dim_idx = ctx.dim_index(col);
     if dim_idx.is_none() {
-        return Err(CompileError::Unsupported(
-            format!(
-                "column '{}' not found in dimensions",
-                col
-            ),
-        ));
+        // Not a dimension: skip pushdown and let runtime filtering handle it.
+        return Ok(LazyDatasetSelection::NoSelectionMade);
     }
 
     // Create a lazy constraint with the unresolved value range

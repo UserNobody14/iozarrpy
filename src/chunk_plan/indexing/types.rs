@@ -1,6 +1,10 @@
-use std::hash::{Hash, Hasher};
+use std::{
+    hash::{Hash, Hasher},
+    sync::Arc,
+};
 
 use smallvec::SmallVec;
+use zarrs::array::ChunkGrid;
 
 use crate::IStr;
 

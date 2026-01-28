@@ -141,17 +141,14 @@ pub async fn load_dataset_meta_from_opened_async(
         // Parse "coordinates" attribute (CF convention) to identify auxiliary coords
         if let Some(attrs) =
             array.attributes().get("coordinates")
-        {
-            if let Some(coord_str) =
+            && let Some(coord_str) =
                 attrs.as_str()
+        {
+            for coord_name in
+                coord_str.split_whitespace()
             {
-                for coord_name in
-                    coord_str.split_whitespace()
-                {
-                    aux_coords.insert(
-                        coord_name.istr(),
-                    );
-                }
+                aux_coords
+                    .insert(coord_name.istr());
             }
         }
 

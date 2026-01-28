@@ -116,8 +116,12 @@ pub(crate) fn selection_to_grouped_chunk_plan(
                 ArraySubsetList::new()
             };
 
-        grouped_plan
-            .insert(var_key, sig_arc, chunk_plan);
+        grouped_plan.insert(
+            var_key,
+            sig_arc,
+            chunk_plan,
+            Arc::new(arr.chunk_grid().clone()),
+        );
     }
 
     Ok(grouped_plan)
@@ -212,8 +216,12 @@ pub(crate) async fn selection_to_grouped_chunk_plan_async(
                 ArraySubsetList::new()
             };
 
-        grouped_plan
-            .insert(var_key, sig_arc, chunk_plan);
+        grouped_plan.insert(
+            var_key,
+            sig_arc,
+            chunk_plan,
+            Arc::new(arr.chunk_grid().clone()),
+        );
     }
 
     Ok(grouped_plan)

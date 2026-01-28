@@ -5,17 +5,17 @@
 
 use polars::prelude::*;
 use pyo3::prelude::*;
-use pyo3_polars::error::PyPolarsErr;
 use pyo3_polars::PyDataFrame;
+use pyo3_polars::error::PyPolarsErr;
 use zarrs::array::Array;
 
 use crate::reader::{
-    compute_strides, retrieve_1d_subset,
-    retrieve_array_subset, ColumnData,
+    ColumnData, compute_strides,
+    retrieve_1d_subset, retrieve_chunk,
 };
 use crate::{IStr, IntoIStr};
 
-use super::{to_py_err, ZarrSource};
+use super::{ZarrSource, to_py_err};
 
 impl ZarrSource {
     pub(super) fn next_impl(
@@ -86,12 +86,11 @@ impl ZarrSource {
         Ok(Some(PyDataFrame(df)))
     }
 
-    /// Read a batch from the current grid, including ALL variables with consistent columns.
+    /// Read a batch from the current grid, including ALL variables
+    /// with consistent columns.
     ///
-    /// This is the core method for handling heterogeneous chunk grids:
-    /// 1. Find a grid with pending work to define the coordinate range
-    /// 2. Read ALL variables that share the same dimensions (data for some, reading actual values)
-    /// 3. Variables with different dimensions get null columns
+    /// This handles heterogeneous chunk grids by using the current grid
+    /// to define the coordinate range and filling other grids with nulls.
     fn read_joined_batch(
         &mut self,
     ) -> PyResult<Option<DataFrame>> {
@@ -200,81 +199,10 @@ impl ZarrSource {
         Ok(Some(result))
     }
 
-    /// Read a batch for a specific grid, producing a DataFrame with dims + this grid's variables.
-    /// This is used when reading partial DataFrames to be joined.
-    fn read_single_grid_batch(
-        &self,
-        grid_idx: usize,
-        subset: &zarrs::array_subset::ArraySubset,
-        start: usize,
-        len: usize,
-        dim_cols: &[Column],
-    ) -> PyResult<DataFrame> {
-        let grid_state =
-            &self.grid_states[grid_idx];
-        let dim_names: std::collections::HashSet<
-            &IStr,
-        > = self.dims.iter().collect();
-
-        let mut cols: Vec<Column> =
-            dim_cols.to_vec();
-
-        // Read this grid's variables
-        for var_name in &grid_state.variables {
-            if dim_names.contains(var_name) {
-                continue; // Skip dimension coordinates
-            }
-            if !self
-                .should_emit(var_name.as_ref())
-            {
-                continue;
-            }
-
-            let var_meta = match self
-                .meta
-                .arrays
-                .get(var_name)
-            {
-                Some(m) => m,
-                None => continue,
-            };
-
-            let arr = Array::open(
-                self.store.clone(),
-                var_meta.path.as_ref(),
-            )
-            .map_err(to_py_err)?;
-
-            // Read the subset directly
-            let data = retrieve_array_subset(
-                &arr, subset,
-            )
-            .map_err(to_py_err)?;
-
-            // Slice for batching
-            let sliced = data.slice(start, len);
-            cols.push(
-                sliced
-                    .into_series(
-                        var_name.as_ref(),
-                    )
-                    .into(),
-            );
-        }
-
-        DataFrame::new(len, cols).map_err(|e| {
-            PyErr::new::<
-                pyo3::exceptions::PyValueError,
-                _,
-            >(e.to_string())
-        })
-    }
-
     /// Read a batch that includes ALL requested variables (with consistent column order).
-    /// Variables not in the current grid are read from their respective grids using the same
-    /// coordinate range.
+    /// Variables not in the current grid are filled with nulls.
     fn read_full_batch(
-        &self,
+        &mut self,
         primary_grid_idx: usize,
         subset: &zarrs::array_subset::ArraySubset,
         subset_shape: &[u64],
@@ -284,12 +212,8 @@ impl ZarrSource {
         len: usize,
     ) -> PyResult<DataFrame> {
         let dim_names: std::collections::HashSet<
-            &IStr,
-        > = self.dims.iter().collect();
-        let primary_dims = self.grid_states
-            [primary_grid_idx]
-            .signature
-            .dims();
+            IStr,
+        > = self.dims.iter().cloned().collect();
 
         // Build dimension coordinate columns
         let mut cols: Vec<Column> = Vec::new();
@@ -354,21 +278,15 @@ impl ZarrSource {
             cols.push(col);
         }
 
-        // Build a map of which grid each variable belongs to
-        let mut var_to_grid: std::collections::HashMap<
-            &IStr,
-            usize,
-        > = std::collections::HashMap::new();
-        for (idx, grid_state) in
-            self.grid_states.iter().enumerate()
-        {
-            for var in &grid_state.variables {
-                var_to_grid.insert(var, idx);
-            }
-        }
+        let primary_dims = self.grid_states
+            [primary_grid_idx]
+            .signature
+            .dims()
+            .to_vec();
 
         // Add variable columns in self.vars order (consistent across batches)
-        for var_name in &self.vars {
+        let vars = self.vars.clone();
+        for var_name in &vars {
             if dim_names.contains(var_name) {
                 continue; // Skip dimension coordinates
             }
@@ -387,32 +305,22 @@ impl ZarrSource {
                 None => continue,
             };
 
-            // Check if this variable's grid has the same dimensions as the primary grid
-            let var_grid_idx =
-                var_to_grid.get(var_name);
-            let var_dims =
-                var_grid_idx.map(|&idx| {
-                    self.grid_states[idx]
-                        .signature
-                        .dims()
-                        .to_vec()
-                });
-            let same_dims = var_dims
-                .map_or(false, |d| {
-                    d == primary_dims
-                });
+            let same_dims =
+                var_meta.dims.as_slice() == primary_dims;
 
             if same_dims {
-                // Variable shares dims with primary grid - read actual data
                 let arr = Array::open(
                     self.store.clone(),
                     var_meta.path.as_ref(),
                 )
                 .map_err(to_py_err)?;
-                let data = retrieve_array_subset(
-                    &arr, subset,
-                )
-                .map_err(to_py_err)?;
+                let data = gather_subset_data(
+                    self,
+                    &arr,
+                    subset,
+                    subset_shape,
+                    subset_origin,
+                )?;
                 let sliced =
                     data.slice(start, len);
                 cols.push(
@@ -454,11 +362,11 @@ impl ZarrSource {
 
     /// Add struct columns for hierarchical child groups.
     fn add_struct_columns_to_df(
-        &self,
+        &mut self,
         mut df: DataFrame,
         subset: &zarrs::array_subset::ArraySubset,
-        _subset_shape: &[u64],
-        _subset_origin: &[u64],
+        subset_shape: &[u64],
+        subset_origin: &[u64],
         _strides: &[u64],
         start: usize,
         len: usize,
@@ -467,9 +375,22 @@ impl ZarrSource {
         else {
             return Ok(df);
         };
+        let child_specs: Vec<(IStr, IStr, Vec<IStr>)> =
+            unified
+                .root
+                .children
+                .iter()
+                .map(|(name, node)| {
+                    (
+                        name.clone(),
+                        node.path.clone(),
+                        node.data_vars.clone(),
+                    )
+                })
+                .collect();
 
-        for (child_name, child_node) in
-            &unified.root.children
+        for (child_name, child_path, child_vars) in
+            child_specs
         {
             let child_name_str: &str =
                 child_name.as_ref();
@@ -489,13 +410,13 @@ impl ZarrSource {
             let mut field_series: Vec<Series> =
                 Vec::new();
 
-            for var_name in &child_node.data_vars
+            for var_name in &child_vars
             {
                 let var_name_str: &str =
                     var_name.as_ref();
 
                 let child_path_str: &str =
-                    child_node.path.as_ref();
+                    child_path.as_ref();
                 let full_path = format!(
                     "{}{}",
                     child_path_str,
@@ -513,21 +434,29 @@ impl ZarrSource {
                     }
                 );
 
-                if let Some(arr_meta) = unified
-                    .path_to_array
-                    .get(&full_path.istr())
-                {
+                let arr_path = self
+                    .unified_meta
+                    .as_ref()
+                    .and_then(|meta| {
+                        meta.path_to_array
+                            .get(&full_path.istr())
+                            .map(|arr| arr.path.clone())
+                    });
+                if let Some(arr_path) = arr_path {
                     let arr = Array::open(
                         self.store.clone(),
-                        arr_meta.path.as_ref(),
+                        arr_path.as_ref(),
                     )
                     .map_err(to_py_err)?;
 
                     let data =
-                        retrieve_array_subset(
-                            &arr, subset,
-                        )
-                        .map_err(to_py_err)?;
+                        gather_subset_data(
+                            self,
+                            &arr,
+                            subset,
+                            subset_shape,
+                            subset_origin,
+                        )?;
                     let series = data
                         .slice(start, len)
                         .into_series(
@@ -577,6 +506,157 @@ impl ZarrSource {
 
         Ok(df)
     }
+}
+
+fn gather_subset_data(
+    source: &mut ZarrSource,
+    arr: &Array<
+        dyn zarrs::storage::ReadableWritableListableStorageTraits,
+    >,
+    subset: &zarrs::array_subset::ArraySubset,
+    subset_shape: &[u64],
+    subset_origin: &[u64],
+) -> PyResult<ColumnData> {
+    let mut data = ColumnData::empty_for_dtype(
+        arr.data_type().identifier(),
+    )
+    .ok_or_else(|| {
+        to_py_err(format!(
+            "unsupported zarr dtype: {}",
+            arr.data_type().identifier()
+        ))
+    })?;
+
+    let chunks = arr
+        .chunks_in_array_subset(subset)
+        .map_err(to_py_err)?;
+    let Some(chunks) = chunks else {
+        return Ok(data);
+    };
+
+    let mut chunk_indices: Vec<Vec<u64>> = chunks
+        .indices()
+        .iter()
+        .map(|chunk| {
+            chunk.iter().copied().collect()
+        })
+        .collect();
+    chunk_indices.sort();
+    let array_shape = arr.shape().to_vec();
+    let subset_strides =
+        compute_strides(subset_shape);
+    let mut global_indices: Vec<usize> =
+        Vec::new();
+
+    for chunk in chunk_indices {
+        source.consume_chunk_budget()?;
+        let chunk_data =
+            retrieve_chunk(arr, &chunk)
+                .map_err(to_py_err)?;
+        let chunk_shape = arr
+            .chunk_shape(&chunk)
+            .map_err(to_py_err)?;
+        let chunk_shape: Vec<u64> = chunk_shape
+            .iter()
+            .map(|v| v.get())
+            .collect();
+        let chunk_len = chunk_shape
+            .iter()
+            .try_fold(1usize, |acc, v| {
+                acc.checked_mul(*v as usize)
+            })
+            .ok_or_else(|| {
+                to_py_err(
+                    "chunk size overflow"
+                        .to_string(),
+                )
+            })?;
+        let origin = arr
+            .chunk_grid()
+            .chunk_origin(&chunk)
+            .map_err(to_py_err)?
+            .unwrap_or_else(|| {
+                vec![0; chunk_shape.len()]
+            });
+        let strides =
+            compute_strides(&chunk_shape);
+
+        let mut keep: Vec<usize> =
+            Vec::with_capacity(chunk_len);
+        let mut keep_global: Vec<usize> =
+            Vec::with_capacity(chunk_len);
+        for row in 0..chunk_len {
+            let mut ok = true;
+            let mut global_idx: u64 = 0;
+            for d in 0..chunk_shape.len() {
+                let local = (row as u64
+                    / strides[d])
+                    % chunk_shape[d];
+                let global = origin[d] + local;
+                let array_len = array_shape
+                    .get(d)
+                    .copied()
+                    .unwrap_or(0);
+                let sub_start = subset_origin
+                    .get(d)
+                    .copied()
+                    .unwrap_or(0);
+                let sub_len = subset_shape
+                    .get(d)
+                    .copied()
+                    .unwrap_or(1);
+                if global >= array_len
+                    || global < sub_start
+                    || global
+                        >= sub_start + sub_len
+                {
+                    ok = false;
+                    break;
+                }
+                let local_in_subset =
+                    global - sub_start;
+                let stride = subset_strides
+                    .get(d)
+                    .copied()
+                    .unwrap_or(1);
+                global_idx = global_idx
+                    .saturating_add(
+                        local_in_subset * stride,
+                    );
+            }
+            if ok {
+                keep.push(row);
+                keep_global
+                    .push(global_idx as usize);
+            }
+        }
+
+        if !keep.is_empty() {
+            if keep.len() == chunk_len {
+                data.extend(chunk_data);
+                global_indices.extend(
+                    keep_global.into_iter(),
+                );
+            } else {
+                data.extend(
+                    chunk_data
+                        .take_indices(&keep),
+                );
+                global_indices.extend(
+                    keep_global.into_iter(),
+                );
+            }
+        }
+    }
+
+    if !global_indices.is_empty() {
+        let mut order: Vec<usize> =
+            (0..global_indices.len()).collect();
+        order.sort_by_key(|&i| global_indices[i]);
+        data = data.take_indices(&order);
+    }
+
+    Ok(data)
 }
 
 /// Build a coordinate column for a dimension

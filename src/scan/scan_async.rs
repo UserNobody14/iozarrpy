@@ -3,6 +3,7 @@ use super::open_arrays::open_arrays_async;
 use super::prelude::*;
 use crate::IntoIStr;
 use crate::chunk_plan::compile_expr_to_grouped_chunk_plan_async;
+use zarrs::array_subset::ArraySubset;
 
 pub(crate) async fn scan_zarr_df_async(
     store_input: StoreInput,
@@ -75,48 +76,64 @@ pub(crate) async fn scan_zarr_df_async(
             }
         };
 
-    // Pick a reference variable for chunk iteration geometry
-    // TODO: Eventually iterate per-grid, but for now pick the first variable
-    let ref_var = &vars[0];
-    let ref_meta = meta
-        .arrays
-        .get(ref_var)
-        .ok_or_else(|| {
-            PyErr::new::<
-                pyo3::exceptions::PyValueError,
-                _,
-            >("unknown variable")
-        })?;
-    let ref_array =
-        zarrs::array::Array::async_open(
-            opened_async.store.clone(),
-            ref_meta.path.as_ref(),
-        )
-        .await
-        .map_err(|e| {
-            PyErr::new::<
-                pyo3::exceptions::PyValueError,
-                _,
-            >(e.to_string())
-        })?;
-    let ref_array = Arc::new(ref_array);
+    // Build per-variable chunk jobs (array, chunk index).
+    let mut chunk_jobs: Vec<(
+        Arc<
+            Array<
+                dyn zarrs::storage::AsyncReadableWritableListableStorageTraits,
+            >,
+        >,
+        Vec<u64>,
+    )> = Vec::new();
+    for var in &vars {
+        let primary = var_arrays
+            .iter()
+            .find(|(name, _)| name == var)
+            .map(|(_, arr)| Arc::clone(arr))
+            .ok_or_else(|| {
+                PyErr::new::<
+                    pyo3::exceptions::PyValueError,
+                    _,
+                >("unknown variable")
+            })?;
 
-    // Convert array subsets to chunk indices for the reference variable
-    let mut chunk_indices: Vec<Vec<u64>> =
-        Vec::new();
-
-    // Get the plan for the reference variable, or scan all chunks if not in plan
-    if let Some(subsets) =
-        grouped_plan.get_plan(ref_var.as_ref())
-    {
-        for subset in subsets.subsets_iter() {
-            if let Ok(Some(chunks)) = ref_array
-                .chunks_in_array_subset(subset)
+        let mut var_chunk_indices: Vec<Vec<u64>> =
+            Vec::new();
+        if let Some(subsets) =
+            grouped_plan.get_plan(var.as_ref())
+        {
+            // Use the subsets from the plan to select chunks
+            for subset in subsets.subsets_iter() {
+                if let Ok(Some(chunks)) = primary
+                    .chunks_in_array_subset(subset)
+                {
+                    for chunk_idx in
+                        chunks.indices().iter()
+                    {
+                        var_chunk_indices.push(
+                            chunk_idx
+                                .iter()
+                                .copied()
+                                .collect(),
+                        );
+                    }
+                }
+            }
+        } else if grouped_plan.is_empty() {
+            // No selection made - scan all chunks for this variable
+            let shape = primary.shape().to_vec();
+            let full = ArraySubset::new_with_start_shape(
+                vec![0; shape.len()],
+                shape,
+            )
+            .map_err(to_py_err)?;
+            if let Ok(Some(chunks)) = primary
+                .chunks_in_array_subset(&full)
             {
                 for chunk_idx in
                     chunks.indices().iter()
                 {
-                    chunk_indices.push(
+                    var_chunk_indices.push(
                         chunk_idx
                             .iter()
                             .copied()
@@ -125,30 +142,12 @@ pub(crate) async fn scan_zarr_df_async(
                 }
             }
         }
-    } else if grouped_plan.is_empty() {
-        // No selection made - scan all chunks
-        let grid_shape =
-            ref_array.chunk_grid().grid_shape();
-        // Generate all chunk indices
-        let mut idx =
-            vec![0u64; grid_shape.len()];
-        loop {
-            chunk_indices.push(idx.clone());
-            // Increment (last dim fastest)
-            let mut carry = true;
-            for d in (0..idx.len()).rev() {
-                if carry {
-                    idx[d] += 1;
-                    if idx[d] < grid_shape[d] {
-                        carry = false;
-                    } else {
-                        idx[d] = 0;
-                    }
-                }
-            }
-            if carry {
-                break;
-            }
+
+        for idx in var_chunk_indices {
+            chunk_jobs.push((
+                Arc::clone(&primary),
+                idx,
+            ));
         }
     }
 
@@ -172,13 +171,13 @@ pub(crate) async fn scan_zarr_df_async(
     }));
 
     let mut futs = FuturesUnordered::new();
-    for idx in chunk_indices {
+    for (primary, idx) in chunk_jobs {
         let permit = semaphore
             .clone()
             .acquire_owned()
             .await
             .unwrap();
-        let ref_array = ref_array.clone();
+        let primary = Arc::clone(&primary);
         let meta = Arc::clone(&meta);
         let dims = Arc::clone(&dims);
         let vars = Arc::clone(&vars);
@@ -191,7 +190,7 @@ pub(crate) async fn scan_zarr_df_async(
             let _permit = permit;
             chunk_to_df(
                 idx,
-                ref_array,
+                primary,
                 meta,
                 dims,
                 vars,

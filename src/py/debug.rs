@@ -581,8 +581,12 @@ async fn _debug_chunk_planning_async_inner(
             // List variables per grid signature
             let mut grid_info: Vec<String> =
                 Vec::new();
-            for (sig, vars, subsets) in
-                plan.iter_grids()
+            for (
+                sig,
+                vars,
+                subsets,
+                chunk_grid,
+            ) in plan.iter_grids()
             {
                 let var_names: Vec<&str> = vars
                     .iter()
@@ -590,6 +594,12 @@ async fn _debug_chunk_planning_async_inner(
                     .collect();
                 let num_subsets = subsets
                     .subsets_iter()
+                    .map(
+                        // Convert to chunks and count the number of chunks
+                        |subset| chunk_grid.chunks_in_array_subset(subset)
+                    )
+                    .map(|chunks| chunks.map(|chunks: Option<zarrs::array_subset::ArraySubset>| chunks.map(
+                        |chunks| chunks.num_elements()).unwrap_or(0)))
                     .count();
                 grid_info.push(format!(
                     "dims={:?}, vars={:?}, subsets={}",

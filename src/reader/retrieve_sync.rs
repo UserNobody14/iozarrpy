@@ -1,7 +1,7 @@
 use zarrs::array::Array;
 
-use crate::reader::limits::max_chunk_elems;
 use crate::reader::ColumnData;
+use crate::reader::limits::max_chunk_elems;
 
 pub(crate) fn retrieve_chunk(
     array: &Array<dyn zarrs::storage::ReadableWritableListableStorageTraits>,
@@ -149,93 +149,6 @@ pub(crate) fn retrieve_1d_subset(
     }
 
     Ok(result)
-}
-
-/// Retrieve a subset of an array (arbitrary region, not aligned to chunks).
-pub(crate) fn retrieve_array_subset(
-    array: &Array<dyn zarrs::storage::ReadableWritableListableStorageTraits>,
-    subset: &zarrs::array_subset::ArraySubset,
-) -> Result<ColumnData, String> {
-    let num_elems = subset.num_elements_usize();
-    if num_elems as u128
-        > max_chunk_elems() as u128
-    {
-        return Err(
-            "refusing to allocate extremely large array subset; set RAINBEAR_MAX_CHUNK_ELEMS to override"
-                .to_string(),
-        );
-    }
-    if num_elems == 0 {
-        let id = array.data_type().identifier();
-        return ColumnData::empty_for_dtype(id)
-            .ok_or_else(|| {
-                format!(
-                    "unsupported zarr dtype: {id}"
-                )
-            });
-    }
-
-    let id = array.data_type().identifier();
-    match id {
-        "bool" => Ok(ColumnData::Bool(
-            array
-                .retrieve_array_subset::<Vec<bool>>(subset)
-                .map_err(to_string_err)?,
-        )),
-        "int8" => Ok(ColumnData::I8(
-            array
-                .retrieve_array_subset::<Vec<i8>>(subset)
-                .map_err(to_string_err)?,
-        )),
-        "int16" => Ok(ColumnData::I16(
-            array
-                .retrieve_array_subset::<Vec<i16>>(subset)
-                .map_err(to_string_err)?,
-        )),
-        "int32" => Ok(ColumnData::I32(
-            array
-                .retrieve_array_subset::<Vec<i32>>(subset)
-                .map_err(to_string_err)?,
-        )),
-        "int64" => Ok(ColumnData::I64(
-            array
-                .retrieve_array_subset::<Vec<i64>>(subset)
-                .map_err(to_string_err)?,
-        )),
-        "uint8" => Ok(ColumnData::U8(
-            array
-                .retrieve_array_subset::<Vec<u8>>(subset)
-                .map_err(to_string_err)?,
-        )),
-        "uint16" => Ok(ColumnData::U16(
-            array
-                .retrieve_array_subset::<Vec<u16>>(subset)
-                .map_err(to_string_err)?,
-        )),
-        "uint32" => Ok(ColumnData::U32(
-            array
-                .retrieve_array_subset::<Vec<u32>>(subset)
-                .map_err(to_string_err)?,
-        )),
-        "uint64" => Ok(ColumnData::U64(
-            array
-                .retrieve_array_subset::<Vec<u64>>(subset)
-                .map_err(to_string_err)?,
-        )),
-        "float32" => Ok(ColumnData::F32(
-            array
-                .retrieve_array_subset::<Vec<f32>>(subset)
-                .map_err(to_string_err)?,
-        )),
-        "float64" => Ok(ColumnData::F64(
-            array
-                .retrieve_array_subset::<Vec<f64>>(subset)
-                .map_err(to_string_err)?,
-        )),
-        other => {
-            Err(format!("unsupported zarr dtype: {other}"))
-        }
-    }
 }
 
 fn to_string_err<E: std::fmt::Display>(

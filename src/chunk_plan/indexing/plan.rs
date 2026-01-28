@@ -1,9 +1,11 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use zarrs::array::ChunkGrid;
+
+use crate::IStr;
 use crate::chunk_plan::indexing::selection::ArraySubsetList;
 use crate::chunk_plan::indexing::types::ChunkGridSignature;
-use crate::IStr;
 
 // =============================================================================
 // Grouped Chunk Plan
@@ -23,6 +25,12 @@ pub(crate) struct GroupedChunkPlan {
     /// Variable name to grid signature lookup
     var_to_grid:
         BTreeMap<IStr, Arc<ChunkGridSignature>>,
+
+    /// Chunk grid by signature
+    chunk_grid: BTreeMap<
+        Arc<ChunkGridSignature>,
+        Arc<ChunkGrid>,
+    >,
 }
 
 impl GroupedChunkPlan {
@@ -31,6 +39,7 @@ impl GroupedChunkPlan {
         Self {
             by_grid: BTreeMap::new(),
             var_to_grid: BTreeMap::new(),
+            chunk_grid: BTreeMap::new(),
         }
     }
 
@@ -40,9 +49,15 @@ impl GroupedChunkPlan {
         var: IStr,
         sig: Arc<ChunkGridSignature>,
         plan: ArraySubsetList,
+        chunk_grid: Arc<ChunkGrid>,
     ) {
         self.var_to_grid.insert(var, sig.clone());
-        self.by_grid.entry(sig).or_insert(plan);
+        self.by_grid
+            .entry(sig.clone())
+            .or_insert(plan);
+        self.chunk_grid
+            .entry(sig.clone())
+            .or_insert(chunk_grid);
     }
 
     /// Get the plan for a specific variable.
@@ -63,6 +78,14 @@ impl GroupedChunkPlan {
     ) -> Option<&Arc<ChunkGridSignature>> {
         self.var_to_grid
             .get(&crate::IntoIStr::istr(var))
+    }
+
+    /// Get the chunk grid for a signature.
+    pub fn get_chunk_grid(
+        &self,
+        sig: &ChunkGridSignature,
+    ) -> Option<&Arc<ChunkGrid>> {
+        self.chunk_grid.get(sig)
     }
 
     /// Get all variables for a grid signature.
@@ -110,13 +133,22 @@ impl GroupedChunkPlan {
             &ChunkGridSignature,
             Vec<&IStr>,
             &ArraySubsetList,
+            &Arc<ChunkGrid>,
         ),
     > {
         self.by_grid.iter().map(
             move |(sig, plan)| {
                 let vars = self
                     .vars_for_grid(sig.as_ref());
-                (sig.as_ref(), vars, plan)
+                (
+                    sig.as_ref(),
+                    vars,
+                    plan,
+                    self.get_chunk_grid(
+                        sig.as_ref(),
+                    )
+                    .unwrap(),
+                )
             },
         )
     }

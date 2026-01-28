@@ -3,11 +3,12 @@ use std::sync::Arc;
 
 use polars::prelude::Expr;
 use pyo3::prelude::*;
+use zarrs::array::ChunkGrid;
 use zarrs::array_subset::ArraySubset;
 
+use crate::IStr;
 use crate::chunk_plan::ChunkGridSignature;
 use crate::meta::{ZarrDatasetMeta, ZarrMeta};
-use crate::IStr;
 
 pub(super) const DEFAULT_BATCH_SIZE: usize =
     10_000;
@@ -18,6 +19,7 @@ pub(super) const DEFAULT_BATCH_SIZE: usize =
 #[derive(Debug)]
 pub(super) struct GridIterState {
     pub signature: Arc<ChunkGridSignature>,
+    pub chunk_grid: Arc<ChunkGrid>,
     pub variables: Vec<IStr>,
     /// Pending array subsets (element ranges) to read
     pub pending_subsets:
@@ -32,9 +34,11 @@ impl GridIterState {
     pub fn new(
         signature: Arc<ChunkGridSignature>,
         variables: Vec<IStr>,
+        chunk_grid: Arc<ChunkGrid>,
     ) -> Self {
         Self {
             signature,
+            chunk_grid,
             variables,
             pending_subsets:
                 std::collections::VecDeque::new(),

@@ -382,6 +382,7 @@ async fn scan_zarr_with_backend_async(
     if let Some(subsets) =
         grouped_plan.get_plan(ref_var.as_ref())
     {
+        // Use the subsets from the plan to select chunks
         for subset in subsets.subsets_iter() {
             if let Ok(Some(chunks)) = ref_array
                 .chunks_in_array_subset(subset)
@@ -400,25 +401,29 @@ async fn scan_zarr_with_backend_async(
         }
     } else if grouped_plan.is_empty() {
         // No selection made - scan all chunks
-        let grid_shape =
-            ref_array.chunk_grid().grid_shape();
-        let mut idx =
-            vec![0u64; grid_shape.len()];
-        loop {
-            chunk_indices.push(idx.clone());
-            let mut carry = true;
-            for d in (0..idx.len()).rev() {
-                if carry {
-                    idx[d] += 1;
-                    if idx[d] < grid_shape[d] {
-                        carry = false;
-                    } else {
-                        idx[d] = 0;
-                    }
-                }
-            }
-            if carry {
-                break;
+        let shape = ref_array.shape().to_vec();
+        let full = zarrs::array_subset::ArraySubset::new_with_start_shape(
+            vec![0; shape.len()],
+            shape,
+        )
+        .map_err(|e| {
+            PyErr::new::<
+                pyo3::exceptions::PyValueError,
+                _,
+            >(e.to_string())
+        })?;
+        if let Ok(Some(chunks)) = ref_array
+            .chunks_in_array_subset(&full)
+        {
+            for chunk_idx in
+                chunks.indices().iter()
+            {
+                chunk_indices.push(
+                    chunk_idx
+                        .iter()
+                        .copied()
+                        .collect(),
+                );
             }
         }
     }

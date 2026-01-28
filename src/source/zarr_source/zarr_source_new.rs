@@ -6,13 +6,16 @@ use zarrs::array::Array;
 use zarrs::array_subset::ArraySubset;
 
 use crate::chunk_plan::{
-    ChunkGridSignature, GroupedChunkPlan,
+    ChunkGridSignature, DatasetSelection,
+    GroupedChunkPlan,
+    selection_to_grouped_chunk_plan,
 };
 use crate::store::StoreInput;
 use crate::{IStr, IntoIStr};
 
 use super::{
-    GridIterState, ZarrSource, DEFAULT_BATCH_SIZE,
+    DEFAULT_BATCH_SIZE, GridIterState,
+    ZarrSource, to_py_err,
 };
 
 impl ZarrSource {
@@ -80,10 +83,7 @@ impl ZarrSource {
         };
 
         // Build per-grid iteration state for all requested variables
-        let grid_states =
-            build_initial_grid_states(
-                &meta, &vars, &store,
-            )?;
+        let grid_states = Vec::new();
 
         // Get dims from first variable (for backward compat)
         let dims: Vec<IStr> = meta
@@ -112,7 +112,7 @@ impl ZarrSource {
                 }
             });
 
-        Ok(Self {
+        let mut source = Self {
             meta,
             unified_meta,
             store,
@@ -127,7 +127,17 @@ impl ZarrSource {
             done: false,
             chunks_left: max_chunks_to_read,
             is_hierarchical,
-        })
+        };
+
+        let plan = selection_to_grouped_chunk_plan(
+            &DatasetSelection::NoSelectionMade,
+            &source.meta,
+            source.store.clone(),
+        )
+        .map_err(to_py_err)?;
+        source.set_grid_states_from_plan(plan);
+
+        Ok(source)
     }
 
     pub(super) fn consume_chunk_budget(
@@ -179,9 +189,12 @@ impl ZarrSource {
         // Only include variables that were requested
         let requested: HashSet<&IStr> =
             self.vars.iter().collect();
-        let mut grid_states = Vec::new();
+        let mut by_dims: std::collections::BTreeMap<
+            Vec<IStr>,
+            GridIterState,
+        > = std::collections::BTreeMap::new();
 
-        for (sig, vars, subsets) in
+        for (sig, vars, subsets, chunk_grid) in
             plan.iter_grids()
         {
             // Filter to only requested variables
@@ -198,125 +211,79 @@ impl ZarrSource {
                 continue;
             }
 
-            let sig_arc = Arc::new(sig.clone());
-            let mut state = GridIterState::new(
-                sig_arc, variables,
-            );
-            state.add_subsets(
-                subsets.subsets_iter().cloned(),
-            );
-            grid_states.push(state);
+            let dims_key = sig.dims().to_vec();
+            let entry = by_dims
+                .entry(dims_key.clone())
+                .or_insert_with(|| {
+                    let sig = ChunkGridSignature::from_dims_only(
+                        dims_key.clone(),
+                    );
+                    GridIterState::new(
+                        Arc::new(sig),
+                        Vec::new(),
+                        chunk_grid.clone(),
+                    )
+                });
+            for var in variables {
+                if !entry.variables.contains(&var) {
+                    entry.variables.push(var);
+                }
+            }
+            if entry.pending_subsets.is_empty()
+                && entry.current_subset.is_none()
+                && subsets.subsets_iter().next().is_some()
+            {
+                entry.add_subsets(
+                    subsets
+                        .subsets_iter()
+                        .cloned(),
+                );
+            }
+        }
+
+        let mut grid_states: Vec<GridIterState> =
+            by_dims.into_values().collect();
+        for state in &mut grid_states {
+            if state.pending_subsets.is_empty()
+                && state.current_subset.is_none()
+            {
+                if let Some(var_name) =
+                    state.variables.first()
+                {
+                    if let Some(var_meta) = self
+                        .meta
+                        .arrays
+                        .get(var_name)
+                    {
+                        if let Ok(arr) =
+                            Array::open(
+                                self.store
+                                    .clone(),
+                                var_meta
+                                    .path
+                                    .as_ref(),
+                            )
+                        {
+                            let shape = arr
+                                .shape()
+                                .to_vec();
+                            if let Ok(full) = ArraySubset::new_with_start_shape(
+                                vec![0; shape.len()],
+                                shape,
+                            ) {
+                                state.add_subsets(
+                                    std::iter::once(
+                                        full,
+                                    ),
+                                );
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         self.grid_states = grid_states;
         self.current_grid_idx = 0;
     }
-}
-
-/// Build initial grid states for all variables (no predicate = scan all elements).
-fn build_initial_grid_states(
-    meta: &crate::meta::ZarrDatasetMeta,
-    vars: &[IStr],
-    store: &zarrs::storage::ReadableWritableListableStorage,
-) -> PyResult<Vec<GridIterState>> {
-    use std::collections::BTreeMap;
-
-    // Group variables by their chunk grid signature
-    let mut grids: BTreeMap<
-        ChunkGridSignature,
-        Vec<IStr>,
-    > = BTreeMap::new();
-
-    for var in vars {
-        let Some(var_meta) = meta.arrays.get(var)
-        else {
-            continue;
-        };
-
-        let arr = Array::open(
-            store.clone(),
-            var_meta.path.as_ref(),
-        )
-        .map_err(|e| {
-            PyErr::new::<
-                pyo3::exceptions::PyValueError,
-                _,
-            >(e.to_string())
-        })?;
-
-        // Get chunk shape from first chunk
-        let zero =
-            vec![0u64; arr.dimensionality()];
-        let chunk_shape: Vec<u64> =
-            if arr.dimensionality() > 0 {
-                arr.chunk_shape(&zero)
-                    .map(|cs| {
-                        cs.iter()
-                            .map(|x| x.get())
-                            .collect()
-                    })
-                    .unwrap_or_else(|_| {
-                        arr.shape().to_vec()
-                    })
-            } else {
-                vec![]
-            };
-
-        let sig = ChunkGridSignature::new(
-            var_meta.dims.clone(),
-            chunk_shape,
-        );
-        grids
-            .entry(sig)
-            .or_default()
-            .push(var.clone());
-    }
-
-    // Build grid states with full array subsets (scan all)
-    let mut grid_states = Vec::new();
-
-    for (sig, variables) in grids {
-        // Get array shape for the first variable in this grid
-        let first_var = &variables[0];
-        let var_meta = &meta.arrays[first_var];
-        let arr = Array::open(
-            store.clone(),
-            var_meta.path.as_ref(),
-        )
-        .map_err(|e| {
-            PyErr::new::<
-                pyo3::exceptions::PyValueError,
-                _,
-            >(e.to_string())
-        })?;
-
-        let shape = arr.shape().to_vec();
-
-        let mut state = GridIterState::new(
-            Arc::new(sig),
-            variables,
-        );
-
-        // Add full array as a single subset (scan all)
-        if !shape.is_empty() {
-            let full_subset =
-                ArraySubset::new_with_start_shape(
-                    vec![0u64; shape.len()],
-                    shape,
-                )
-                .map_err(|e| {
-                    PyErr::new::<
-                        pyo3::exceptions::PyValueError,
-                        _,
-                    >(e.to_string())
-                })?;
-            state
-                .pending_subsets
-                .push_back(full_subset);
-        }
-
-        grid_states.push(state);
-    }
-
-    Ok(grid_states)
 }
