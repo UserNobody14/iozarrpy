@@ -1,4 +1,4 @@
-mod dims;
+pub(crate) mod dims;
 mod dtype;
 mod load_async;
 mod load_sync;

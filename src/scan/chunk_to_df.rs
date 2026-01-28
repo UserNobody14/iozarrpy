@@ -1,15 +1,35 @@
 use super::prelude::*;
+use crate::IntoIStr;
+use crate::meta::dims::dims_for_array;
 
 pub(crate) async fn chunk_to_df(
     idx: Vec<u64>,
     primary: Arc<Array<dyn zarrs::storage::AsyncReadableWritableListableStorageTraits>>,
     meta: Arc<ZarrDatasetMeta>,
-    dims: Arc<Vec<IStr>>,
+    _dims: Arc<Vec<IStr>>,
     _vars: Arc<Vec<IStr>>,
     var_arrays: Arc<Vec<(IStr, Arc<Array<dyn zarrs::storage::AsyncReadableWritableListableStorageTraits>>)>>,
     coord_arrays: Arc<Vec<(IStr, Arc<Array<dyn zarrs::storage::AsyncReadableWritableListableStorageTraits>>)>>,
     with_columns: Arc<Option<BTreeSet<IStr>>>,
 ) -> Result<DataFrame, PyErr> {
+    // Get dimension names from the primary array itself, not from global meta.dims
+    // This ensures correct ordering for this specific array/grid
+    let dims: Arc<Vec<IStr>> = Arc::new(
+        dims_for_array(primary.as_ref())
+            .map(|sv| {
+                sv.into_iter()
+                    .collect::<Vec<IStr>>()
+            })
+            .unwrap_or_else(|| {
+                // Fallback to dim_0, dim_1, etc.
+                (0..primary.dimensionality())
+                    .map(|i| {
+                        format!("dim_{i}").istr()
+                    })
+                    .collect()
+            }),
+    );
+
     // Compute primary chunk geometry.
     let chunk_shape_nz = primary
         .chunk_shape(&idx)

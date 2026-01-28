@@ -99,28 +99,41 @@ pub(crate) async fn scan_zarr_df_async(
 
         let mut var_chunk_indices: Vec<Vec<u64>> =
             Vec::new();
-        if let Some(subsets) =
+        
+        // Determine if we should scan all chunks for this variable
+        let should_scan_all = if let Some(subsets) =
             grouped_plan.get_plan(var.as_ref())
         {
-            // Use the subsets from the plan to select chunks
-            for subset in subsets.subsets_iter() {
-                if let Ok(Some(chunks)) = primary
-                    .chunks_in_array_subset(subset)
-                {
-                    for chunk_idx in
-                        chunks.indices().iter()
+            // If subsets is empty, it means "select all" (NoSelectionMade case)
+            if subsets.subsets_iter().next().is_none() {
+                true
+            } else {
+                // Use the subsets from the plan to select chunks
+                for subset in subsets.subsets_iter() {
+                    if let Ok(Some(chunks)) = primary
+                        .chunks_in_array_subset(subset)
                     {
-                        var_chunk_indices.push(
-                            chunk_idx
-                                .iter()
-                                .copied()
-                                .collect(),
-                        );
+                        for chunk_idx in
+                            chunks.indices().iter()
+                        {
+                            var_chunk_indices.push(
+                                chunk_idx
+                                    .iter()
+                                    .copied()
+                                    .collect(),
+                            );
+                        }
                     }
                 }
+                false
             }
-        } else if grouped_plan.is_empty() {
-            // No selection made - scan all chunks for this variable
+        } else {
+            // Variable not in plan or plan is empty - scan all
+            grouped_plan.is_empty()
+        };
+        
+        if should_scan_all {
+            // Scan all chunks for this variable
             let shape = primary.shape().to_vec();
             let full = ArraySubset::new_with_start_shape(
                 vec![0; shape.len()],
