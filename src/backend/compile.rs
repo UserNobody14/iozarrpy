@@ -11,6 +11,7 @@ use crate::chunk_plan::{
     CompileError, PlannerStats,
     compile_expr_to_grouped_chunk_plan,
     compile_expr_to_grouped_chunk_plan_async,
+    compile_expr_to_grouped_chunk_plan_unified_async,
 };
 use crate::chunk_plan::{
     GroupedChunkPlan,
@@ -82,9 +83,10 @@ impl<
         (GroupedChunkPlan, PlannerStats),
         BackendError,
     > {
-        Ok(compile_expr_to_grouped_chunk_plan_async(
+        let meta = self.metadata().await?;
+        Ok(compile_expr_to_grouped_chunk_plan_unified_async(
             expr,
-            &self.metadata().await?.planning_meta(),
+            &meta,
             self.async_store().clone(),
         ).await?)
     }

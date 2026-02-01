@@ -91,7 +91,7 @@ def test_scan_orography_no_filter(orography_path: str) -> None:
     """Test that scanning without filters matches xarray."""
     columns = ["y", "x", "geopotential_height"]
     
-    out = rainbear.scan_zarr(orography_path, variables=["geopotential_height"]).collect()
+    out = rainbear.scan_zarr(orography_path).collect()
     baseline = scan_via_xarray(orography_path, columns=columns).collect()
     
     assert_frames_equal(out.select(columns), baseline, sort_by=["y", "x"])
@@ -101,7 +101,7 @@ def test_scan_no_filter(path: str) -> None:
     """Test that scanning a 4D dataset without filters matches xarray."""
     columns = ["time", "lead_time", "y", "x", "temperature"]
     
-    out = rainbear.scan_zarr(path, variables=["temperature"]).collect()
+    out = rainbear.scan_zarr(path).collect()
     baseline = scan_via_xarray(path, columns=columns).collect()
     
     assert_frames_equal(out.select(columns), baseline, sort_by=["time", "lead_time", "y", "x"])
@@ -117,7 +117,7 @@ def test_filter_on_y_dimension(orography_path: str) -> None:
     filter_expr = (pl.col("y") >= 5) & (pl.col("y") <= 10)
     
     out = (
-        rainbear.scan_zarr(orography_path, variables=["geopotential_height"])
+        rainbear.scan_zarr(orography_path)
         .filter(filter_expr)
         .collect()
     )
@@ -136,7 +136,7 @@ def test_filter_on_x_dimension(orography_path: str) -> None:
     filter_expr = (pl.col("x") >= 3) & (pl.col("x") < 15)
     
     out = (
-        rainbear.scan_zarr(orography_path, variables=["geopotential_height"])
+        rainbear.scan_zarr(orography_path)
         .filter(filter_expr)
         .collect()
     )
@@ -155,7 +155,7 @@ def test_filter_on_both_dimensions(orography_path: str) -> None:
     filter_expr = (pl.col("y") >= 4) & (pl.col("y") <= 12) & (pl.col("x") >= 5) & (pl.col("x") <= 15)
     
     out = (
-        rainbear.scan_zarr(orography_path, variables=["geopotential_height"])
+        rainbear.scan_zarr(orography_path)
         .filter(filter_expr)
         .collect()
     )
@@ -204,7 +204,7 @@ def test_filter_on_time_equality(path: str) -> None:
     filter_expr = pl.col("time") == target_time
     
     out = (
-        rainbear.scan_zarr(path, variables=["temperature"])
+        rainbear.scan_zarr(path)
         .filter(filter_expr)
         .collect()
     )
@@ -224,7 +224,7 @@ def test_filter_on_lead_time(path: str) -> None:
     filter_expr = (pl.col("lead_time") >= timedelta(hours=1)) & (pl.col("lead_time") <= timedelta(hours=2))
     
     out = (
-        rainbear.scan_zarr(path, variables=["temperature"])
+        rainbear.scan_zarr(path)
         .filter(filter_expr)
         .collect()
     )
@@ -251,7 +251,7 @@ def test_combined_time_and_spatial_filter(path: str) -> None:
     )
     
     out = (
-        rainbear.scan_zarr(path, variables=["temperature"])
+        rainbear.scan_zarr(path)
         .filter(filter_expr)
         .collect()
     )
@@ -270,7 +270,7 @@ def test_combined_time_and_spatial_filter(path: str) -> None:
 
 def test_datetime_dtype_matches(path: str) -> None:
     """Test that datetime columns have correct dtype."""
-    out = rainbear.scan_zarr(path, variables=["temperature"]).collect()
+    out = rainbear.scan_zarr(path).collect()
     
     assert out.schema["time"] == pl.Datetime("ns")
     assert out.schema["lead_time"] == pl.Duration("ns")
@@ -280,7 +280,7 @@ def test_schema_matches_xarray(path: str) -> None:
     """Test that schema matches xarray baseline."""
     columns = ["time", "lead_time", "y", "x", "temperature"]
     
-    out = rainbear.scan_zarr(path, variables=["temperature"]).collect()
+    out = rainbear.scan_zarr(path).collect()
     baseline = scan_via_xarray(path, columns=columns).collect()
     
     # Compare schemas

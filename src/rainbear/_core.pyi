@@ -115,36 +115,6 @@ class SelectedChunksDebugReturn(TypedDict):
 
 def print_extension_info() -> str: ...
 
-class ZarrSource:
-    """Low-level Zarr source for streaming chunk reads."""
-    
-    def __init__(
-        self,
-        store: StoreInput,
-        batch_size: int | None,
-        n_rows: int | None,
-        variables: list[str] | None = None,
-        max_chunks_to_read: int | None = None,
-        prefix: str | None = None,
-    ) -> None:
-        """Create a new ZarrSource.
-        
-        Args:
-            store: Either a URL string or an ObjectStore instance.
-            batch_size: Number of rows per batch.
-            n_rows: Maximum total rows to read.
-            variables: Optional list of variable names to read.
-            max_chunks_to_read: Optional limit on chunks to read.
-            prefix: Optional path prefix within the store (for ObjectStore instances).
-        """
-        ...
-
-    def schema(self) -> Any: ...
-    def try_set_predicate(self, predicate: pl.Expr) -> None: ...
-    def set_with_columns(self, columns: list[str]) -> None: ...
-    def next(self) -> pl.DataFrame | None: ...
-
-
 class ZarrBackend:
     """Zarr backend with persistent caching across scans.
     

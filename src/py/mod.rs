@@ -53,7 +53,6 @@ pub(crate) fn init_module(
         m
     )?)?;
 
-    m.add_class::<crate::source::ZarrSource>()?;
     m.add_class::<crate::backend::PyZarrBackend>(
     )?;
     m.add_class::<crate::backend::PyZarrBackendSync>(

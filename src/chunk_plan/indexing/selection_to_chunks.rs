@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use smallvec::SmallVec;
 use zarrs::array::Array;
+use zarrs::array_subset::ArraySubset;
 
 use super::DatasetSelection;
 use super::plan::GroupedChunkPlan;
@@ -12,6 +13,19 @@ use crate::chunk_plan::indexing::selection::ArraySubsetList;
 
 use crate::IntoIStr;
 use crate::meta::{ZarrDatasetMeta, ZarrMeta};
+
+/// Create an ArraySubsetList that covers the entire array shape.
+fn all_chunks_subset(
+    shape: &[u64],
+) -> ArraySubsetList {
+    let ranges: Vec<std::ops::Range<u64>> =
+        shape.iter().map(|&s| 0..s).collect();
+    let subset =
+        ArraySubset::new_with_ranges(&ranges);
+    let mut list = ArraySubsetList::new();
+    list.push(subset);
+    list
+}
 
 /// Convert a DatasetSelection to a GroupedChunkPlan.
 ///
@@ -109,11 +123,12 @@ pub(crate) fn selection_to_grouped_chunk_plan(
             .clone();
 
         // Compute chunk indices based on selection
+        // When maybe_sel is None, we select ALL chunks (conservative fallback)
         let chunk_plan =
             if let Some(sel) = maybe_sel {
                 sel.clone().into()
             } else {
-                ArraySubsetList::new()
+                all_chunks_subset(arr.shape())
             };
 
         grouped_plan.insert(
@@ -209,11 +224,12 @@ pub(crate) async fn selection_to_grouped_chunk_plan_async(
             .or_insert_with(|| Arc::new(sig))
             .clone();
 
+        // When maybe_sel is None, we select ALL chunks (conservative fallback)
         let chunk_plan =
             if let Some(sel) = maybe_sel {
                 sel.clone().into()
             } else {
-                ArraySubsetList::new()
+                all_chunks_subset(arr.shape())
             };
 
         grouped_plan.insert(
@@ -244,7 +260,9 @@ pub(crate) fn selection_to_grouped_chunk_plan_unified(
     let all_vars;
     let vars_to_process: Vec<(
         &str,
-        Option<&super::selection::DataArraySelection>,
+        Option<
+            &super::selection::DataArraySelection,
+        >,
     )> = match selection {
         DatasetSelection::NoSelectionMade => {
             all_vars = meta.all_data_var_paths();
@@ -256,7 +274,9 @@ pub(crate) fn selection_to_grouped_chunk_plan_unified(
         DatasetSelection::Empty => {
             return Ok(grouped_plan);
         }
-        DatasetSelection::Selection(grouped_sel) => grouped_sel
+        DatasetSelection::Selection(
+            grouped_sel,
+        ) => grouped_sel
             .vars()
             .map(|(v, sel)| (v, Some(sel)))
             .collect(),
@@ -304,11 +324,12 @@ pub(crate) fn selection_to_grouped_chunk_plan_unified(
             .or_insert_with(|| Arc::new(sig))
             .clone();
 
+        // When maybe_sel is None, we select ALL chunks (conservative fallback)
         let chunk_plan =
             if let Some(sel) = maybe_sel {
                 sel.clone().into()
             } else {
-                ArraySubsetList::new()
+                all_chunks_subset(arr.shape())
             };
 
         grouped_plan.insert(
@@ -339,7 +360,9 @@ pub(crate) async fn selection_to_grouped_chunk_plan_unified_async(
     let all_vars;
     let vars_to_process: Vec<(
         &str,
-        Option<&super::selection::DataArraySelection>,
+        Option<
+            &super::selection::DataArraySelection,
+        >,
     )> = match selection {
         DatasetSelection::NoSelectionMade => {
             all_vars = meta.all_data_var_paths();
@@ -351,7 +374,9 @@ pub(crate) async fn selection_to_grouped_chunk_plan_unified_async(
         DatasetSelection::Empty => {
             return Ok(grouped_plan);
         }
-        DatasetSelection::Selection(grouped_sel) => grouped_sel
+        DatasetSelection::Selection(
+            grouped_sel,
+        ) => grouped_sel
             .vars()
             .map(|(v, sel)| (v, Some(sel)))
             .collect(),
@@ -400,11 +425,12 @@ pub(crate) async fn selection_to_grouped_chunk_plan_unified_async(
             .or_insert_with(|| Arc::new(sig))
             .clone();
 
+        // When maybe_sel is None, we select ALL chunks (conservative fallback)
         let chunk_plan =
             if let Some(sel) = maybe_sel {
                 sel.clone().into()
             } else {
-                ArraySubsetList::new()
+                all_chunks_subset(arr.shape())
             };
 
         grouped_plan.insert(

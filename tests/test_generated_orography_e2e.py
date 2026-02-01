@@ -16,7 +16,7 @@ def test_generated_orography_scan(dataset_path) -> None:
     path = dataset_path("orography_small.zarr")
     ds.to_zarr(path, zarr_format=3)
 
-    lf = rainbear.scan_zarr(path, variables=["geopotential_height"])
+    lf = rainbear.scan_zarr(path)
     df = lf.collect()
 
     assert df.columns == ["y", "x", "geopotential_height"]
@@ -29,7 +29,7 @@ def test_generated_orography_sel(dataset_path) -> None:
     path = dataset_path("orography_sel.zarr")
     ds.to_zarr(path, zarr_format=3)
 
-    lf = rainbear.scan_zarr(path, variables=["geopotential_height"])
+    lf = rainbear.scan_zarr(path)
     lf = lf.filter((pl.col("y") >= 3) & (pl.col("y") <= 6))
     df = lf.collect()
 
@@ -60,7 +60,7 @@ def test_generated_orography_unconsolidated(dataset_path) -> None:
     path = dataset_path("orography_unconsolidated.zarr")
     ds.to_zarr(path, zarr_format=3, consolidated=False)
 
-    lf = rainbear.scan_zarr(path, variables=["geopotential_height"])
+    lf = rainbear.scan_zarr(path)
     df = lf.collect()
     assert df.height == 16 * 8
 
@@ -72,7 +72,7 @@ def test_generated_orography_projection(dataset_path) -> None:
     ds.to_zarr(path, zarr_format=3)
 
     # Ensure projection pushdown works (only variable column emitted).
-    lf = rainbear.scan_zarr(path, variables=["geopotential_height"])
+    lf = rainbear.scan_zarr(path)
     df = lf.select("geopotential_height").collect()
     assert df.columns == ["geopotential_height"]
     assert df.height == 10 * 6

@@ -85,7 +85,8 @@ def test_literal_true_false_are_constant_folded(_grid_dataset: tuple[str, int, i
     zarr_url, all_total, _per_x = _grid_dataset
 
     chunks = ZarrBackend.from_url(zarr_url).selected_chunks_debug( pl.lit(False))
-    assert _chunk_indices(chunks) == set()
+    with pytest.raises(ValueError):
+        _chunk_indices(chunks)
 
     chunks = ZarrBackend.from_url(zarr_url).selected_chunks_debug( pl.lit(True))
     idxs = _chunk_indices(chunks)
@@ -95,7 +96,8 @@ def test_literal_true_false_are_constant_folded(_grid_dataset: tuple[str, int, i
 def test_literal_null_keeps_nothing(_grid_dataset: tuple[str, int, int]) -> None:
     zarr_url, _all_total, _per_x = _grid_dataset
     chunks = ZarrBackend.from_url(zarr_url).selected_chunks_debug( pl.lit(None))
-    assert _chunk_indices(chunks) == set()
+    with pytest.raises(ValueError):
+        _chunk_indices(chunks)
 
 
 def test_and_or_with_complex_side(_grid_dataset: tuple[str, int, int]) -> None:

@@ -58,7 +58,6 @@ todos:
     dependencies:
       - chunk-df-tree
       - chunk-plan-unified
-isProject: false
 ---
 
 # DataTree Support - Complete Implementation Plan
@@ -97,8 +96,6 @@ classDiagram
     ZarrNode --> ZarrArrayMeta : arrays
     ZarrNode --> ZarrNode : children
 ```
-
-
 
 ### Key Insight: Flat = Tree with No Children
 
@@ -158,7 +155,7 @@ When a child group has **completely different** dimensions:
 
 ## Type Definitions
 
-### Core Types in `[src/meta/types.rs](src/meta/types.rs)`
+### Core Types in [`src/meta/types.rs`](src/meta/types.rs)
 
 ```rust
 /// Unified metadata for any zarr store (flat or hierarchical)
@@ -321,7 +318,7 @@ For output row 645:
 
 ## DataFrame Assembly with Structs (Detailed)
 
-Update `[src/scan/chunk_to_df.rs](src/scan/chunk_to_df.rs)`:
+Update [`src/scan/chunk_to_df.rs`](src/scan/chunk_to_df.rs):
 
 ```rust
 pub(crate) async fn chunk_to_df_tree(
@@ -476,7 +473,7 @@ async fn build_group_struct_disjoint(
 
 ## Expression Compilation for Struct Fields (Detailed)
 
-Update `[src/chunk_plan/exprs/compile_node_lazy.rs](src/chunk_plan/exprs/compile_node_lazy.rs)`:
+Update [`src/chunk_plan/exprs/compile_node_lazy.rs`](src/chunk_plan/exprs/compile_node_lazy.rs):
 
 ### Handling Struct Field Access
 
@@ -639,7 +636,7 @@ pub(crate) fn collect_column_refs(expr: &Expr, out: &mut Vec<IStr>) {
 
 ## Chunk Planning with Combined Dimensions
 
-Update `[src/chunk_plan/compile_entry.rs](src/chunk_plan/compile_entry.rs)`:
+Update [`src/chunk_plan/compile_entry.rs`](src/chunk_plan/compile_entry.rs):
 
 ```rust
 /// Compile expression to chunk plan using unified metadata.

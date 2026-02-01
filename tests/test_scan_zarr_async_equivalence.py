@@ -34,7 +34,7 @@ async def test_scan_zarr_async_matches_sync_orography_chunked_subset(
     cols = ["y", "x", "geopotential_height"]
 
     df_sync = (
-        rainbear.scan_zarr(zarr_url, variables=["geopotential_height"])
+        rainbear.scan_zarr(zarr_url)
         .filter(pred)
         .select(cols)
         .collect()
@@ -65,7 +65,7 @@ async def test_scan_zarr_async_matches_sync_orography_sharded_subset(
     cols = ["y", "x", "geopotential_height"]
 
     df_sync = (
-        rainbear.scan_zarr(zarr_url, variables=["geopotential_height"])
+        rainbear.scan_zarr(zarr_url)
         .filter(pred)
         .select(cols)
         .collect()

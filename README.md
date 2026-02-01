@@ -78,8 +78,8 @@ uv run pytest
 - **Rust extension module**: `rainbear/src/lib.rs` exports `_core`
 - **Zarr store opener (multi-backend URLs)**: `rainbear/src/zarr_store.rs`
 - **Metadata loader (dims/coords/vars + schema)**: `rainbear/src/zarr_meta.rs`
-- **Streaming IO source**: `rainbear/src/zarr_source.rs` (exposed to Python as `ZarrSource`)
-- **Python API**: `rainbear/src/rainbear/__init__.py` (`scan_random`, `scan_zarr`, `LazyZarrFrame`)
+- **Streaming IO source**: `rainbear/src/zarr_source.rs` (exposed to Python as `ZarrBackendSync`)
+- **Python API**: `rainbear/src/rainbear/__init__.py` (`scan_random`, `scan_zarr`, `ZarrBackendSync`)
 - **Tests**: `rainbear-tests/tests/` (separate workspace package)
 
 [`zarrs`]: https://docs.rs/zarrs/latest/zarrs/

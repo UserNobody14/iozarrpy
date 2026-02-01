@@ -10,7 +10,7 @@ import rainbear
 
 def test_scan_zarr_smoke(baseline_datasets: dict[str, str]) -> None:
     zarr_url = baseline_datasets["orography_chunked_10x10"]
-    lf = rainbear.scan_zarr(zarr_url, variables=["geopotential_height"])
+    lf = rainbear.scan_zarr(zarr_url)
     df = lf.collect()
 
     assert df.height == 16 * 20
@@ -19,7 +19,7 @@ def test_scan_zarr_smoke(baseline_datasets: dict[str, str]) -> None:
 
 def test_sel_predicate(baseline_datasets: dict[str, str]) -> None:
     zarr_url = baseline_datasets["orography_chunked_10x10"]
-    lf = rainbear.scan_zarr(zarr_url, variables=["geopotential_height"])
+    lf = rainbear.scan_zarr(zarr_url)
     lf = lf.filter(
         (pl.col("y") >= 3)
         & (pl.col("y") <= 10)

@@ -57,7 +57,7 @@ def _bench_xarray_to_polars(path: str) -> pl.DataFrame:
 def _bench_rainbear_scan_zarr(path: str) -> pl.DataFrame:
     pred = _pred_orog_subset()
     return (
-        rainbear.scan_zarr(path, variables=["geopotential_height"])
+        rainbear.scan_zarr(path)
         .filter(pred)
         .select(["y", "x", "geopotential_height"])
         .collect()

@@ -6,7 +6,6 @@ mod meta;
 mod py;
 mod reader;
 mod scan;
-mod source;
 mod store;
 
 use polars::prelude::*;

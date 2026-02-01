@@ -27,6 +27,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import polars as pl
+import pytest
 
 from rainbear import ZarrBackend
 
@@ -42,13 +43,13 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 
 
-def _chunk_indices(chunks: SelectedChunksDebugReturn) -> set[tuple[int, ...]]:
+def _chunk_indices(chunks: SelectedChunksDebugReturn, variable: str = "data") -> set[tuple[int, ...]]:
     """Extract chunk indices as a set of tuples."""
-    # Find a grid that includes "data"
+    # Find a grid that includes the variable
     for grid in chunks["grids"]:
-        if "data" in grid["variables"]:
+        if variable in grid["variables"]:
             return {tuple(int(x) for x in d["indices"]) for d in grid["chunks"]}
-    raise ValueError(f"No grid found for variable 'data' in {chunks}")
+    raise ValueError(f"No grid found for variable '{variable}' in {chunks}")
 
 
 def _coord_to_chunk(coord_value: int, chunk_size: int = 10) -> int:
@@ -754,9 +755,9 @@ class TestTernary:
         url = comprehensive_3d_dataset.path
         pred = pl.when(pl.col("a") == 15).then(pl.lit(False)).otherwise(pl.lit(False))
         chunks = ZarrBackend.from_url(url).selected_chunks_debug( pred)
-        idxs = _chunk_indices(chunks)
-
-        assert len(idxs) == 0
+        with pytest.raises(ValueError):
+            _chunk_indices(chunks, variable="data")
+        
 
     def test_ternary_with_narrowing_predicate(
         self, comprehensive_3d_dataset: "ComprehensiveDatasetInfo"
@@ -797,9 +798,9 @@ class TestLiterals:
         url = comprehensive_3d_dataset.path
         pred = pl.lit(False)
         chunks = ZarrBackend.from_url(url).selected_chunks_debug( pred)
-        idxs = _chunk_indices(chunks)
 
-        assert len(idxs) == 0
+        with pytest.raises(ValueError):
+            _chunk_indices(chunks, variable="data")
 
     def test_literal_null_empty(
         self, comprehensive_3d_dataset: "ComprehensiveDatasetInfo"
@@ -808,9 +809,9 @@ class TestLiterals:
         url = comprehensive_3d_dataset.path
         pred = pl.lit(None)
         chunks = ZarrBackend.from_url(url).selected_chunks_debug( pred)
-        idxs = _chunk_indices(chunks)
 
-        assert len(idxs) == 0
+        with pytest.raises(ValueError):
+            _chunk_indices(chunks, variable="data")
 
     def test_literal_true_and_narrowing(
         self, comprehensive_3d_dataset: "ComprehensiveDatasetInfo"
@@ -832,10 +833,9 @@ class TestLiterals:
         url = comprehensive_3d_dataset.path
         pred = pl.lit(False) & (pl.col("a") < 20)
         chunks = ZarrBackend.from_url(url).selected_chunks_debug( pred)
-        idxs = _chunk_indices(chunks)
 
-        assert len(idxs) == 0
-
+        with pytest.raises(ValueError):
+            _chunk_indices(chunks, variable="data")
 
 class TestMultiDim:
     """Tests for multi-dimensional constraint combinations."""
@@ -976,9 +976,8 @@ class TestEdgeCases:
         url = comprehensive_3d_dataset.path
         pred = pl.col("a").is_in([])
         chunks = ZarrBackend.from_url(url).selected_chunks_debug( pred)
-        idxs = _chunk_indices(chunks)
-
-        assert len(idxs) == 0
+        with pytest.raises(ValueError):
+            _chunk_indices(chunks, variable="data")
 
     def test_out_of_range_value(
         self, comprehensive_3d_dataset: "ComprehensiveDatasetInfo"
@@ -987,9 +986,8 @@ class TestEdgeCases:
         url = comprehensive_3d_dataset.path
         pred = pl.col("a") == 100
         chunks = ZarrBackend.from_url(url).selected_chunks_debug( pred)
-        idxs = _chunk_indices(chunks)
-
-        assert len(idxs) == 0
+        with pytest.raises(ValueError):
+            _chunk_indices(chunks, variable="data")
 
     def test_negative_value(
         self, comprehensive_3d_dataset: "ComprehensiveDatasetInfo"
@@ -998,9 +996,8 @@ class TestEdgeCases:
         url = comprehensive_3d_dataset.path
         pred = pl.col("a") == -5
         chunks = ZarrBackend.from_url(url).selected_chunks_debug( pred)
-        idxs = _chunk_indices(chunks)
-
-        assert len(idxs) == 0
+        with pytest.raises(ValueError):
+            _chunk_indices(chunks, variable="data")
 
     def test_all_chunks_boundary(
         self, comprehensive_3d_dataset: "ComprehensiveDatasetInfo"
@@ -1020,9 +1017,8 @@ class TestEdgeCases:
         url = comprehensive_3d_dataset.path
         pred = (pl.col("a") > 50) & (pl.col("a") < 40)
         chunks = ZarrBackend.from_url(url).selected_chunks_debug( pred)
-        idxs = _chunk_indices(chunks)
-
-        assert len(idxs) == 0
+        with pytest.raises(ValueError):
+            _chunk_indices(chunks, variable="data")
 
     def test_single_point_at_chunk_boundary_start(
         self, comprehensive_3d_dataset: "ComprehensiveDatasetInfo"

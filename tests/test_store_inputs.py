@@ -123,7 +123,7 @@ class TestStoreInputEquivalence:
         abs_path = os.path.abspath(zarr_path)
 
         # Using URL string
-        df_url = rainbear.scan_zarr(zarr_path, variables=["geopotential_height"]).collect()
+        df_url = rainbear.scan_zarr(zarr_path).collect()
 
         # Using LocalStore
         local_store = rainbear.store.LocalStore()
@@ -150,7 +150,7 @@ class TestStoreInputEquivalence:
 
         # Using URL string
         df_url = (
-            rainbear.scan_zarr(zarr_path, variables=["geopotential_height"])
+            rainbear.scan_zarr(zarr_path)
             .filter(filter_expr)
             .collect()
         )
@@ -171,53 +171,36 @@ class TestStoreInputEquivalence:
 
 
 class TestZarrSourceDirectUsage:
-    """Tests for direct ZarrSource usage with ObjectStore inputs."""
+    """Tests for direct ZarrBackendSync usage with ObjectStore inputs."""
 
     def test_zarr_source_with_url_string(self, baseline_datasets: dict[str, str]) -> None:
-        """Verify ZarrSource works with URL string."""
+        """Verify ZarrBackendSync works with URL string."""
         zarr_path = baseline_datasets["orography_chunked_10x10"]
 
-        src = rainbear.ZarrSource(
-            zarr_path,
-            batch_size=1000,
-            n_rows=None,
-            variables=["geopotential_height"],
+        src = rainbear.ZarrBackendSync.from_url(
+            url=zarr_path
         )
+        df = src.scan_zarr_sync(    
+            variables=["geopotential_height"])
 
-        schema = src.schema()
-        assert schema is not None
-
-        # Collect all chunks
-        chunks = []
-        while (chunk := src.next()) is not None:
-            chunks.append(chunk)
-
-        total_rows = sum(c.height for c in chunks)
-        assert total_rows == 16 * 20
+        assert df.height == 16 * 20
+        assert "geopotential_height" in df.columns
 
     def test_zarr_source_with_local_store(self, baseline_datasets: dict[str, str]) -> None:
-        """Verify ZarrSource works with LocalStore."""
+        """Verify ZarrBackendSync works with LocalStore."""
         abs_path = os.path.abspath(baseline_datasets["orography_chunked_10x10"])
         local_store = rainbear.store.LocalStore()
 
-        src = rainbear.ZarrSource(
-            local_store,
-            batch_size=1000,
-            n_rows=None,
-            variables=["geopotential_height"],
+        src = rainbear.ZarrBackendSync.from_store(
+            store=local_store,
             prefix=abs_path,
         )
+        df = src.scan_zarr_sync(
+            variables=["geopotential_height"],
+        )
 
-        schema = src.schema()
-        assert schema is not None
-
-        # Collect all chunks
-        chunks = []
-        while (chunk := src.next()) is not None:
-            chunks.append(chunk)
-
-        total_rows = sum(c.height for c in chunks)
-        assert total_rows == 16 * 20
+        assert df.height == 16 * 20
+        assert "geopotential_height" in df.columns
 
 
 class TestExternalObstoreCompatibility:

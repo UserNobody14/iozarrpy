@@ -103,7 +103,7 @@ def impl_scan_zarr(path: str) -> pl.DataFrame:
     """Query using rainbear.scan_zarr (LazyFrame)."""
     pred = _pred_subset()
     return (
-        rainbear.scan_zarr(path, variables=["geopotential_height"])
+        rainbear.scan_zarr(path)
         .filter(pred)
         .select(["y", "x", "geopotential_height"])
         .collect()
@@ -352,7 +352,7 @@ def impl_remote_scan_zarr(path: str) -> pl.DataFrame:
     """Query remote dataset using scan_zarr (LazyFrame)."""
     pred = _remote_pred()
     return (
-        rainbear.scan_zarr(path, variables=["80m_wind_speed"])
+        rainbear.scan_zarr(path)
         .filter(pred)
         .select(["time", "lead_time", "y", "x", "80m_wind_speed"])
         .collect()
