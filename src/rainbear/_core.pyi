@@ -402,21 +402,3 @@ class exceptions:
 
 
 
-
-# @##########################
-# TODO: remove
-################################
-
-def _selected_variables_debug(
-    zarr_url: str,
-    expr: pl.Expr,
-) -> tuple[list[str], dict[str, list[dict[str, Any]]], int]:
-    """Debug function that returns per-variable chunk selections.
-
-    Returns:
-        A tuple of:
-        - inferred_variables: List of variable names found in the DatasetSelection
-        - per_variable_chunks: Dict mapping variable name -> list of chunk dicts
-        - coord_reads: Number of coordinate array reads performed
-    """
-    ...

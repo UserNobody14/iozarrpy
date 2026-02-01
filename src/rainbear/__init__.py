@@ -88,7 +88,12 @@ def scan_zarr(
         #     if predicate is not None:
         #         out = out.filter(predicate)
         #     yield out
-        lf = backend.scan_zarr_sync(predicate=predicate, variables=variables, with_columns=with_columns)
+        lf = backend.scan_zarr_sync(
+            predicate=predicate,
+            variables=variables,
+            with_columns=with_columns,
+            max_chunks_to_read=max_chunks_to_read,
+        )
         yield lf
 
     # src = ZarrSource(store_or_url, 0, 0, variables, max_chunks_to_read, prefix)

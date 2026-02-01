@@ -21,6 +21,7 @@ pub fn scan_zarr_with_backend_sync(
     backend: &Arc<FullyCachedZarrBackendSync>,
     expr: polars::prelude::Expr,
     with_columns: Option<BTreeSet<IStr>>,
+    max_chunks_to_read: Option<usize>,
 ) -> Result<polars::prelude::DataFrame, PyErr> {
     use pyo3_polars::error::PyPolarsErr;
     use std::sync::Arc as StdArc;
@@ -42,6 +43,35 @@ pub fn scan_zarr_with_backend_sync(
     // Compile grouped chunk plan
     let (grouped_plan, _stats) =
         backend.compile_expression_sync(&expr)?;
+
+    // Count total chunks to read if max_chunks_to_read is set
+    if let Some(max_chunks) = max_chunks_to_read {
+        let mut total_chunks = 0usize;
+        for (_sig, _vars, subsets, chunkgrid) in
+            grouped_plan.iter_grids()
+        {
+            for subset in subsets.subsets_iter() {
+                if let Ok(Some(indices)) =
+                    chunkgrid
+                        .chunks_in_array_subset(
+                            subset,
+                        )
+                {
+                    total_chunks += indices
+                        .num_elements_usize();
+                }
+            }
+        }
+        if total_chunks > max_chunks {
+            return Err(PyErr::new::<
+                pyo3::exceptions::PyRuntimeError,
+                _,
+            >(format!(
+                "max_chunks_to_read exceeded: {} chunks needed, limit is {}",
+                total_chunks, max_chunks
+            )));
+        }
+    }
 
     let mut dfs = Vec::new();
     for (sig, vars, subsets, chunkgrid) in

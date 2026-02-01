@@ -90,7 +90,8 @@ impl PyZarrBackend {
     /// * `variables` - Optional list of variable names to read
     /// * `max_concurrency` - Maximum concurrent chunk reads
     /// * `with_columns` - Optional list of columns to include
-    #[pyo3(signature = (predicate, variables=None, max_concurrency=None, with_columns=None))]
+    /// * `max_chunks_to_read` - Maximum number of chunks to read (safety limit)
+    #[pyo3(signature = (predicate, variables=None, max_concurrency=None, with_columns=None, max_chunks_to_read=None))]
     fn scan_zarr_async<'py>(
         &self,
         py: Python<'py>,
@@ -98,6 +99,7 @@ impl PyZarrBackend {
         variables: Option<Vec<String>>,
         max_concurrency: Option<usize>,
         with_columns: Option<Vec<String>>,
+        max_chunks_to_read: Option<usize>,
     ) -> PyResult<Bound<'py, PyAny>> {
         use polars::prelude::IntoLazy;
         use pyo3_polars::PyDataFrame;
@@ -142,6 +144,7 @@ impl PyZarrBackend {
                     expr,
                     max_concurrency,
                     with_columns_set,
+                    max_chunks_to_read,
                 )
                 .await?;
 
@@ -453,6 +456,7 @@ async fn scan_zarr_with_backend_async(
     with_columns: Option<
         std::collections::BTreeSet<IStr>,
     >,
+    max_chunks_to_read: Option<usize>,
 ) -> Result<polars::prelude::DataFrame, PyErr> {
     use futures::stream::{
         FuturesUnordered, StreamExt,
@@ -475,6 +479,35 @@ async fn scan_zarr_with_backend_async(
     let (grouped_plan, _stats) = backend
         .compile_expression_async(&expr)
         .await?;
+
+    // Count total chunks to read if max_chunks_to_read is set
+    if let Some(max_chunks) = max_chunks_to_read {
+        let mut total_chunks = 0usize;
+        for (_sig, _vars, subsets, chunkgrid) in
+            grouped_plan.iter_grids()
+        {
+            for subset in subsets.subsets_iter() {
+                if let Ok(Some(indices)) =
+                    chunkgrid
+                        .chunks_in_array_subset(
+                            subset,
+                        )
+                {
+                    total_chunks += indices
+                        .num_elements_usize();
+                }
+            }
+        }
+        if total_chunks > max_chunks {
+            return Err(PyErr::new::<
+                pyo3::exceptions::PyRuntimeError,
+                _,
+            >(format!(
+                "max_chunks_to_read exceeded: {} chunks needed, limit is {}",
+                total_chunks, max_chunks
+            )));
+        }
+    }
 
     let max_conc = max_concurrency
         .filter(|&v| v > 0)

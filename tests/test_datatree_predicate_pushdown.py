@@ -27,7 +27,13 @@ if TYPE_CHECKING:
     from rainbear._core import SelectedChunksDebugReturn
 
 def _chunk_indices(chunks: SelectedChunksDebugReturn, variables: list[str]) -> set[tuple[int, ...]]:
-    """Extract chunk indices from debug output."""
+    """Extract chunk indices from debug output.
+    
+    Returns an empty set if no grids exist (e.g., when lit(False) eliminates all chunks).
+    """
+    # Empty grids means the predicate eliminated all chunks
+    if not chunks["grids"]:
+        return set()
     for grid in chunks["grids"]:
         # if the two intersect, return the chunk indices
         if set(grid["variables"]) & set(variables):

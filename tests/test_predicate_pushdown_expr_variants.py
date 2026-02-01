@@ -108,13 +108,13 @@ def test_and_or_with_complex_side(_grid_dataset: tuple[str, int, int]) -> None:
 
     chunks = ZarrBackend.from_url(zarr_url).selected_chunks_debug( pl.col("x").eq(0) & ternary
     )
-    idxs = _chunk_indices(chunks)
+    idxs = _chunk_indices(chunks, variable="total_precipitation")
     _assert_grid_x_selection(idxs, expected_x_chunks={0}, expected_total=per_x)
 
     # For OR, any unknown side must conservatively become "all chunks" to avoid false negatives.
     chunks = ZarrBackend.from_url(zarr_url).selected_chunks_debug( pl.col("x").eq(0) | ternary
     )
-    idxs = _chunk_indices(chunks)
+    idxs = _chunk_indices(chunks, variable="total_precipitation")
     assert len(idxs) == all_total
 
 

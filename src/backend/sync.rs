@@ -90,7 +90,8 @@ impl PyZarrBackendSync {
     /// * `variables` - Optional list of variable names to read
     /// * `max_concurrency` - Maximum concurrent chunk reads
     /// * `with_columns` - Optional list of columns to include
-    #[pyo3(signature = (predicate=None, variables=None, max_concurrency=None, with_columns=None))]
+    /// * `max_chunks_to_read` - Maximum number of chunks to read (safety limit)
+    #[pyo3(signature = (predicate=None, variables=None, max_concurrency=None, with_columns=None, max_chunks_to_read=None))]
     fn scan_zarr_sync<'py>(
         &self,
         py: Python<'py>,
@@ -98,6 +99,7 @@ impl PyZarrBackendSync {
         variables: Option<Vec<String>>,
         max_concurrency: Option<usize>,
         with_columns: Option<Vec<String>>,
+        max_chunks_to_read: Option<usize>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let args = ScanArgsAnonymous {
             schema: Some(Arc::new(
@@ -126,6 +128,7 @@ impl PyZarrBackendSync {
             &self.inner,
             prd.clone(),
             with_cols_set,
+            max_chunks_to_read,
         )?;
 
         let filtered = df

@@ -93,10 +93,14 @@ pub(crate) fn compile_node_lazy(
         }
 
         Expr::Filter { input, by } => {
-            let input_sel =
-                compile_node_lazy(input.as_ref(), ctx)?;
             let filter_sel =
                 compile_node_lazy(by.as_ref(), ctx)?;
+            // If the filter predicate is proven always-false, no chunks match
+            if filter_sel.is_empty() {
+                return Ok(LazyDatasetSelection::empty());
+            }
+            let input_sel =
+                compile_node_lazy(input.as_ref(), ctx)?;
             Ok(input_sel.union(&filter_sel))
         }
 
@@ -623,7 +627,9 @@ fn compile_value_range_to_lazy_selection(
     let dim_idx = ctx.dim_index(col);
     if dim_idx.is_none() {
         // Not a dimension: skip pushdown and let runtime filtering handle it.
-        return Ok(LazyDatasetSelection::NoSelectionMade);
+        return Ok(
+            LazyDatasetSelection::NoSelectionMade,
+        );
     }
 
     // Create a lazy constraint with the unresolved value range
@@ -656,7 +662,9 @@ fn compile_struct_field_cmp(
             .istr();
 
     // Look up array metadata using unified meta when available
-    let arr_meta = if let Some(unified) = ctx.unified_meta {
+    let arr_meta = if let Some(unified) =
+        ctx.unified_meta
+    {
         let key = unified
             .normalize_array_path(array_path.as_ref())
             .ok_or_else(|| {
