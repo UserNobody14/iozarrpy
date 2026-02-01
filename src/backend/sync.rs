@@ -11,9 +11,11 @@ use pyo3::types::PyAny;
 use pyo3_async_runtimes::tokio::future_into_py;
 use pyo3_polars::{PyDataFrame, PySchema};
 
+use crate::IntoIStr;
 use crate::backend::lazy::scan_zarr_with_backend_sync;
 use crate::backend::traits::{
-    EvictableChunkCacheSync, HasMetadataBackendSync,
+    EvictableChunkCacheSync,
+    HasMetadataBackendSync,
 };
 use crate::backend::zarr::{
     FullyCachedZarrBackendSync, ZarrBackendSync,
@@ -21,7 +23,6 @@ use crate::backend::zarr::{
 };
 use crate::py::expr_extract::extract_expr;
 use crate::store::StoreInput;
-use crate::IntoIStr;
 
 /// Python-exposed Zarr backend with caching and scan methods.
 ///
@@ -114,12 +115,13 @@ impl PyZarrBackendSync {
                 // Use a filter expression that evaluates to true for all rows.
                 lit(true)
             };
-        let with_cols_set: Option<BTreeSet<crate::IStr>> =
-            with_columns.map(|cols| {
-                cols.into_iter()
-                    .map(|c| c.istr())
-                    .collect()
-            });
+        let with_cols_set: Option<
+            BTreeSet<crate::IStr>,
+        > = with_columns.map(|cols| {
+            cols.into_iter()
+                .map(|c| c.istr())
+                .collect()
+        });
         let df = scan_zarr_with_backend_sync(
             &self.inner,
             prd.clone(),
