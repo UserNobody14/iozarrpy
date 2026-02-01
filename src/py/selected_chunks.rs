@@ -5,10 +5,10 @@ use pyo3::types::PyAny;
 use zarrs::array::Array;
 
 use crate::chunk_plan::{
-    compile_expr_to_dataset_selection, DSelection,
+    DSelection, compile_expr_to_dataset_selection,
 };
 use crate::meta::{
-    open_and_load_zarr_meta, ZarrDatasetMeta,
+    ZarrDatasetMeta, open_and_load_zarr_meta,
 };
 use crate::py::expr_extract::extract_expr;
 use crate::{IStr, IntoIStr};
@@ -184,124 +184,6 @@ pub(crate) fn selected_chunks(
         out.push(d.into());
     }
     Ok(out)
-}
-
-#[pyfunction]
-#[pyo3(signature = (zarr_url, predicate, variables=None))]
-pub(crate) fn _selected_chunks_debug(
-    py: Python<'_>,
-    zarr_url: String,
-    predicate: &Bound<'_, PyAny>,
-    variables: Option<Vec<String>>,
-) -> PyResult<(Vec<Py<PyAny>>, u64)> {
-    let (opened, zarr_meta) = open_and_load_zarr_meta(
-        &zarr_url,
-    )
-    .map_err(|e| {
-        PyErr::new::<pyo3::exceptions::PyValueError, _>(e)
-    })?;
-    // Convert to ZarrDatasetMeta - preserves hierarchical paths from path_to_array
-    let meta = ZarrDatasetMeta::from(&zarr_meta);
-
-    // Convert to IStr at the Python boundary
-    let vars: Vec<IStr> = variables
-        .map(|v| {
-            v.into_iter()
-                .map(|s| s.istr())
-                .collect()
-        })
-        .unwrap_or_else(|| {
-            meta.data_vars.clone()
-        });
-    if vars.is_empty() {
-        return Err(PyErr::new::<
-            pyo3::exceptions::PyValueError,
-            _,
-        >(
-            "no variables found/selected",
-        ));
-    }
-
-    let expr = extract_expr(predicate)?;
-
-    // Pick the first requested variable as the reference
-    let ref_var = &vars[0];
-    let ref_meta = meta
-        .arrays
-        .get(ref_var)
-        .ok_or_else(|| {
-            PyErr::new::<
-                pyo3::exceptions::PyValueError,
-                _,
-            >("unknown variable")
-        })?;
-    let ref_array = Array::open(
-        opened.store.clone(),
-        ref_meta.path.as_ref(),
-    )
-    .map_err(|e| {
-        PyErr::new::<
-            pyo3::exceptions::PyValueError,
-            _,
-        >(e.to_string())
-    })?;
-
-    // Compile to dataset selection
-    let (selection, stats) = compile_expr_to_dataset_selection(&expr, &meta, opened.store.clone())
-        .map_err(|e| match e {
-            crate::chunk_plan::CompileError::Unsupported(e) => {
-                PyErr::new::<pyo3::exceptions::PyValueError, _>(e)
-            }
-            crate::chunk_plan::CompileError::MissingPrimaryDims(e) => {
-                PyErr::new::<pyo3::exceptions::PyValueError, _>(e)
-            }
-        })?;
-
-    // Compute chunk indices specifically for the requested variable
-    let ref_var_str: &str = ref_var.as_ref();
-    let indices = compute_chunks_for_variable(
-        &ref_array,
-        &selection,
-        ref_var_str,
-    );
-
-    let mut out: Vec<Py<PyAny>> = Vec::new();
-    for idx in indices {
-        let chunk_shape_nz =
-            ref_array.chunk_shape(&idx).map_err(|e| {
-                PyErr::new::<
-                    pyo3::exceptions::PyValueError,
-                    _,
-                >(e.to_string())
-            })?;
-        let shape: Vec<u64> = chunk_shape_nz
-            .iter()
-            .map(|x| x.get())
-            .collect();
-        let origin = ref_array
-            .chunk_grid()
-            .chunk_origin(&idx)
-            .map_err(|e| {
-                PyErr::new::<
-                    pyo3::exceptions::PyValueError,
-                    _,
-                >(e.to_string())
-            })?
-            .unwrap_or_else(|| vec![0; shape.len()]);
-
-        let chunk = crate::chunk_plan::ChunkId {
-            indices: idx,
-            origin,
-            shape,
-        };
-        let d = pyo3::types::PyDict::new(py);
-        d.set_item("indices", &chunk.indices)?;
-        d.set_item("origin", &chunk.origin)?;
-        d.set_item("shape", &chunk.shape)?;
-        out.push(d.into());
-    }
-
-    Ok((out, stats.coord_reads))
 }
 
 /// Debug function that returns per-variable chunk selections.

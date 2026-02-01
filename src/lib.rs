@@ -9,6 +9,8 @@ mod scan;
 mod source;
 mod store;
 
+use polars::prelude::*;
+
 /// Interned string type used throughout the codebase for dimension/variable names.
 /// Uses `ArcIntern` for automatic deduplication, O(1) equality, and reference counting.
 pub type IStr = internment::ArcIntern<str>;
@@ -18,6 +20,27 @@ pub trait IntoIStr {
     fn istr(self) -> IStr;
 }
 
+pub trait FromIStr {
+    fn from_istr(istr: IStr) -> Self;
+}
+
+// impl FromIStr for &str {
+//     fn from_istr(istr: IStr) -> Self {
+//         istr.to_string().as_str()
+//     }
+// }
+
+impl FromIStr for String {
+    fn from_istr(istr: IStr) -> Self {
+        istr.clone().to_string()
+    }
+}
+
+impl FromIStr for PlSmallStr {
+    fn from_istr(istr: IStr) -> Self {
+        PlSmallStr::from(istr.clone().to_string())
+    }
+}
 impl IntoIStr for &str {
     fn istr(self) -> IStr {
         IStr::from(self)

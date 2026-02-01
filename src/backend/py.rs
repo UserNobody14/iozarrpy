@@ -10,7 +10,6 @@ use pyo3::types::PyAny;
 use pyo3_async_runtimes::tokio::future_into_py;
 use pyo3_polars::PySchema;
 
-use crate::IStr;
 use crate::backend::compile::ChunkedExpressionCompilerAsync;
 use crate::backend::traits::{
     EvictableChunkCacheAsync,
@@ -23,7 +22,9 @@ use crate::backend::zarr::{
 };
 use crate::py::expr_extract::extract_expr;
 use crate::scan::chunk_to_df::chunk_to_df_from_grid;
+use crate::scan::open_arrays::open_arrays_async_unified;
 use crate::store::StoreInput;
+use crate::{IStr, IntoIStr};
 
 /// Python-exposed Zarr backend with caching and scan methods.
 ///
@@ -177,6 +178,188 @@ impl PyZarrBackend {
         Ok(PySchema(Arc::new(schema)))
     }
 
+    /// Debug function that returns per-variable chunk selections.
+    ///
+    /// Returns a dict with:
+    /// - grids: List of grid info dicts, each containing:
+    ///   - dims: List of dimension names
+    ///   - variables: List of variable names in this grid
+    ///   - chunks: List of chunk dicts with indices/origin/shape
+    /// - coord_reads: Number of coordinate array reads performed
+    #[pyo3(signature = (predicate))]
+    fn selected_chunks_debug<'py>(
+        &self,
+        py: Python<'py>,
+        predicate: &Bound<'py, PyAny>,
+    ) -> PyResult<Py<PyAny>> {
+        let backend = self.inner.clone();
+        let expr = extract_expr(predicate)?;
+
+        // Collect chunk info per grid
+        #[derive(Clone)]
+        struct ChunkInfo {
+            indices: Vec<u64>,
+            origin: Vec<u64>,
+            shape: Vec<u64>,
+        }
+
+        #[derive(Clone)]
+        struct GridInfo {
+            dims: Vec<String>,
+            variables: Vec<String>,
+            chunks: Vec<ChunkInfo>,
+        }
+
+        // Create a runtime to block on async operations (same pattern as schema())
+        let runtime =
+            tokio::runtime::Runtime::new().map_err(
+                |e| {
+                    PyErr::new::<
+                        pyo3::exceptions::PyRuntimeError,
+                        _,
+                    >(e.to_string())
+                },
+            )?;
+
+        let (grids, coord_reads): (Vec<GridInfo>, u64) =
+            runtime.block_on(async {
+                // Compile expression to grouped chunk plan
+                let (grouped_plan, stats) = backend
+                    .compile_expression_async(&expr)
+                    .await?;
+
+                let mut grids: Vec<GridInfo> =
+                    Vec::new();
+
+                for (sig, vars, subsets, chunkgrid) in
+                    grouped_plan.iter_grids()
+                {
+                    let dims: Vec<String> = sig
+                        .dims()
+                        .iter()
+                        .map(|d| d.to_string())
+                        .collect();
+                    let variables: Vec<String> = vars
+                        .iter()
+                        .map(|v| v.to_string())
+                        .collect();
+
+                    let mut chunks: Vec<ChunkInfo> =
+                        Vec::new();
+
+                    for subset in subsets.subsets_iter()
+                    {
+                        let chunk_indices = chunkgrid
+                            .chunks_in_array_subset(
+                                subset,
+                            )
+                            .map_err(|e| {
+                                PyErr::new::<
+                                pyo3::exceptions::PyValueError,
+                                _,
+                            >(e.to_string())
+                            })?;
+
+                        if let Some(indices) =
+                            chunk_indices
+                        {
+                            for idx in indices.indices()
+                            {
+                                let chunk_shape =
+                                    sig.chunk_shape();
+                                let origin = chunkgrid
+                                    .chunk_origin(&idx)
+                                    .map_err(|e| {
+                                        PyErr::new::<
+                                        pyo3::exceptions::PyValueError,
+                                        _,
+                                    >(e.to_string())
+                                    })?
+                                    .unwrap_or_else(
+                                        || {
+                                            vec![
+                                            0;
+                                            chunk_shape
+                                                .len()
+                                        ]
+                                        },
+                                    );
+
+                                chunks.push(ChunkInfo {
+                                    indices: idx
+                                        .to_vec(),
+                                    origin,
+                                    shape: chunk_shape
+                                        .to_vec(),
+                                });
+                            }
+                        }
+                    }
+
+                    grids.push(GridInfo {
+                        dims,
+                        variables,
+                        chunks,
+                    });
+                }
+
+                Ok::<_, PyErr>((
+                    grids,
+                    stats.coord_reads,
+                ))
+            })?;
+
+        // Convert to Python objects (with GIL held)
+        let py_grids =
+            pyo3::types::PyList::empty(py);
+
+        for grid in grids {
+            let grid_dict =
+                pyo3::types::PyDict::new(py);
+            grid_dict
+                .set_item("dims", &grid.dims)?;
+            grid_dict.set_item(
+                "variables",
+                &grid.variables,
+            )?;
+
+            let chunks_list =
+                pyo3::types::PyList::empty(py);
+            for chunk in grid.chunks {
+                let chunk_dict =
+                    pyo3::types::PyDict::new(py);
+                chunk_dict.set_item(
+                    "indices",
+                    &chunk.indices,
+                )?;
+                chunk_dict.set_item(
+                    "origin",
+                    &chunk.origin,
+                )?;
+                chunk_dict.set_item(
+                    "shape",
+                    &chunk.shape,
+                )?;
+                chunks_list.append(chunk_dict)?;
+            }
+            grid_dict.set_item(
+                "chunks",
+                chunks_list,
+            )?;
+
+            py_grids.append(grid_dict)?;
+        }
+
+        let result = pyo3::types::PyDict::new(py);
+        result.set_item("grids", py_grids)?;
+        result.set_item(
+            "coord_reads",
+            coord_reads,
+        )?;
+
+        Ok(result.into_any().unbind())
+    }
+
     // / Get the store root path.
     fn root(&self) -> String {
         return '/'.to_string();
@@ -248,7 +431,6 @@ async fn scan_zarr_with_backend_async(
     max_concurrency: Option<usize>,
 ) -> Result<polars::prelude::DataFrame, PyErr> {
     use crate::IntoIStr;
-    use crate::scan::open_arrays::open_arrays_async;
     use futures::stream::{
         FuturesUnordered, StreamExt,
     };
@@ -256,17 +438,17 @@ async fn scan_zarr_with_backend_async(
     use std::sync::Arc as StdArc;
 
     const DEFAULT_MAX_CONCURRENCY: usize = 32;
+    let meta = backend.metadata().await?;
 
     // Open arrays for reading
-    let planning_meta = StdArc::new(
-        backend.metadata().await?.planning_meta(),
-    );
+    let planning_meta =
+        StdArc::new(meta.planning_meta());
     let (var_arrays, coord_arrays) =
-        open_arrays_async(
+        open_arrays_async_unified(
             backend.async_store().clone(),
-            &planning_meta,
-            &planning_meta.data_vars,
-            &planning_meta.dims,
+            meta.as_ref(),
+            &meta.all_data_var_paths(),
+            &meta.dim_analysis.all_dims,
         )
         .await
         .map_err(|e| {

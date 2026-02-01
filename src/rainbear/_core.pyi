@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any, Protocol
 
 import polars as pl
+from typing_extensions import TypedDict
 
 # Type for ObjectStore instances (from rainbear.store or obstore)
 class ObjectStore(Protocol):
@@ -11,6 +12,106 @@ class ObjectStore(Protocol):
 
 # Type alias for store input - can be a URL string or an ObjectStore instance
 StoreInput = str | ObjectStore
+
+# Selected chunks debug return type
+# {'coord_reads': 0,
+#  'grids': [{'chunks': [{'indices': [0], 'origin': [0], 'shape': [50]}],
+#             'dims': ['a'],
+#             'variables': ['a']},
+#            {'chunks': [{'indices': [0, 0, 0],
+#                         'origin': [0, 0, 0],
+#                         'shape': [10, 10, 10]},
+#                        {'indices': [0, 0, 1],
+#                         'origin': [0, 0, 10],
+#                         'shape': [10, 10, 10]},
+#                        {'indices': [0, 0, 2],
+#                         'origin': [0, 0, 20],
+#                         'shape': [10, 10, 10]},
+#                        {'indices': [0, 1, 0],
+#                         'origin': [0, 10, 0],
+#                         'shape': [10, 10, 10]},
+#                        {'indices': [0, 1, 1],
+#                         'origin': [0, 10, 10],
+#                         'shape': [10, 10, 10]},
+#                        {'indices': [0, 1, 2],
+#                         'origin': [0, 10, 20],
+#                         'shape': [10, 10, 10]},
+#                        {'indices': [0, 2, 0],
+#                         'origin': [0, 20, 0],
+#                         'shape': [10, 10, 10]},
+#                        {'indices': [0, 2, 1],
+#                         'origin': [0, 20, 10],
+#                         'shape': [10, 10, 10]},
+#                        {'indices': [0, 2, 2],
+#                         'origin': [0, 20, 20],
+#                         'shape': [10, 10, 10]},
+#                        {'indices': [0, 3, 0],
+#                         'origin': [0, 30, 0],
+#                         'shape': [10, 10, 10]},
+#                        {'indices': [0, 3, 1],
+#                         'origin': [0, 30, 10],
+#                         'shape': [10, 10, 10]},
+#                        {'indices': [0, 3, 2],
+#                         'origin': [0, 30, 20],
+#                         'shape': [10, 10, 10]}],
+#             'dims': ['a', 'b', 'c'],
+#             'variables': ['precip', 'pressure', 'temp', 'wind_u', 'wind_v']},
+#            {'chunks': [{'indices': [0], 'origin': [0], 'shape': [40]}],
+#             'dims': ['b'],
+#             'variables': ['b']},
+#            {'chunks': [{'indices': [0, 0], 'origin': [0, 0], 'shape': [10, 10]},
+#                        {'indices': [0, 1],
+#                         'origin': [0, 10],
+#                         'shape': [10, 10]},
+#                        {'indices': [0, 2],
+#                         'origin': [0, 20],
+#                         'shape': [10, 10]},
+#                        {'indices': [1, 0],
+#                         'origin': [10, 0],
+#                         'shape': [10, 10]},
+#                        {'indices': [1, 1],
+#                         'origin': [10, 10],
+#                         'shape': [10, 10]},
+#                        {'indices': [1, 2],
+#                         'origin': [10, 20],
+#                         'shape': [10, 10]},
+#                        {'indices': [2, 0],
+#                         'origin': [20, 0],
+#                         'shape': [10, 10]},
+#                        {'indices': [2, 1],
+#                         'origin': [20, 10],
+#                         'shape': [10, 10]},
+#                        {'indices': [2, 2],
+#                         'origin': [20, 20],
+#                         'shape': [10, 10]},
+#                        {'indices': [3, 0],
+#                         'origin': [30, 0],
+#                         'shape': [10, 10]},
+#                        {'indices': [3, 1],
+#                         'origin': [30, 10],
+#                         'shape': [10, 10]},
+#                        {'indices': [3, 2],
+#                         'origin': [30, 20],
+#                         'shape': [10, 10]}],
+#             'dims': ['b', 'c'],
+#             'variables': ['surface']},
+#            {'chunks': [{'indices': [0], 'origin': [0], 'shape': [30]}],
+#             'dims': ['c'],
+#             'variables': ['c']}]}
+
+class ChunkInfo(TypedDict):
+    indices: list[int]
+    origin: list[int]
+    shape: list[int]
+
+class GridInfo(TypedDict):
+    dims: list[str]
+    variables: list[str]
+    chunks: list[ChunkInfo]
+
+class SelectedChunksDebugReturn(TypedDict):
+    grids: list[GridInfo]
+    coord_reads: int
 
 def print_extension_info() -> str: ...
 
@@ -109,6 +210,11 @@ class ZarrBackend:
             An awaitable that resolves to a pl.DataFrame
         """
         ...
+
+    def selected_chunks_debug(
+        self,
+        predicate: pl.Expr
+    ) -> SelectedChunksDebugReturn: ...
     
     def schema(self, variables: list[str] | None = None) -> Any:
         """Get the schema for the zarr dataset.
@@ -141,6 +247,106 @@ class ZarrBackend:
         ...
 
 
+class ZarrBackendSync:
+    """Zarr backend with persistent caching across scans.
+    
+    The backend owns the store and caches coordinate array chunks and metadata
+    across multiple scan operations, making repeated queries more efficient.
+    
+    Examples:
+        >>> # Create a backend from URL
+        >>> backend = ZarrBackend.from_url("s3://bucket/dataset.zarr")
+        >>> 
+        >>> # Async scan with caching
+        >>> df1 = await backend.scan_zarr_async(pl.col("time") > datetime(2024, 1, 1))
+        >>> df2 = await backend.scan_zarr_async(pl.col("time") > datetime(2024, 6, 1))  # Uses cached coords
+        >>>
+        >>> # Check cache statistics
+        >>> stats = await backend.cache_stats()
+        >>> print(f"Cached {stats['coord_entries']} coordinate chunks")
+    """
+    
+    @staticmethod
+    def from_url(url: str, max_cache_entries: int = 0) -> ZarrBackendSync:
+        """Create a backend from a URL string.
+        
+        Args:
+            url: URL to the zarr store (e.g., "s3://bucket/path.zarr")
+            max_cache_entries: Maximum cached coord chunks (0 = unlimited)
+        """
+        ...
+    
+    @staticmethod
+    def from_store(
+        store: ObjectStore,
+        prefix: str | None = None,
+        max_cache_entries: int = 0,
+    ) -> ZarrBackendSync:
+        """Create a backend from an ObjectStore instance.
+        
+        Args:
+            store: ObjectStore instance (from rainbear.store or obstore)
+            prefix: Optional path prefix within the store
+            max_cache_entries: Maximum cached coord chunks (0 = unlimited)
+        """
+        ...
+    
+    def scan_zarr_sync(
+        self,
+        predicate: pl.Expr | None = None,
+        variables: list[str] | None = None,
+        max_concurrency: int | None = None,
+        with_columns: list[str] | None = None,
+    ) -> pl.DataFrame:
+        """Async scan the zarr store and return a DataFrame.
+        
+        Uses the backend's cached coordinates for efficient predicate pushdown.
+        
+        Args:
+            predicate: Polars expression for filtering
+            variables: Optional list of variable names to read
+            max_concurrency: Maximum concurrent chunk reads
+            with_columns: Optional list of columns to include
+        
+        Returns:
+            An awaitable that resolves to a pl.DataFrame
+        """
+        ...
+
+    def selected_chunks_debug(
+        self,
+        predicate: pl.Expr
+    ) -> SelectedChunksDebugReturn: ...
+    
+    def schema(self, variables: list[str] | None = None) -> Any:
+        """Get the schema for the zarr dataset.
+        
+        Args:
+            variables: Optional list of variable names to include
+        """
+        ...
+    
+    def root(self) -> str:
+        """Get the store root path."""
+        ...
+    
+    def clear_coord_cache(self) -> Any:
+        """Clear the coordinate cache (async)."""
+        ...
+    
+    def clear_all_caches(self) -> Any:
+        """Clear all caches - metadata and coordinates (async)."""
+        ...
+    
+    def cache_stats(self) -> Any:
+        """Get cache statistics (async).
+        
+        Returns:
+            An awaitable that resolves to a dict with:
+            - coord_entries: Number of cached coordinate chunks
+            - has_metadata: Whether metadata is cached
+        """
+        ...
 # Store module - provides ObjectStore builders with full connection pooling
 class store:
     """Object store builders for S3, GCS, Azure, HTTP, and local filesystem.
@@ -230,17 +436,6 @@ class exceptions:
 # @##########################
 # TODO: remove
 ################################
-def selected_chunks(
-    zarr_url: str,
-    predicate: pl.Expr,
-    variables: list[str] | None = None,
-) -> list[dict[str, Any]]: ...
-
-def _selected_chunks_debug(
-    zarr_url: str,
-    predicate: pl.Expr,
-    variables: list[str] | None = None,
-) -> tuple[list[dict[str, Any]], int]: ...
 
 def _selected_variables_debug(
     zarr_url: str,

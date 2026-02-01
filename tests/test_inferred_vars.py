@@ -6,7 +6,8 @@ import polars as pl
 import polars.selectors as cs
 import pytest
 
-from rainbear._core import _selected_chunks_debug, _selected_variables_debug
+from rainbear import ZarrBackend
+from rainbear._core import _selected_variables_debug
 
 if TYPE_CHECKING:
     from conftest import MultiVarDatasetInfo
@@ -299,9 +300,7 @@ class TestVariableInference:
         expr = pl.col("a") < 20
         # Test chunk count using _selected_chunks_debug with explicit variable
         for var in ["temp", "precip", "wind_u", "wind_v", "pressure"]:
-            chunks, _ = _selected_chunks_debug(
-                multi_var_dataset.path, expr, variables=[var]
-            )
+            chunks = ZarrBackend.from_url(multi_var_dataset.path).selected_chunks_debug(expr)
             count = len(chunks)
             # 3D vars should have 2 * 4 * 3 = 24 chunks
             assert count == 24, f"{var} should have 24 chunks, got {count}"

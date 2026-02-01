@@ -85,10 +85,12 @@ pub(crate) async fn open_arrays_async_unified(
         Vec<(IStr, Arc<Array<dyn zarrs::storage::AsyncReadableWritableListableStorageTraits>>)>,
     ),
     String,
-> {
+>{
     let mut coord_futs = FuturesUnordered::new();
     for d in dims {
-        if let Some(m) = meta.array_by_path(d.as_ref()) {
+        if let Some(m) =
+            meta.array_by_path(d.as_ref())
+        {
             let path = m.path.clone();
             let d_name = d.clone();
             let st = store.clone();
@@ -109,7 +111,9 @@ pub(crate) async fn open_arrays_async_unified(
 
     let mut var_futs = FuturesUnordered::new();
     for v in vars {
-        let Some(m) = meta.array_by_path(v.as_ref()) else {
+        let Some(m) =
+            meta.array_by_path(v.as_ref())
+        else {
             continue;
         };
         let path = m.path.clone();
@@ -136,6 +140,52 @@ pub(crate) async fn open_arrays_async_unified(
     let mut vars_out = Vec::new();
     while let Some(r) = var_futs.next().await {
         vars_out.push(r?);
+    }
+
+    Ok((vars_out, coords))
+}
+
+/// Open variable and coordinate arrays for reading (unified ZarrMeta).
+pub(crate) fn open_arrays_sync_unified(
+    store: zarrs::storage::ReadableWritableListableStorage,
+    meta: &ZarrMeta,
+    vars: &[IStr],
+    dims: &[IStr],
+) -> Result<
+    (
+        Vec<(IStr, Arc<Array<dyn zarrs::storage::ReadableWritableListableStorageTraits>>)>,
+        Vec<(IStr, Arc<Array<dyn zarrs::storage::ReadableWritableListableStorageTraits>>)>,
+    ),
+    String,
+>{
+    let mut coords = Vec::new();
+    for d in dims {
+        if let Some(m) =
+            meta.array_by_path(d.as_ref())
+        {
+            let path = m.path.clone();
+            let d_name = d.clone();
+            let st = store.clone();
+            let arr =
+                Array::open(st, path.as_ref())
+                    .map_err(to_string_err)?;
+            coords.push((d_name, Arc::new(arr)));
+        }
+    }
+
+    let mut vars_out = Vec::new();
+    for v in vars {
+        let Some(m) =
+            meta.array_by_path(v.as_ref())
+        else {
+            continue;
+        };
+        let path = m.path.clone();
+        let v_name = v.clone();
+        let st = store.clone();
+        let arr = Array::open(st, path.as_ref())
+            .map_err(to_string_err)?;
+        vars_out.push((v_name, Arc::new(arr)));
     }
 
     Ok((vars_out, coords))

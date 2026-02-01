@@ -3,7 +3,6 @@ use pyo3::wrap_pyfunction;
 
 mod debug;
 pub(crate) mod expr_extract;
-mod scan_async;
 mod selected_chunks;
 
 pub(crate) fn init_module(
@@ -16,9 +15,7 @@ pub(crate) fn init_module(
         _debug_literal_conversion,
         print_extension_info,
     };
-    use crate::py::scan_async::scan_zarr_async;
     use crate::py::selected_chunks::{
-        _selected_chunks_debug,
         _selected_variables_debug,
         selected_chunks,
     };
@@ -29,10 +26,6 @@ pub(crate) fn init_module(
     )?)?;
     m.add_function(wrap_pyfunction!(
         selected_chunks,
-        m
-    )?)?;
-    m.add_function(wrap_pyfunction!(
-        _selected_chunks_debug,
         m
     )?)?;
     m.add_function(wrap_pyfunction!(
@@ -59,13 +52,11 @@ pub(crate) fn init_module(
         _debug_literal_conversion,
         m
     )?)?;
-    m.add_function(wrap_pyfunction!(
-        scan_zarr_async,
-        m
-    )?)?;
 
     m.add_class::<crate::source::ZarrSource>()?;
     m.add_class::<crate::backend::PyZarrBackend>(
+    )?;
+    m.add_class::<crate::backend::PyZarrBackendSync>(
     )?;
 
     Ok(())

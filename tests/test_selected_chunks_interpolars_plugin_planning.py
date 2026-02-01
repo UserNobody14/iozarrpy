@@ -8,17 +8,24 @@ from __future__ import annotations
 
 from datetime import date
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING
 
 import polars as pl
 from interpolars import interpolate_nd
 from zarr.codecs import BloscCodec, BloscShuffle
 
-from rainbear import _core
+from rainbear import ZarrBackend
+
+if TYPE_CHECKING:
+    from rainbear._core import SelectedChunksDebugReturn
 
 
-def _chunk_indices(chunks: list[dict[str, Any]]) -> set[tuple[int, ...]]:
-    return {tuple(int(x) for x in d["indices"]) for d in chunks}
+def _chunk_indices(chunks: SelectedChunksDebugReturn, variable: str = "geopotential_height") -> set[tuple[int, ...]]:
+    # Find a grid that includes the variable
+    for grid in chunks["grids"]:
+        if variable in grid["variables"]:
+            return {tuple(int(x) for x in c["indices"]) for c in grid["chunks"]}
+    raise ValueError(f"No grid found for variable '{variable}' in {chunks}")
 
 
 def test_interpolate_nd_plans_single_chunk(baseline_datasets: dict[str, str], tmp_path: Path) -> None:
@@ -32,7 +39,7 @@ def test_interpolate_nd_plans_single_chunk(baseline_datasets: dict[str, str], tm
         }
     )
     expr = interpolate_nd(["y", "x"], ["geopotential_height"], target)
-    chunks, _ = _core._selected_chunks_debug(zarr_url, expr, variables=["geopotential_height"])
+    chunks = ZarrBackend.from_url(zarr_url).selected_chunks_debug( expr)
     idxs = _chunk_indices(chunks)
 
     # Grid is 2x2 for (y,x) with chunks (10,10) and shape (16,20) => 4 chunks total.
@@ -52,7 +59,7 @@ def test_interpolate_nd_plans_two_chunks_across_x_boundary(
         }
     )
     expr = interpolate_nd(["y", "x"], ["geopotential_height"], target)
-    chunks, _ = _core._selected_chunks_debug(zarr_url, expr, variables=["geopotential_height"])
+    chunks = ZarrBackend.from_url(zarr_url).selected_chunks_debug( expr)
     idxs = _chunk_indices(chunks)
 
     # y stays in chunk 0, x straddles boundary at 10 => chunks (0,0) and (0,1).
@@ -102,7 +109,7 @@ def test_interpolate_nd_groups_by_extra_columns_does_not_overselect(tmp_path: Pa
     )
 
     expr = interpolate_nd(["y", "x"], ["geopotential_height"], target)
-    chunks, _ = _core._selected_chunks_debug(str(zarr_path), expr, variables=["geopotential_height"])
+    chunks = ZarrBackend.from_url(str(zarr_path)).selected_chunks_debug( expr)
     idxs = _chunk_indices(chunks)
 
     # y is in chunk 0; x touches chunks 0 and 9 (plus interpolation neighbors stay within those chunks).
@@ -142,7 +149,7 @@ def test_interpolate_nd_group_dim_in_source_coords_is_unconstrained_but_keeps_xy
     target = pl.DataFrame({"y": [0], "x": [5], "label": ["only"]})
     expr = interpolate_nd(["y", "x", "time"], ["geopotential_height"], target)
 
-    chunks, _ = _core._selected_chunks_debug(str(zarr_path), expr, variables=["geopotential_height"])
+    chunks = ZarrBackend.from_url(str(zarr_path)).selected_chunks_debug( expr)
     idxs = _chunk_indices(chunks)
 
     # y=0 is in y-chunk 0; x=5 in x-chunk 0. time unconstrained => both time chunks.
@@ -176,7 +183,7 @@ def test_interpolate_nd_out_of_bounds_targets_clamp_to_boundary_chunks(tmp_path:
     # x=-5 clamps to 0 (chunk 0); x=150 clamps to 99 (chunk 9).
     target = pl.DataFrame({"y": [0, 0], "x": [-5, 150], "label": ["lo", "hi"]})
     expr = interpolate_nd(["y", "x"], ["geopotential_height"], target)
-    chunks, _ = _core._selected_chunks_debug(str(zarr_path), expr, variables=["geopotential_height"])
+    chunks = ZarrBackend.from_url(str(zarr_path)).selected_chunks_debug( expr)
     idxs = _chunk_indices(chunks)
 
     assert idxs == {(0, 0), (0, 9)}
@@ -214,8 +221,8 @@ def test_interpolate_nd_date_coords_plan_and_clamp(tmp_path: Path) -> None:
     )
 
     expr = interpolate_nd(["d"], ["value"], target)
-    chunks, _ = _core._selected_chunks_debug(str(zarr_path), expr, variables=["value"])
-    idxs = _chunk_indices(chunks)
+    chunks = ZarrBackend.from_url(str(zarr_path)).selected_chunks_debug( expr)
+    idxs = _chunk_indices(chunks, variable="value")
 
     # Out-of-bounds clamps to start/end, so we only need first + last chunk.
     assert idxs == {(0,), (9,)}
@@ -258,8 +265,8 @@ def test_interpolate_nd_duration_coords_plan_and_clamp(tmp_path: Path) -> None:
     )
 
     expr = interpolate_nd(["dt"], ["value"], target)
-    chunks, _ = _core._selected_chunks_debug(str(zarr_path), expr, variables=["value"])
-    idxs = _chunk_indices(chunks)
+    chunks = ZarrBackend.from_url(str(zarr_path)).selected_chunks_debug( expr)
+    idxs = _chunk_indices(chunks, variable="value")
 
     assert idxs == {(0,), (9,)}
 

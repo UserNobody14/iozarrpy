@@ -17,3 +17,4 @@ pub(crate) use retrieve_sync::{
     retrieve_1d_subset, retrieve_chunk,
 };
 pub(crate) use var_mapping_async::compute_var_chunk_info_async;
+pub(crate) use var_mapping_sync::compute_var_chunk_info;

@@ -56,7 +56,7 @@ class TestUrlStringInput:
     def test_url_string_relative_path(self, baseline_datasets: dict[str, str]) -> None:
         """Verify URL string with relative path works."""
         zarr_url = baseline_datasets["orography_chunked_10x10"]
-        lf = rainbear.scan_zarr(zarr_url, variables=["geopotential_height"])
+        lf = rainbear.scan_zarr(zarr_url)
         df = lf.collect()
 
         assert df.height == 16 * 20
@@ -65,7 +65,7 @@ class TestUrlStringInput:
     def test_url_string_absolute_path(self, baseline_datasets: dict[str, str]) -> None:
         """Verify URL string with absolute path works."""
         zarr_url = os.path.abspath(baseline_datasets["orography_chunked_10x10"])
-        lf = rainbear.scan_zarr(zarr_url, variables=["geopotential_height"])
+        lf = rainbear.scan_zarr(zarr_url)
         df = lf.collect()
 
         assert df.height == 16 * 20

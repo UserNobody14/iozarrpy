@@ -17,20 +17,22 @@ Expected behavior:
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING
 
 import polars as pl
 
-from rainbear import _core
+from rainbear import ZarrBackend
 
+if TYPE_CHECKING:
+    from rainbear._core import SelectedChunksDebugReturn
 
-def _chunk_indices(chunks: list[dict[str, Any]]) -> set[tuple[int, ...]]:
+def _chunk_indices(chunks: SelectedChunksDebugReturn, variables: list[str]) -> set[tuple[int, ...]]:
     """Extract chunk indices from debug output."""
-    out: set[tuple[int, ...]] = set()
-    for d in chunks:
-        idx = d["indices"]
-        out.add(tuple(int(x) for x in idx))
-    return out
+    for grid in chunks["grids"]:
+        # if the two intersect, return the chunk indices
+        if set(grid["variables"]) & set(variables):
+            return {tuple(c["indices"]) for c in grid["chunks"]}
+    raise ValueError(f"No grid found for variables {variables} in {chunks}")
 
 
 # =============================================================================
@@ -45,25 +47,17 @@ def test_filter_on_root_dims_affects_all_nodes(
     zarr_url = datatree_datasets["simple_datatree"]
 
     # Filter on y < 5 (first few rows)
-    pred = pl.col("y") < 5
+    pred = pl.all().filter(pl.col("y") < 5)
 
     # This should narrow chunks for both model_a and model_b variables
-    chunks, coord_reads = _core._selected_chunks_debug(
-        zarr_url,
+    chunks = ZarrBackend.from_url(zarr_url).selected_chunks_debug(
         pred,
-        variables=["model_a/temperature", "model_b/temperature"],
     )
 
+    idxs = _chunk_indices(chunks, variables=["model_a/temperature", "model_b/temperature"])
+    coord_reads = chunks["coord_reads"]
     assert coord_reads >= 0
-    idxs = _chunk_indices(chunks)
-
-    # With ny=16 and assuming reasonable chunk size, y<5 should select
-    # fewer chunks than full dataset
-    # This assertion documents that chunk narrowing works for child arrays
-    assert len(idxs) > 0, "Should select some chunks"
-
-    # All selected chunks should have y-index corresponding to y<5
-    # (exact assertion depends on chunk layout)
+    assert len(idxs) > 0
 
 
 def test_filter_on_both_dims(datatree_datasets: dict[str, str]) -> None:
@@ -71,15 +65,13 @@ def test_filter_on_both_dims(datatree_datasets: dict[str, str]) -> None:
     zarr_url = datatree_datasets["simple_datatree"]
 
     # Narrow both dimensions
-    pred = (pl.col("y") < 8) & (pl.col("x") < 10)
+    pred = pl.all().filter((pl.col("y") < 8) & (pl.col("x") < 10))
 
-    chunks, _ = _core._selected_chunks_debug(
-        zarr_url,
+    chunks = ZarrBackend.from_url(zarr_url).selected_chunks_debug(
         pred,
-        variables=["surface"],  # root variable
     )
 
-    idxs = _chunk_indices(chunks)
+    idxs = _chunk_indices(chunks, variables=["surface"])
     assert len(idxs) > 0
 
 
@@ -94,13 +86,12 @@ def test_filter_on_nested_struct_field(datatree_datasets: dict[str, str]) -> Non
 
     # Filter on nested field value
     # Note: This requires the expression compiler to understand struct field access
-    pred = pl.col("model_a").struct.field("temperature") > 280
+    pred = pl.all().filter(pl.col("model_a").struct.field("temperature") > 280)
 
-    chunks, coord_reads = _core._selected_chunks_debug(
-        zarr_url,
+    chunks = ZarrBackend.from_url(zarr_url).selected_chunks_debug(
         pred,
-        variables=["model_a/temperature"],
     )
+    coord_reads = chunks["coord_reads"]
 
     # If pushdown works, this should read the temperature array to evaluate
     # which chunks contain values > 280
@@ -113,17 +104,15 @@ def test_filter_on_multiple_struct_fields(datatree_datasets: dict[str, str]) -> 
     zarr_url = datatree_datasets["simple_datatree"]
 
     # Combine filters on different children
-    pred = (pl.col("model_a").struct.field("temperature") > 280) & (
+    pred = pl.all().filter((pl.col("model_a").struct.field("temperature") > 280) & (
         pl.col("model_b").struct.field("humidity") > 0.5
-    )
+    ))
 
-    chunks, _ = _core._selected_chunks_debug(
-        zarr_url,
+    chunks = ZarrBackend.from_url(zarr_url).selected_chunks_debug(
         pred,
-        variables=["model_a/temperature", "model_b/humidity"],
     )
 
-    idxs = _chunk_indices(chunks)
+    idxs = _chunk_indices(chunks, variables=["model_a/temperature", "model_b/humidity"])
     # Should return chunks that satisfy both conditions
     assert len(idxs) >= 0  # May be empty if no overlap
 
@@ -143,20 +132,21 @@ def test_chunk_selection_propagates_to_children(
     pred = pl.col("time") < 3  # First 3 time steps out of 6
 
     # Check chunk selection for member_0
-    chunks_member0, _ = _core._selected_chunks_debug(
-        zarr_url,
+    chunks_member0 = ZarrBackend.from_url(zarr_url).selected_chunks_debug(
         pred,
-        variables=["member_0/temperature"],
     )
-    idxs_m0 = _chunk_indices(chunks_member0)
+    idxs_m0 = _chunk_indices(chunks_member0, 
+        variables=["member_0/temperature"],
+    
+    )
 
     # Check chunk selection for member_2
-    chunks_member2, _ = _core._selected_chunks_debug(
-        zarr_url,
+    chunks_member2 = ZarrBackend.from_url(zarr_url).selected_chunks_debug(
         pred,
+    )
+    idxs_m2 = _chunk_indices(chunks_member2,
         variables=["member_2/temperature"],
     )
-    idxs_m2 = _chunk_indices(chunks_member2)
 
     # Both should have same number of chunks (same filter, same shape)
     assert len(idxs_m0) == len(idxs_m2)
@@ -171,27 +161,23 @@ def test_independent_child_filters(datatree_datasets: dict[str, str]) -> None:
     zarr_url = datatree_datasets["ensemble_tree"]
 
     # Filter only member_0's temperature
-    pred_m0 = pl.col("member_0").struct.field("temperature") > 290
+    pred_m0 = pl.all().filter(pl.col("member_0").struct.field("temperature") > 290)
 
     # Filter only member_1's precipitation
-    pred_m1 = pl.col("member_1").struct.field("precipitation") > 2
+    pred_m1 = pl.all().filter(pl.col("member_1").struct.field("precipitation") > 2)
 
     # Apply separately
-    chunks_m0, _ = _core._selected_chunks_debug(
-        zarr_url,
+    chunks_m0 = ZarrBackend.from_url(zarr_url).selected_chunks_debug(
         pred_m0,
-        variables=["member_0/temperature"],
     )
 
-    chunks_m1, _ = _core._selected_chunks_debug(
-        zarr_url,
+    chunks_m1 = ZarrBackend.from_url(zarr_url).selected_chunks_debug(
         pred_m1,
-        variables=["member_1/precipitation"],
     )
 
     # These should be independent chunk selections
-    idxs_m0 = _chunk_indices(chunks_m0)
-    idxs_m1 = _chunk_indices(chunks_m1)
+    idxs_m0 = _chunk_indices(chunks_m0, variables=["member_0/temperature"])
+    idxs_m1 = _chunk_indices(chunks_m1, variables=["member_1/precipitation"])
 
     # May have different counts depending on data distribution
     assert len(idxs_m0) >= 0
@@ -208,20 +194,16 @@ def test_literal_predicates_on_structs(datatree_datasets: dict[str, str]) -> Non
     zarr_url = datatree_datasets["simple_datatree"]
 
     # lit(True) should return all chunks
-    chunks_true, _ = _core._selected_chunks_debug(
-        zarr_url,
-        pl.lit(True),
-        variables=["model_a/temperature"],
+    chunks_true = ZarrBackend.from_url(zarr_url).selected_chunks_debug(
+        pl.all().filter(pl.lit(True)),
     )
-    idxs_true = _chunk_indices(chunks_true)
+    idxs_true = _chunk_indices(chunks_true, variables=["model_a/temperature"])
 
     # lit(False) should return no chunks
-    chunks_false, _ = _core._selected_chunks_debug(
-        zarr_url,
-        pl.lit(False),
-        variables=["model_a/temperature"],
+    chunks_false  = ZarrBackend.from_url(zarr_url).selected_chunks_debug(
+        pl.all().filter(pl.lit(False)),
     )
-    idxs_false = _chunk_indices(chunks_false)
+    idxs_false = _chunk_indices(chunks_false, variables=["model_a/temperature"])
 
     assert len(idxs_true) > 0
     assert len(idxs_false) == 0
@@ -231,13 +213,12 @@ def test_literal_null_on_structs(datatree_datasets: dict[str, str]) -> None:
     """lit(None) should return no chunks (null predicate = false)."""
     zarr_url = datatree_datasets["simple_datatree"]
 
-    chunks, _ = _core._selected_chunks_debug(
-        zarr_url,
+    chunks = ZarrBackend.from_url(zarr_url).selected_chunks_debug(
         pl.lit(None),
-        variables=["model_a/temperature"],
     )
+    idxs = _chunk_indices(chunks, variables=["model_a/temperature"])
 
-    assert _chunk_indices(chunks) == set()
+    assert len(idxs) == 0
 
 
 # =============================================================================
@@ -250,7 +231,7 @@ def test_alias_cast_on_struct_fields(datatree_datasets: dict[str, str]) -> None:
     zarr_url = datatree_datasets["simple_datatree"]
 
     # Create expression with alias and cast
-    pred = (
+    pred = pl.all().filter(
         pl.col("model_a")
         .struct.field("temperature")
         .gt(280)
@@ -258,14 +239,12 @@ def test_alias_cast_on_struct_fields(datatree_datasets: dict[str, str]) -> None:
         .cast(pl.Boolean)
     )
 
-    chunks, _ = _core._selected_chunks_debug(
-        zarr_url,
+    chunks = ZarrBackend.from_url(zarr_url).selected_chunks_debug(
         pred,
-        variables=["model_a/temperature"],
     )
 
     # Should still produce valid chunk selection
-    idxs = _chunk_indices(chunks)
+    idxs = _chunk_indices(chunks, variables=["model_a/temperature"])
     assert len(idxs) >= 0
 
 
@@ -277,16 +256,14 @@ def test_complex_struct_expression(datatree_datasets: dict[str, str]) -> None:
     ternary = pl.when(pl.lit(True)).then(pl.lit(True)).otherwise(pl.lit(True))
 
     # Combine with struct field filter
-    pred = pl.col("model_a").struct.field("temperature").gt(280) & ternary
+    pred = pl.all().filter(pl.col("model_a").struct.field("temperature").gt(280) & ternary)
 
-    chunks, _ = _core._selected_chunks_debug(
-        zarr_url,
+    chunks = ZarrBackend.from_url(zarr_url).selected_chunks_debug(
         pred,
-        variables=["model_a/temperature"],
     )
 
     # The ternary shouldn't break the temperature filter pushdown
-    idxs = _chunk_indices(chunks)
+    idxs = _chunk_indices(chunks, variables=["model_a/temperature"])
     assert len(idxs) >= 0
 
 
@@ -300,7 +277,7 @@ def test_filter_on_deep_nested_field(datatree_datasets: dict[str, str]) -> None:
     zarr_url = datatree_datasets["deep_tree_d4"]
 
     # Access deeply nested field: level_1.level_2.level_3.var_3
-    pred = (
+    pred = pl.all().filter(
         pl.col("level_1")
         .struct.field("level_2")
         .struct.field("level_3")
@@ -308,13 +285,11 @@ def test_filter_on_deep_nested_field(datatree_datasets: dict[str, str]) -> None:
         > 30
     )
 
-    chunks, _ = _core._selected_chunks_debug(
-        zarr_url,
+    chunks = ZarrBackend.from_url(zarr_url).selected_chunks_debug(
         pred,
-        variables=["level_1/level_2/level_3/var_3"],
     )
 
-    idxs = _chunk_indices(chunks)
+    idxs = _chunk_indices(chunks, variables=["level_1/level_2/level_3/var_3"])
     assert len(idxs) >= 0
 
 
@@ -325,20 +300,18 @@ def test_filter_combines_root_and_deep_nested(
     zarr_url = datatree_datasets["deep_tree_d4"]
 
     # Filter on root dimension AND deep nested field
-    pred = (pl.col("y") < 6) & (
+    pred = pl.all().filter((pl.col("y") < 6) & (
         pl.col("level_1")
         .struct.field("level_2")
         .struct.field("var_2")
         > 20
-    )
+    ))
 
-    chunks, _ = _core._selected_chunks_debug(
-        zarr_url,
+    chunks = ZarrBackend.from_url(zarr_url).selected_chunks_debug(
         pred,
-        variables=["level_1/level_2/var_2"],
     )
 
-    idxs = _chunk_indices(chunks)
+    idxs = _chunk_indices(chunks, variables=["level_1/level_2/var_2"])
     # Should be intersection of y<6 chunks and var_2>20 chunks
     assert len(idxs) >= 0
 
@@ -354,15 +327,13 @@ def test_filter_with_extra_dimension(datatree_datasets: dict[str, str]) -> None:
 
     # The atmosphere_3d node has z dimension not present at root
     # Filter should work on the shared dimensions
-    pred = (pl.col("y") < 8) & (pl.col("x") < 10)
+    pred = pl.all().filter((pl.col("y") < 8) & (pl.col("x") < 10))
 
-    chunks, _ = _core._selected_chunks_debug(
-        zarr_url,
+    chunks = ZarrBackend.from_url(zarr_url).selected_chunks_debug(
         pred,
-        variables=["atmosphere_3d/temperature"],
     )
 
-    idxs = _chunk_indices(chunks)
+    idxs = _chunk_indices(chunks, variables=["atmosphere_3d/temperature"])
     assert len(idxs) >= 0
 
 
@@ -372,20 +343,17 @@ def test_filter_on_node_specific_dimension(datatree_datasets: dict[str, str]) ->
 
     # timeseries_1d has station_id dimension, not shared with root
     # This tests how non-shared dimensions are handled
-    pred = (
+    pred = pl.all().filter(
         pl.col("timeseries_1d")
         .struct.field("station_id")  # This would need special handling
         .lt(5)
     )
 
-    chunks, _ = _core._selected_chunks_debug(
-        zarr_url,
+    chunks = ZarrBackend.from_url(zarr_url).selected_chunks_debug(
         pred,
-        variables=["timeseries_1d/measurement"],
     )
 
-    # May or may not work depending on implementation
-    idxs = _chunk_indices(chunks)
+    idxs = _chunk_indices(chunks, variables=["timeseries_1d/measurement"])
     assert len(idxs) >= 0
 
 
@@ -403,12 +371,10 @@ def test_filter_across_many_children(datatree_datasets: dict[str, str]) -> None:
 
     # Check that all children get narrowed chunk selection
     for i in range(10):
-        chunks, _ = _core._selected_chunks_debug(
-            zarr_url,
+        chunks = ZarrBackend.from_url(zarr_url).selected_chunks_debug(
             pred,
-            variables=[f"child_{i}/data"],
         )
-        idxs = _chunk_indices(chunks)
+        idxs = _chunk_indices(chunks, variables=[f"child_{i}/data"])
         assert len(idxs) > 0, f"child_{i} should have chunks"
 
 
@@ -419,13 +385,11 @@ def test_filter_specific_child_in_wide_tree(datatree_datasets: dict[str, str]) -
     # Filter only on child_5's data
     pred = pl.col("child_5").struct.field("data") > 500
 
-    chunks, _ = _core._selected_chunks_debug(
-        zarr_url,
+    chunks = ZarrBackend.from_url(zarr_url).selected_chunks_debug(
         pred,
-        variables=["child_5/data"],
     )
 
-    idxs = _chunk_indices(chunks)
+    idxs = _chunk_indices(chunks, variables=["child_5/data"])
     assert len(idxs) >= 0
 
 
@@ -439,17 +403,15 @@ def test_and_combination_narrows_correctly(datatree_datasets: dict[str, str]) ->
     zarr_url = datatree_datasets["simple_datatree"]
 
     # Both conditions on same child
-    pred = (pl.col("model_a").struct.field("temperature") > 270) & (
+    pred = pl.all().filter((pl.col("model_a").struct.field("temperature") > 270) & (
         pl.col("model_a").struct.field("pressure") > 1000
-    )
+    ))
 
-    chunks, _ = _core._selected_chunks_debug(
-        zarr_url,
+    chunks = ZarrBackend.from_url(zarr_url).selected_chunks_debug(
         pred,
-        variables=["model_a/temperature", "model_a/pressure"],
     )
 
-    idxs = _chunk_indices(chunks)
+    idxs = _chunk_indices(chunks, variables=["model_a/temperature", "model_a/pressure"])
     # Should be intersection, potentially fewer chunks
     assert len(idxs) >= 0
 
@@ -463,13 +425,11 @@ def test_or_combination_conservative(datatree_datasets: dict[str, str]) -> None:
         pl.col("model_b").struct.field("humidity") > 0.8
     )
 
-    chunks, _ = _core._selected_chunks_debug(
-        zarr_url,
+    chunks = ZarrBackend.from_url(zarr_url).selected_chunks_debug(
         pred,
-        variables=["model_a/temperature", "model_b/humidity"],
     )
 
-    idxs = _chunk_indices(chunks)
+    idxs = _chunk_indices(chunks, variables=["model_a/temperature", "model_b/humidity"])
     # OR should be conservative - likely returns all or union of chunks
     assert len(idxs) >= 0
 
@@ -492,17 +452,15 @@ def test_current_behavior_struct_field_predicate(
         # Try a struct field predicate
         pred = pl.col("model_a").struct.field("temperature") > 280
 
-        chunks, coord_reads = _core._selected_chunks_debug(
-            zarr_url,
-            pred,
-            variables=["model_a/temperature"],
+        chunks = ZarrBackend.from_url(zarr_url).selected_chunks_debug(
+            pred,       
         )
 
-        print(f"Struct field predicate - chunks returned: {len(chunks)}")
-        print(f"Coord reads: {coord_reads}")
+        idxs = _chunk_indices(chunks, variables=["model_a/temperature"])
+        print(f"Struct field predicate - chunks returned: {len(idxs)}")
 
-        if chunks:
-            print(f"First chunk: {chunks[0]}")
+        if idxs:
+            print(f"First chunk: {next(iter(idxs))}")
 
         assert True
 
@@ -522,14 +480,12 @@ def test_current_behavior_root_dim_filter_on_children(
         pred = pl.col("y") < 8
 
         # Try selecting a child variable with root filter
-        chunks, coord_reads = _core._selected_chunks_debug(
-            zarr_url,
+        chunks = ZarrBackend.from_url(zarr_url).selected_chunks_debug(
             pred,
-            variables=["model_a/temperature"],
         )
 
-        print(f"Root dim filter on child - chunks returned: {len(chunks)}")
-        print(f"Coord reads: {coord_reads}")
+        idxs = _chunk_indices(chunks, variables=["model_a/temperature"])
+        print(f"Root dim filter on child - chunks returned: {len(idxs)}")
 
         assert True
 

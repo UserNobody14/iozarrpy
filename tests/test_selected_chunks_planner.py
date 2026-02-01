@@ -6,8 +6,7 @@ import numpy as np
 import polars as pl
 import xarray as xr
 
-import rainbear
-import rainbear._core as _core
+from rainbear import ZarrBackend
 
 
 def _write_1d_dataset(path: Path, *, n: int = 10_000, chunk: int = 1_000) -> str:
@@ -32,8 +31,14 @@ def test_selected_chunks_disjoint_or_ranges(tmp_path: Path) -> None:
         (pl.col("mycoord") > 7000) & (pl.col("mycoord") < 7010)
     )
 
-    chunks = rainbear.selected_chunks(zarr_path, expr, variables=["v"])  # type: ignore[attr-defined]
-    idxs = sorted({tuple(c["indices"]) for c in chunks})
+    chunks = ZarrBackend.from_url(zarr_path).selected_chunks_debug(expr)  # type: ignore[attr-defined]
+    # Find a grid that includes "mycoord"
+    for grid in chunks["grids"]:
+        if "mycoord" in grid["variables"]:
+            idxs = sorted({tuple(c["indices"]) for c in grid["chunks"]})
+            break
+    else:
+        raise ValueError(f"No grid found for variable 'mycoord' in {chunks}")
 
     # With chunk size 1000, 20..30 is in chunk 0 and 7000..7010 is in chunk 7.
     assert idxs == [(0,), (7,)]
@@ -46,8 +51,15 @@ def test_planner_coord_reads_are_sublinear(tmp_path: Path) -> None:
         (pl.col("mycoord") > 70_000) & (pl.col("mycoord") < 70_010)
     )
 
-    chunks, coord_reads = _core._selected_chunks_debug(zarr_path, expr, variables=["v"])
-    idxs = sorted({tuple(c["indices"]) for c in chunks})
+    chunks = ZarrBackend.from_url(zarr_path).selected_chunks_debug(expr)
+    coord_reads = chunks["coord_reads"]
+    # Find a grid that includes "mycoord"
+    for grid in chunks["grids"]:
+        if "mycoord" in grid["variables"]:
+            idxs = sorted({tuple(c["indices"]) for c in grid["chunks"]})
+            break
+    else:
+        raise ValueError(f"No grid found for variable 'mycoord' in {chunks}")
     assert idxs == [(0,), (70,)]
 
     # Heuristic: should be O(log N) coord reads, not O(#chunks).
@@ -59,9 +71,15 @@ def test_selected_chunks_index_only_dims(baseline_datasets: dict[str, str]) -> N
     zarr_path = baseline_datasets["index_only_dims"]
 
     expr = (pl.col("y") == 0) & (pl.col("x") >= 0)
-    chunks = rainbear.selected_chunks(zarr_path, expr, variables=["var"])  # type: ignore[attr-defined]
+    chunks = ZarrBackend.from_url(zarr_path).selected_chunks_debug(expr)  # type: ignore[attr-defined]
+    # Find a grid that includes "var"
+    for grid in chunks["grids"]:
+        if "var" in grid["variables"]:
+            idxs = sorted({tuple(c["indices"]) for c in grid["chunks"]})
+            break
+    else:
+        raise ValueError(f"No grid found for variable 'mycoord' in {chunks}")
 
-    idxs = sorted({tuple(c["indices"]) for c in chunks})
     # y==0 constrains to y-chunk 0; x unconstrained across 2 chunks.
     assert idxs == [(0, 0), (0, 1)]
 

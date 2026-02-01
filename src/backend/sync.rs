@@ -7,15 +7,17 @@ use std::sync::Arc;
 
 use polars::prelude::{
     AnonymousScanArgs, LazyFrame,
-    ScanArgsAnonymous,
+    ScanArgsAnonymous, Selector,
 };
 use pyo3::prelude::*;
 use pyo3::types::PyAny;
 use pyo3_async_runtimes::tokio::future_into_py;
-use pyo3_polars::{PyLazyFrame, PySchema};
+use pyo3_polars::{
+    PyDataFrame, PyLazyFrame, PySchema,
+};
 
-use crate::IStr;
 use crate::backend::compile::ChunkedExpressionCompilerAsync;
+use crate::backend::lazy::scan_zarr_with_backend_sync;
 use crate::backend::traits::{
     EvictableChunkCacheSync,
     HasMetadataBackendSync,
@@ -29,6 +31,9 @@ use crate::backend::zarr::{
 use crate::py::expr_extract::extract_expr;
 use crate::scan::chunk_to_df::chunk_to_df_from_grid;
 use crate::store::StoreInput;
+use crate::{FromIStr, IStr, IntoIStr};
+use polars::prelude::*;
+use polars_lazy::prelude::*;
 
 /// Python-exposed Zarr backend with caching and scan methods.
 ///
@@ -96,10 +101,14 @@ impl PyZarrBackendSync {
     /// * `variables` - Optional list of variable names to read
     /// * `max_concurrency` - Maximum concurrent chunk reads
     /// * `with_columns` - Optional list of columns to include
-    #[pyo3(signature = ())]
+    #[pyo3(signature = (predicate=None, variables=None, max_concurrency=None, with_columns=None))]
     fn scan_zarr_sync<'py>(
         &self,
         py: Python<'py>,
+        predicate: Option<&Bound<'_, PyAny>>,
+        variables: Option<Vec<String>>,
+        max_concurrency: Option<usize>,
+        with_columns: Option<Vec<String>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let args = ScanArgsAnonymous {
             schema: Some(Arc::new(
@@ -109,17 +118,51 @@ impl PyZarrBackendSync {
             )),
             ..ScanArgsAnonymous::default()
         };
-        let asc = LazyFrame::anonymous_scan(
-            self.inner.clone(),
-            args,
-        )
-        .map_err(|e| {
-            PyErr::new::<
+        let prd =
+            if let Some(predicate) = predicate {
+                Ok(extract_expr(predicate)?)
+            } else {
+                Err(PyErr::new::<
                 pyo3::exceptions::PyRuntimeError,
                 _,
-            >(e.to_string())
-        })?;
-        Ok(PyLazyFrame(asc).into_pyobject(py)?)
+            >(
+                "predicate is required"
+                    .to_string(),
+            ))
+            }?;
+        let df = scan_zarr_with_backend_sync(
+            Arc::new(&self.inner),
+            prd.clone(),
+        )?;
+
+        let filtered = df
+            .lazy()
+            .filter(prd)
+            .collect()
+            .map_err(|e| {
+                PyErr::new::<
+                    pyo3::exceptions::PyRuntimeError,
+                    _,
+                >(e.to_string())
+            })?;
+        Ok(PyDataFrame(filtered)
+            .into_pyobject(py)
+            .map_err(|e| {
+                PyErr::new::<
+                    pyo3::exceptions::PyRuntimeError,
+                    _,
+                >(e.to_string())
+            })?
+            .into_any())
+        // if let Some(variables) = variables {
+        //     asc =
+        //         asc.select(Expr::Selector(Selector::ByName {
+        //             names: variables
+        //                 .into_iter()
+        //                 .map(|s| s.istr())
+        //                 .collect::<Vec<_>>(),
+        //         })?;
+        // }
     }
     /// # Arguments
     /// * `variables` - Optional list of variable names to include

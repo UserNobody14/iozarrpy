@@ -24,14 +24,17 @@ Coordinate values are designed to map precisely to chunks:
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import polars as pl
 
-from rainbear import _core
+from rainbear import ZarrBackend
 
 if TYPE_CHECKING:
     from conftest import ComprehensiveDatasetInfo
+
+    from rainbear._core import SelectedChunksDebugReturn
+
 
 
 # ---------------------------------------------------------------------------
@@ -39,9 +42,13 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 
 
-def _chunk_indices(chunks: list[dict[str, Any]]) -> set[tuple[int, ...]]:
+def _chunk_indices(chunks: SelectedChunksDebugReturn) -> set[tuple[int, ...]]:
     """Extract chunk indices as a set of tuples."""
-    return {tuple(int(x) for x in d["indices"]) for d in chunks}
+    # Find a grid that includes "data"
+    for grid in chunks["grids"]:
+        if "data" in grid["variables"]:
+            return {tuple(int(x) for x in d["indices"]) for d in grid["chunks"]}
+    raise ValueError(f"No grid found for variable 'data' in {chunks}")
 
 
 def _coord_to_chunk(coord_value: int, chunk_size: int = 10) -> int:
@@ -124,7 +131,7 @@ class TestComparison:
         """a == 15 should select only chunk a=1, giving 1*5*3 = 15 chunks."""
         url = comprehensive_3d_dataset.path
         pred = pl.col("a") == 15
-        chunks, _ = _core._selected_chunks_debug(url, pred, variables=["data"])
+        chunks = ZarrBackend.from_url(url).selected_chunks_debug( pred)
         idxs = _chunk_indices(chunks)
 
         # Value 15 is in chunk 1 (values 10-19)
@@ -139,7 +146,7 @@ class TestComparison:
         """a == 20 (chunk boundary) should select chunk a=2."""
         url = comprehensive_3d_dataset.path
         pred = pl.col("a") == 20
-        chunks, _ = _core._selected_chunks_debug(url, pred, variables=["data"])
+        chunks = ZarrBackend.from_url(url).selected_chunks_debug( pred)
         idxs = _chunk_indices(chunks)
 
         expected = {(2, b, c) for b in range(5) for c in range(3)}
@@ -152,7 +159,7 @@ class TestComparison:
         """a == 0 should select only chunk a=0."""
         url = comprehensive_3d_dataset.path
         pred = pl.col("a") == 0
-        chunks, _ = _core._selected_chunks_debug(url, pred, variables=["data"])
+        chunks = ZarrBackend.from_url(url).selected_chunks_debug( pred)
         idxs = _chunk_indices(chunks)
 
         expected = {(0, b, c) for b in range(5) for c in range(3)}
@@ -165,7 +172,7 @@ class TestComparison:
         """a == 69 (last value) should select chunk a=6."""
         url = comprehensive_3d_dataset.path
         pred = pl.col("a") == 69
-        chunks, _ = _core._selected_chunks_debug(url, pred, variables=["data"])
+        chunks = ZarrBackend.from_url(url).selected_chunks_debug( pred)
         idxs = _chunk_indices(chunks)
 
         expected = {(6, b, c) for b in range(5) for c in range(3)}
@@ -178,7 +185,7 @@ class TestComparison:
         """a < 20 should select chunks a=0,1 giving 2*5*3 = 30 chunks."""
         url = comprehensive_3d_dataset.path
         pred = pl.col("a") < 20
-        chunks, _ = _core._selected_chunks_debug(url, pred, variables=["data"])
+        chunks = ZarrBackend.from_url(url).selected_chunks_debug( pred)
         idxs = _chunk_indices(chunks)
 
         expected = {(a, b, c) for a in range(2) for b in range(5) for c in range(3)}
@@ -191,7 +198,7 @@ class TestComparison:
         """a <= 19 should select chunks a=0,1 (values 0-19)."""
         url = comprehensive_3d_dataset.path
         pred = pl.col("a") <= 19
-        chunks, _ = _core._selected_chunks_debug(url, pred, variables=["data"])
+        chunks = ZarrBackend.from_url(url).selected_chunks_debug( pred)
         idxs = _chunk_indices(chunks)
 
         expected = {(a, b, c) for a in range(2) for b in range(5) for c in range(3)}
@@ -204,7 +211,7 @@ class TestComparison:
         """a > 49 should select chunks a=5,6 giving 2*5*3 = 30 chunks."""
         url = comprehensive_3d_dataset.path
         pred = pl.col("a") > 49
-        chunks, _ = _core._selected_chunks_debug(url, pred, variables=["data"])
+        chunks = ZarrBackend.from_url(url).selected_chunks_debug( pred)
         idxs = _chunk_indices(chunks)
 
         expected = {(a, b, c) for a in range(5, 7) for b in range(5) for c in range(3)}
@@ -217,7 +224,7 @@ class TestComparison:
         """a >= 50 should select chunks a=5,6."""
         url = comprehensive_3d_dataset.path
         pred = pl.col("a") >= 50
-        chunks, _ = _core._selected_chunks_debug(url, pred, variables=["data"])
+        chunks = ZarrBackend.from_url(url).selected_chunks_debug( pred)
         idxs = _chunk_indices(chunks)
 
         expected = {(a, b, c) for a in range(5, 7) for b in range(5) for c in range(3)}
@@ -230,7 +237,7 @@ class TestComparison:
         """b == 25 should select chunk b=2 giving 7*1*3 = 21 chunks."""
         url = comprehensive_3d_dataset.path
         pred = pl.col("b") == 25
-        chunks, _ = _core._selected_chunks_debug(url, pred, variables=["data"])
+        chunks = ZarrBackend.from_url(url).selected_chunks_debug( pred)
         idxs = _chunk_indices(chunks)
 
         expected = {(a, 2, c) for a in range(7) for c in range(3)}
@@ -243,7 +250,7 @@ class TestComparison:
         """c < 10 should select chunk c=0 giving 7*5*1 = 35 chunks."""
         url = comprehensive_3d_dataset.path
         pred = pl.col("c") < 10
-        chunks, _ = _core._selected_chunks_debug(url, pred, variables=["data"])
+        chunks = ZarrBackend.from_url(url).selected_chunks_debug( pred)
         idxs = _chunk_indices(chunks)
 
         expected = {(a, b, 0) for a in range(7) for b in range(5)}
@@ -256,7 +263,7 @@ class TestComparison:
         """15 == a should work the same as a == 15."""
         url = comprehensive_3d_dataset.path
         pred = pl.lit(15) == pl.col("a")
-        chunks, _ = _core._selected_chunks_debug(url, pred, variables=["data"])
+        chunks = ZarrBackend.from_url(url).selected_chunks_debug( pred)
         idxs = _chunk_indices(chunks)
 
         expected = {(1, b, c) for b in range(5) for c in range(3)}
@@ -269,7 +276,7 @@ class TestComparison:
         """20 > a is equivalent to a < 20."""
         url = comprehensive_3d_dataset.path
         pred = pl.lit(20) > pl.col("a")
-        chunks, _ = _core._selected_chunks_debug(url, pred, variables=["data"])
+        chunks = ZarrBackend.from_url(url).selected_chunks_debug( pred)
         idxs = _chunk_indices(chunks)
 
         expected = {(a, b, c) for a in range(2) for b in range(5) for c in range(3)}
@@ -286,7 +293,7 @@ class TestLogical:
         """(a < 20) & (b < 20) should give 2*2*3 = 12 chunks."""
         url = comprehensive_3d_dataset.path
         pred = (pl.col("a") < 20) & (pl.col("b") < 20)
-        chunks, _ = _core._selected_chunks_debug(url, pred, variables=["data"])
+        chunks = ZarrBackend.from_url(url).selected_chunks_debug( pred)
         idxs = _chunk_indices(chunks)
 
         expected = {(a, b, c) for a in range(2) for b in range(2) for c in range(3)}
@@ -300,7 +307,7 @@ class TestLogical:
         """(a < 20) & (b < 20) & (c < 20) should give 2*2*2 = 8 chunks."""
         url = comprehensive_3d_dataset.path
         pred = (pl.col("a") < 20) & (pl.col("b") < 20) & (pl.col("c") < 20)
-        chunks, _ = _core._selected_chunks_debug(url, pred, variables=["data"])
+        chunks = ZarrBackend.from_url(url).selected_chunks_debug( pred)
         idxs = _chunk_indices(chunks)
 
         expected = {(a, b, c) for a in range(2) for b in range(2) for c in range(2)}
@@ -313,7 +320,7 @@ class TestLogical:
         """(a >= 20) & (a < 40) should give 2*5*3 = 30 chunks (chunks 2,3)."""
         url = comprehensive_3d_dataset.path
         pred = (pl.col("a") >= 20) & (pl.col("a") < 40)
-        chunks, _ = _core._selected_chunks_debug(url, pred, variables=["data"])
+        chunks = ZarrBackend.from_url(url).selected_chunks_debug( pred)
         idxs = _chunk_indices(chunks)
 
         expected = {(a, b, c) for a in range(2, 4) for b in range(5) for c in range(3)}
@@ -326,7 +333,7 @@ class TestLogical:
         """(a == 15) & (b == 25) & (c == 15) should give exactly 1 chunk."""
         url = comprehensive_3d_dataset.path
         pred = (pl.col("a") == 15) & (pl.col("b") == 25) & (pl.col("c") == 15)
-        chunks, _ = _core._selected_chunks_debug(url, pred, variables=["data"])
+        chunks = ZarrBackend.from_url(url).selected_chunks_debug( pred)
         idxs = _chunk_indices(chunks)
 
         assert len(idxs) == 1
@@ -338,7 +345,7 @@ class TestLogical:
         """(a == 15) | (b == 25) should union chunks."""
         url = comprehensive_3d_dataset.path
         pred = (pl.col("a") == 15) | (pl.col("b") == 25)
-        chunks, _ = _core._selected_chunks_debug(url, pred, variables=["data"])
+        chunks = ZarrBackend.from_url(url).selected_chunks_debug( pred)
         idxs = _chunk_indices(chunks)
 
         # a=1: 1*5*3 = 15 chunks
@@ -357,7 +364,7 @@ class TestLogical:
         """(a == 5) | (a == 55) should give 2*5*3 = 30 chunks."""
         url = comprehensive_3d_dataset.path
         pred = (pl.col("a") == 5) | (pl.col("a") == 55)
-        chunks, _ = _core._selected_chunks_debug(url, pred, variables=["data"])
+        chunks = ZarrBackend.from_url(url).selected_chunks_debug( pred)
         idxs = _chunk_indices(chunks)
 
         # a=0 (value 5) and a=5 (value 55)
@@ -373,7 +380,7 @@ class TestLogical:
         """(a < 20) ^ (b < 20) should exclude the intersection."""
         url = comprehensive_3d_dataset.path
         pred = (pl.col("a") < 20) ^ (pl.col("b") < 20)
-        chunks, _ = _core._selected_chunks_debug(url, pred, variables=["data"])
+        chunks = ZarrBackend.from_url(url).selected_chunks_debug( pred)
         idxs = _chunk_indices(chunks)
 
         # a<20: chunks a=0,1 = 2*5*3 = 30
@@ -392,7 +399,7 @@ class TestLogical:
         """~(a == 15) cannot be represented precisely, should return all chunks."""
         url = comprehensive_3d_dataset.path
         pred = ~(pl.col("a") == 15)
-        chunks, _ = _core._selected_chunks_debug(url, pred, variables=["data"])
+        chunks = ZarrBackend.from_url(url).selected_chunks_debug( pred)
         idxs = _chunk_indices(chunks)
 
         # NOT alone is conservative - returns all chunks
@@ -404,7 +411,7 @@ class TestLogical:
         """(a < 30) & ~(a < 10) should select only chunk a=1,2."""
         url = comprehensive_3d_dataset.path
         pred = (pl.col("a") < 30) & ~(pl.col("a") < 10)
-        chunks, _ = _core._selected_chunks_debug(url, pred, variables=["data"])
+        chunks = ZarrBackend.from_url(url).selected_chunks_debug( pred)
         idxs = _chunk_indices(chunks)
 
         # a<30 gives chunks 0,1,2; a<10 gives chunk 0
@@ -421,7 +428,7 @@ class TestLogical:
         outer = (pl.col("a") < 30) & (pl.col("b") < 30)
         hole = (pl.col("a") < 10) & (pl.col("b") < 10)
         pred = outer & ~hole
-        chunks, _ = _core._selected_chunks_debug(url, pred, variables=["data"])
+        chunks = ZarrBackend.from_url(url).selected_chunks_debug( pred)
         idxs = _chunk_indices(chunks)
 
         # Outer: a in {0,1,2}, b in {0,1,2} = 3*3*3 = 27
@@ -443,7 +450,7 @@ class TestBooleanFunctions:
         """a.is_between(10, 19) should select chunk a=1 (15 chunks)."""
         url = comprehensive_3d_dataset.path
         pred = pl.col("a").is_between(10, 19)
-        chunks, _ = _core._selected_chunks_debug(url, pred, variables=["data"])
+        chunks = ZarrBackend.from_url(url).selected_chunks_debug( pred)
         idxs = _chunk_indices(chunks)
 
         expected = {(1, b, c) for b in range(5) for c in range(3)}
@@ -456,7 +463,7 @@ class TestBooleanFunctions:
         """a.is_between(15, 35) should select chunks a=1,2,3 (45 chunks)."""
         url = comprehensive_3d_dataset.path
         pred = pl.col("a").is_between(15, 35)
-        chunks, _ = _core._selected_chunks_debug(url, pred, variables=["data"])
+        chunks = ZarrBackend.from_url(url).selected_chunks_debug( pred)
         idxs = _chunk_indices(chunks)
 
         expected = {(a, b, c) for a in range(1, 4) for b in range(5) for c in range(3)}
@@ -469,7 +476,7 @@ class TestBooleanFunctions:
         """a.is_between(10, 29) & b.is_between(10, 29) = 2*2*3 = 12 chunks."""
         url = comprehensive_3d_dataset.path
         pred = pl.col("a").is_between(10, 29) & pl.col("b").is_between(10, 29)
-        chunks, _ = _core._selected_chunks_debug(url, pred, variables=["data"])
+        chunks = ZarrBackend.from_url(url).selected_chunks_debug( pred)
         idxs = _chunk_indices(chunks)
 
         expected = {(a, b, c) for a in range(1, 3) for b in range(1, 3) for c in range(3)}
@@ -482,7 +489,7 @@ class TestBooleanFunctions:
         """a.is_in([5, 25, 45]) should select chunks a=0,2,4."""
         url = comprehensive_3d_dataset.path
         pred = pl.col("a").is_in([5, 25, 45])
-        chunks, _ = _core._selected_chunks_debug(url, pred, variables=["data"])
+        chunks = ZarrBackend.from_url(url).selected_chunks_debug( pred)
         idxs = _chunk_indices(chunks)
 
         # Values 5,25,45 are in chunks 0,2,4
@@ -496,7 +503,7 @@ class TestBooleanFunctions:
         """a.is_in([10, 11, 12, 13]) all in same chunk should give 15 chunks."""
         url = comprehensive_3d_dataset.path
         pred = pl.col("a").is_in([10, 11, 12, 13])
-        chunks, _ = _core._selected_chunks_debug(url, pred, variables=["data"])
+        chunks = ZarrBackend.from_url(url).selected_chunks_debug( pred)
         idxs = _chunk_indices(chunks)
 
         # All values in chunk 1
@@ -510,7 +517,7 @@ class TestBooleanFunctions:
         """a.is_in([5, 15]) & b.is_in([5, 15]) = 2*2*3 = 12 chunks."""
         url = comprehensive_3d_dataset.path
         pred = pl.col("a").is_in([5, 15]) & pl.col("b").is_in([5, 15])
-        chunks, _ = _core._selected_chunks_debug(url, pred, variables=["data"])
+        chunks = ZarrBackend.from_url(url).selected_chunks_debug( pred)
         idxs = _chunk_indices(chunks)
 
         expected = {(a, b, c) for a in [0, 1] for b in [0, 1] for c in range(3)}
@@ -523,7 +530,7 @@ class TestBooleanFunctions:
         """is_null on a column returns all chunks (conservative)."""
         url = comprehensive_3d_dataset.path
         pred = pl.col("a").is_null()
-        chunks, _ = _core._selected_chunks_debug(url, pred, variables=["data"])
+        chunks = ZarrBackend.from_url(url).selected_chunks_debug( pred)
         idxs = _chunk_indices(chunks)
 
         # Conservative: returns all
@@ -535,7 +542,7 @@ class TestBooleanFunctions:
         """is_not_null on a column returns all chunks (conservative)."""
         url = comprehensive_3d_dataset.path
         pred = pl.col("a").is_not_null()
-        chunks, _ = _core._selected_chunks_debug(url, pred, variables=["data"])
+        chunks = ZarrBackend.from_url(url).selected_chunks_debug( pred)
         idxs = _chunk_indices(chunks)
 
         assert len(idxs) == comprehensive_3d_dataset.total_chunks
@@ -546,7 +553,7 @@ class TestBooleanFunctions:
         """(a < 20) & data.is_null() should still narrow by a."""
         url = comprehensive_3d_dataset.path
         pred = (pl.col("a") < 20) & pl.col("data").is_null()
-        chunks, _ = _core._selected_chunks_debug(url, pred, variables=["data"])
+        chunks = ZarrBackend.from_url(url).selected_chunks_debug( pred)
         idxs = _chunk_indices(chunks)
 
         # AND with is_null should still narrow
@@ -564,7 +571,7 @@ class TestHorizontalOps:
         """any_horizontal([a==5, b==25]) should union the selections."""
         url = comprehensive_3d_dataset.path
         pred = pl.any_horizontal([pl.col("a") == 5, pl.col("b") == 25])
-        chunks, _ = _core._selected_chunks_debug(url, pred, variables=["data"])
+        chunks = ZarrBackend.from_url(url).selected_chunks_debug( pred)
         idxs = _chunk_indices(chunks)
 
         # a=0: 1*5*3 = 15, b=2: 7*1*3 = 21, overlap: 1*1*3 = 3
@@ -581,7 +588,7 @@ class TestHorizontalOps:
         """any_horizontal with three expressions."""
         url = comprehensive_3d_dataset.path
         pred = pl.any_horizontal([pl.col("a") == 5, pl.col("b") == 25, pl.col("c") == 15])
-        chunks, _ = _core._selected_chunks_debug(url, pred, variables=["data"])
+        chunks = ZarrBackend.from_url(url).selected_chunks_debug( pred)
         idxs = _chunk_indices(chunks)
 
         a_set = {(0, b, c) for b in range(5) for c in range(3)}  # 15
@@ -598,7 +605,7 @@ class TestHorizontalOps:
         """all_horizontal([a<20, b<20]) should intersect the selections."""
         url = comprehensive_3d_dataset.path
         pred = pl.all_horizontal([pl.col("a") < 20, pl.col("b") < 20])
-        chunks, _ = _core._selected_chunks_debug(url, pred, variables=["data"])
+        chunks = ZarrBackend.from_url(url).selected_chunks_debug( pred)
         idxs = _chunk_indices(chunks)
 
         expected = {(a, b, c) for a in range(2) for b in range(2) for c in range(3)}
@@ -611,7 +618,7 @@ class TestHorizontalOps:
         """all_horizontal with three expressions = 2*2*2 = 8 chunks."""
         url = comprehensive_3d_dataset.path
         pred = pl.all_horizontal([pl.col("a") < 20, pl.col("b") < 20, pl.col("c") < 20])
-        chunks, _ = _core._selected_chunks_debug(url, pred, variables=["data"])
+        chunks = ZarrBackend.from_url(url).selected_chunks_debug( pred)
         idxs = _chunk_indices(chunks)
 
         expected = {(a, b, c) for a in range(2) for b in range(2) for c in range(2)}
@@ -628,7 +635,7 @@ class TestWrappers:
         """(a == 15).alias("test") should still narrow to 15 chunks."""
         url = comprehensive_3d_dataset.path
         pred = (pl.col("a") == 15).alias("test")
-        chunks, _ = _core._selected_chunks_debug(url, pred, variables=["data"])
+        chunks = ZarrBackend.from_url(url).selected_chunks_debug( pred)
         idxs = _chunk_indices(chunks)
 
         expected = {(1, b, c) for b in range(5) for c in range(3)}
@@ -641,7 +648,7 @@ class TestWrappers:
         """Deeply nested alias should still work."""
         url = comprehensive_3d_dataset.path
         pred = (pl.col("a") == 15).alias("x").alias("y").alias("z")
-        chunks, _ = _core._selected_chunks_debug(url, pred, variables=["data"])
+        chunks = ZarrBackend.from_url(url).selected_chunks_debug( pred)
         idxs = _chunk_indices(chunks)
 
         expected = {(1, b, c) for b in range(5) for c in range(3)}
@@ -654,7 +661,7 @@ class TestWrappers:
         """(a == 15).cast(Boolean) should narrow."""
         url = comprehensive_3d_dataset.path
         pred = (pl.col("a") == 15).cast(pl.Boolean)
-        chunks, _ = _core._selected_chunks_debug(url, pred, variables=["data"])
+        chunks = ZarrBackend.from_url(url).selected_chunks_debug( pred)
         idxs = _chunk_indices(chunks)
 
         expected = {(1, b, c) for b in range(5) for c in range(3)}
@@ -667,7 +674,7 @@ class TestWrappers:
         """(a == 15).alias("x").cast(Boolean).alias("y") should narrow."""
         url = comprehensive_3d_dataset.path
         pred = (pl.col("a") == 15).alias("x").cast(pl.Boolean).alias("y")
-        chunks, _ = _core._selected_chunks_debug(url, pred, variables=["data"])
+        chunks = ZarrBackend.from_url(url).selected_chunks_debug( pred)
         idxs = _chunk_indices(chunks)
 
         expected = {(1, b, c) for b in range(5) for c in range(3)}
@@ -680,7 +687,7 @@ class TestWrappers:
         """(a == 15).over("b") should still narrow by a."""
         url = comprehensive_3d_dataset.path
         pred = (pl.col("a") == 15).over("b")
-        chunks, _ = _core._selected_chunks_debug(url, pred, variables=["data"])
+        chunks = ZarrBackend.from_url(url).selected_chunks_debug( pred)
         idxs = _chunk_indices(chunks)
 
         expected = {(1, b, c) for b in range(5) for c in range(3)}
@@ -693,7 +700,7 @@ class TestWrappers:
         """Complex chain: ((a < 20) & (b < 20)).alias("x").cast(Boolean)."""
         url = comprehensive_3d_dataset.path
         pred = ((pl.col("a") < 20) & (pl.col("b") < 20)).alias("x").cast(pl.Boolean)
-        chunks, _ = _core._selected_chunks_debug(url, pred, variables=["data"])
+        chunks = ZarrBackend.from_url(url).selected_chunks_debug( pred)
         idxs = _chunk_indices(chunks)
 
         expected = {(a, b, c) for a in range(2) for b in range(2) for c in range(3)}
@@ -710,7 +717,7 @@ class TestTernary:
         """when(a==15).then(True).otherwise(False) == (a==15)."""
         url = comprehensive_3d_dataset.path
         pred = pl.when(pl.col("a") == 15).then(pl.lit(True)).otherwise(pl.lit(False))
-        chunks, _ = _core._selected_chunks_debug(url, pred, variables=["data"])
+        chunks = ZarrBackend.from_url(url).selected_chunks_debug( pred)
         idxs = _chunk_indices(chunks)
 
         expected = {(1, b, c) for b in range(5) for c in range(3)}
@@ -723,7 +730,7 @@ class TestTernary:
         """when(a==15).then(False).otherwise(True) is complement, conservative."""
         url = comprehensive_3d_dataset.path
         pred = pl.when(pl.col("a") == 15).then(pl.lit(False)).otherwise(pl.lit(True))
-        chunks, _ = _core._selected_chunks_debug(url, pred, variables=["data"])
+        chunks = ZarrBackend.from_url(url).selected_chunks_debug( pred)
         idxs = _chunk_indices(chunks)
 
         # Complement can't be represented, should be conservative
@@ -735,7 +742,7 @@ class TestTernary:
         """when(a==15).then(True).otherwise(True) should return all."""
         url = comprehensive_3d_dataset.path
         pred = pl.when(pl.col("a") == 15).then(pl.lit(True)).otherwise(pl.lit(True))
-        chunks, _ = _core._selected_chunks_debug(url, pred, variables=["data"])
+        chunks = ZarrBackend.from_url(url).selected_chunks_debug( pred)
         idxs = _chunk_indices(chunks)
 
         assert len(idxs) == comprehensive_3d_dataset.total_chunks
@@ -746,7 +753,7 @@ class TestTernary:
         """when(a==15).then(False).otherwise(False) should return empty."""
         url = comprehensive_3d_dataset.path
         pred = pl.when(pl.col("a") == 15).then(pl.lit(False)).otherwise(pl.lit(False))
-        chunks, _ = _core._selected_chunks_debug(url, pred, variables=["data"])
+        chunks = ZarrBackend.from_url(url).selected_chunks_debug( pred)
         idxs = _chunk_indices(chunks)
 
         assert len(idxs) == 0
@@ -761,7 +768,7 @@ class TestTernary:
             .then(pl.lit(True))
             .otherwise(pl.lit(False))
         )
-        chunks, _ = _core._selected_chunks_debug(url, pred, variables=["data"])
+        chunks = ZarrBackend.from_url(url).selected_chunks_debug( pred)
         idxs = _chunk_indices(chunks)
 
         expected = {(a, b, c) for a in range(2) for b in range(2) for c in range(3)}
@@ -778,7 +785,7 @@ class TestLiterals:
         """pl.lit(True) should return all 105 chunks."""
         url = comprehensive_3d_dataset.path
         pred = pl.lit(True)
-        chunks, _ = _core._selected_chunks_debug(url, pred, variables=["data"])
+        chunks = ZarrBackend.from_url(url).selected_chunks_debug( pred)
         idxs = _chunk_indices(chunks)
 
         assert len(idxs) == comprehensive_3d_dataset.total_chunks
@@ -789,7 +796,7 @@ class TestLiterals:
         """pl.lit(False) should return 0 chunks."""
         url = comprehensive_3d_dataset.path
         pred = pl.lit(False)
-        chunks, _ = _core._selected_chunks_debug(url, pred, variables=["data"])
+        chunks = ZarrBackend.from_url(url).selected_chunks_debug( pred)
         idxs = _chunk_indices(chunks)
 
         assert len(idxs) == 0
@@ -800,7 +807,7 @@ class TestLiterals:
         """pl.lit(None) (null predicate) should return 0 chunks."""
         url = comprehensive_3d_dataset.path
         pred = pl.lit(None)
-        chunks, _ = _core._selected_chunks_debug(url, pred, variables=["data"])
+        chunks = ZarrBackend.from_url(url).selected_chunks_debug( pred)
         idxs = _chunk_indices(chunks)
 
         assert len(idxs) == 0
@@ -811,7 +818,7 @@ class TestLiterals:
         """pl.lit(True) & (a < 20) should narrow."""
         url = comprehensive_3d_dataset.path
         pred = pl.lit(True) & (pl.col("a") < 20)
-        chunks, _ = _core._selected_chunks_debug(url, pred, variables=["data"])
+        chunks = ZarrBackend.from_url(url).selected_chunks_debug( pred)
         idxs = _chunk_indices(chunks)
 
         expected = {(a, b, c) for a in range(2) for b in range(5) for c in range(3)}
@@ -824,7 +831,7 @@ class TestLiterals:
         """pl.lit(False) & (a < 20) should return empty."""
         url = comprehensive_3d_dataset.path
         pred = pl.lit(False) & (pl.col("a") < 20)
-        chunks, _ = _core._selected_chunks_debug(url, pred, variables=["data"])
+        chunks = ZarrBackend.from_url(url).selected_chunks_debug( pred)
         idxs = _chunk_indices(chunks)
 
         assert len(idxs) == 0
@@ -849,7 +856,7 @@ class TestMultiDim:
             & (pl.col("c") >= 10)
             & (pl.col("c") < 20)
         )
-        chunks, _ = _core._selected_chunks_debug(url, pred, variables=["data"])
+        chunks = ZarrBackend.from_url(url).selected_chunks_debug( pred)
         idxs = _chunk_indices(chunks)
 
         # a: 10-29 -> chunks 1,2
@@ -872,7 +879,7 @@ class TestMultiDim:
         # 7 = 7*1*1 -> select all a chunks, 1 b chunk, 1 c chunk
         url = comprehensive_3d_dataset.path
         pred = (pl.col("b") == 25) & (pl.col("c") == 15)
-        chunks, _ = _core._selected_chunks_debug(url, pred, variables=["data"])
+        chunks = ZarrBackend.from_url(url).selected_chunks_debug( pred)
         idxs = _chunk_indices(chunks)
 
         # b=2, c=1 -> 7*1*1 = 7 chunks
@@ -899,7 +906,7 @@ class TestMultiDim:
             | ((pl.col("a") == 55) & (pl.col("b") == 5))
             | ((pl.col("a") == 65) & (pl.col("b") == 45) & (pl.col("c") == 25))
         )
-        chunks, _ = _core._selected_chunks_debug(url, pred, variables=["data"])
+        chunks = ZarrBackend.from_url(url).selected_chunks_debug( pred)
         idxs = _chunk_indices(chunks)
 
         first_set = {(a, 2, 1) for a in range(7)}  # 7 chunks
@@ -925,7 +932,7 @@ class TestMultiDim:
             | ((pl.col("a") == 5) & (pl.col("c") == 25))
             | ((pl.col("a") == 65) & (pl.col("b") == 45) & (pl.col("c") == 25))
         )
-        chunks, _ = _core._selected_chunks_debug(url, pred, variables=["data"])
+        chunks = ZarrBackend.from_url(url).selected_chunks_debug( pred)
         idxs = _chunk_indices(chunks)
 
         # First: 7 chunks (a=0..6, b=2, c=1)
@@ -951,7 +958,7 @@ class TestMultiDim:
         """
         url = comprehensive_3d_dataset.path
         pred = (pl.col("a") < 30) & (pl.col("b") < 20) & (pl.col("c") < 10)
-        chunks, _ = _core._selected_chunks_debug(url, pred, variables=["data"])
+        chunks = ZarrBackend.from_url(url).selected_chunks_debug( pred)
         idxs = _chunk_indices(chunks)
 
         expected = {(a, b, 0) for a in range(3) for b in range(2)}
@@ -968,7 +975,7 @@ class TestEdgeCases:
         """a.is_in([]) should return empty."""
         url = comprehensive_3d_dataset.path
         pred = pl.col("a").is_in([])
-        chunks, _ = _core._selected_chunks_debug(url, pred, variables=["data"])
+        chunks = ZarrBackend.from_url(url).selected_chunks_debug( pred)
         idxs = _chunk_indices(chunks)
 
         assert len(idxs) == 0
@@ -979,7 +986,7 @@ class TestEdgeCases:
         """a == 100 (beyond dimension) should return empty."""
         url = comprehensive_3d_dataset.path
         pred = pl.col("a") == 100
-        chunks, _ = _core._selected_chunks_debug(url, pred, variables=["data"])
+        chunks = ZarrBackend.from_url(url).selected_chunks_debug( pred)
         idxs = _chunk_indices(chunks)
 
         assert len(idxs) == 0
@@ -990,7 +997,7 @@ class TestEdgeCases:
         """a == -5 (negative) should return empty."""
         url = comprehensive_3d_dataset.path
         pred = pl.col("a") == -5
-        chunks, _ = _core._selected_chunks_debug(url, pred, variables=["data"])
+        chunks = ZarrBackend.from_url(url).selected_chunks_debug( pred)
         idxs = _chunk_indices(chunks)
 
         assert len(idxs) == 0
@@ -1001,7 +1008,7 @@ class TestEdgeCases:
         """a >= 0 should return all 105 chunks."""
         url = comprehensive_3d_dataset.path
         pred = pl.col("a") >= 0
-        chunks, _ = _core._selected_chunks_debug(url, pred, variables=["data"])
+        chunks = ZarrBackend.from_url(url).selected_chunks_debug( pred)
         idxs = _chunk_indices(chunks)
 
         assert len(idxs) == comprehensive_3d_dataset.total_chunks
@@ -1012,7 +1019,7 @@ class TestEdgeCases:
         """(a > 50) & (a < 40) is impossible, should return empty."""
         url = comprehensive_3d_dataset.path
         pred = (pl.col("a") > 50) & (pl.col("a") < 40)
-        chunks, _ = _core._selected_chunks_debug(url, pred, variables=["data"])
+        chunks = ZarrBackend.from_url(url).selected_chunks_debug( pred)
         idxs = _chunk_indices(chunks)
 
         assert len(idxs) == 0
@@ -1023,7 +1030,7 @@ class TestEdgeCases:
         """a == 30 (exactly at chunk 3 start) should select chunk 3."""
         url = comprehensive_3d_dataset.path
         pred = pl.col("a") == 30
-        chunks, _ = _core._selected_chunks_debug(url, pred, variables=["data"])
+        chunks = ZarrBackend.from_url(url).selected_chunks_debug( pred)
         idxs = _chunk_indices(chunks)
 
         expected = {(3, b, c) for b in range(5) for c in range(3)}
@@ -1036,7 +1043,7 @@ class TestEdgeCases:
         """a == 29 (exactly at chunk 2 end) should select chunk 2."""
         url = comprehensive_3d_dataset.path
         pred = pl.col("a") == 29
-        chunks, _ = _core._selected_chunks_debug(url, pred, variables=["data"])
+        chunks = ZarrBackend.from_url(url).selected_chunks_debug( pred)
         idxs = _chunk_indices(chunks)
 
         expected = {(2, b, c) for b in range(5) for c in range(3)}
@@ -1049,7 +1056,7 @@ class TestEdgeCases:
         """a.is_between(20, 29) exactly covers chunk 2."""
         url = comprehensive_3d_dataset.path
         pred = pl.col("a").is_between(20, 29)
-        chunks, _ = _core._selected_chunks_debug(url, pred, variables=["data"])
+        chunks = ZarrBackend.from_url(url).selected_chunks_debug( pred)
         idxs = _chunk_indices(chunks)
 
         expected = {(2, b, c) for b in range(5) for c in range(3)}
@@ -1062,7 +1069,7 @@ class TestEdgeCases:
         """a.is_between(19, 30) spans chunks 1,2,3."""
         url = comprehensive_3d_dataset.path
         pred = pl.col("a").is_between(19, 30)
-        chunks, _ = _core._selected_chunks_debug(url, pred, variables=["data"])
+        chunks = ZarrBackend.from_url(url).selected_chunks_debug( pred)
         idxs = _chunk_indices(chunks)
 
         # 19 is in chunk 1, 30 is in chunk 3
@@ -1076,7 +1083,7 @@ class TestEdgeCases:
         """a == 15.0 should work the same as a == 15."""
         url = comprehensive_3d_dataset.path
         pred = pl.col("a") == 15.0
-        chunks, _ = _core._selected_chunks_debug(url, pred, variables=["data"])
+        chunks = ZarrBackend.from_url(url).selected_chunks_debug( pred)
         idxs = _chunk_indices(chunks)
 
         expected = {(1, b, c) for b in range(5) for c in range(3)}
@@ -1090,8 +1097,8 @@ class TestEdgeCases:
         url = comprehensive_3d_dataset.path
         pred = pl.col("a") == 15
 
-        chunks1, _ = _core._selected_chunks_debug(url, pred, variables=["data"])
-        chunks2, _ = _core._selected_chunks_debug(url, pred, variables=["data2"])
+        chunks1 = ZarrBackend.from_url(url).selected_chunks_debug( pred)
+        chunks2 = ZarrBackend.from_url(url).selected_chunks_debug( pred)
 
         assert _chunk_indices(chunks1) == _chunk_indices(chunks2)
         assert len(_chunk_indices(chunks1)) == 15

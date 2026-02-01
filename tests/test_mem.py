@@ -7,6 +7,7 @@ import polars as pl
 import pytest
 
 import rainbear
+from rainbear import ZarrBackend
 
 
 def test_mem() -> None:
@@ -116,8 +117,7 @@ def test_remote_mem2() -> None:
         pytest.skip(
             "Set RAINBEAR_REMOTE_MEM=<remote_ds> to run this test against a remote dataset."
         )
-    [ch, coord_reads] = rainbear._core._selected_chunks_debug(
-        remote_ds,
+    [ch, coord_reads] = ZarrBackend.from_url(remote_ds).selected_chunks_debug(
         (
             (pl.col("time") == datetime(2025, 12, 30, 0, 0, 0))
             & (pl.col("lead_time") == timedelta(hours=1))

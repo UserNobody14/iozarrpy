@@ -26,7 +26,8 @@ from typing import TYPE_CHECKING
 import polars as pl
 import pytest
 
-from rainbear._core import _selected_chunks_debug, _selected_variables_debug
+import rainbear._core as _core
+from rainbear import ZarrBackend
 
 if TYPE_CHECKING:
     from conftest import MultiVarDatasetInfo
@@ -45,8 +46,12 @@ needs_expr_support = pytest.mark.xfail(
 
 def get_chunk_indices(zarr_url: str, expr: pl.Expr) -> set[tuple[int, ...]]:
     """Get the set of chunk indices selected by an expression."""
-    chunks, _ = _selected_chunks_debug(zarr_url, expr, variables=["temp"])
-    return {tuple(c["indices"]) for c in chunks}
+    grid_plans = ZarrBackend.from_url(zarr_url).selected_chunks_debug(expr)
+    # Find a grid that includes "temp"
+    for grid in grid_plans["grids"]:
+        if "temp" in grid["variables"]:
+            return {tuple(c["indices"]) for c in grid["chunks"]}
+    raise ValueError(f"No grid found for variable 'temperature' in {grid_plans}")
 
 
 def get_chunk_count(zarr_url: str, expr: pl.Expr) -> int:
@@ -55,7 +60,7 @@ def get_chunk_count(zarr_url: str, expr: pl.Expr) -> int:
 
 def get_per_var_chunks(zarr_url: str, expr: pl.Expr) -> dict[str, int]:
     """Get per-variable chunk counts from an expression."""
-    _, per_var, _ = _selected_variables_debug(zarr_url, expr)
+    _, per_var, _ = _core._selected_variables_debug(zarr_url, expr)
     return {var: len(chunks) for var, chunks in per_var.items()}
 
 

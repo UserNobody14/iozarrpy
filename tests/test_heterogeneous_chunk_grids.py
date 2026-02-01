@@ -9,6 +9,7 @@ These tests verify that the chunk planning system correctly handles:
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 import polars as pl
@@ -17,8 +18,17 @@ import xarray as xr
 import zarr
 
 import rainbear
-from rainbear import _core
+from rainbear import ZarrBackend
 
+if TYPE_CHECKING:
+    from rainbear._core import SelectedChunksDebugReturn
+
+def _chunk_indices(chunks: SelectedChunksDebugReturn, variable: str = "source") -> set[tuple[int, ...]]:
+    # Find a grid that includes the variable
+    for grid in chunks["grids"]:
+        if variable in grid["variables"]:
+            return {tuple(int(x) for x in c["indices"]) for c in grid["chunks"]}
+    raise ValueError(f"No grid found for variable '{variable}' in {chunks}")
 # =============================================================================
 # Fixtures for heterogeneous chunk datasets
 # =============================================================================
@@ -185,26 +195,25 @@ class TestDifferentChunkShapes:
     def test_chunk_selection_per_variable(self, heterogeneous_chunks_dataset: str) -> None:
         """Chunk selection should work independently for each variable's grid."""
         # Test with temperature variable (5, 10 chunks)
-        chunks_temp, _ = _core._selected_chunks_debug(
-            heterogeneous_chunks_dataset,
+        grids_temp = ZarrBackend.from_url(heterogeneous_chunks_dataset).selected_chunks_debug(
             pl.col("y") < 5,
-            variables=["temperature"],
         )
         
         # Test with pressure variable (10, 5 chunks)
-        chunks_pres, _ = _core._selected_chunks_debug(
-            heterogeneous_chunks_dataset,
+        grids_pres = ZarrBackend.from_url(heterogeneous_chunks_dataset).selected_chunks_debug(
             pl.col("y") < 5,
-            variables=["pressure"],
         )
+
+        chunks_temp = _chunk_indices(grids_temp, variable="temperature")
+        chunks_pres = _chunk_indices(grids_pres, variable="pressure")
         
         # Both should return some chunks
         assert len(chunks_temp) > 0
         assert len(chunks_pres) > 0
         
         # The chunk shapes should be different
-        temp_shape = tuple(chunks_temp[0]["shape"])
-        pres_shape = tuple(chunks_pres[0]["shape"])
+        temp_shape = tuple(chunks_temp)
+        pres_shape = tuple(chunks_pres)
         
         # Chunk shapes should reflect the different chunking
         # temperature: (5, 10), pressure: (10, 5)
@@ -263,18 +272,17 @@ class TestInterpolation2D:
     def test_chunk_grids_are_different(self, interpolation_2d_dataset: str) -> None:
         """Source and target should have different chunk grids."""
         # Get chunks for source
-        chunks_source, _ = _core._selected_chunks_debug(
-            interpolation_2d_dataset,
+        grids_source = ZarrBackend.from_url(interpolation_2d_dataset).selected_chunks_debug(
             pl.lit(True),  # Select all
-            variables=["source"],
         )
         
         # Get chunks for target
-        chunks_target, _ = _core._selected_chunks_debug(
-            interpolation_2d_dataset,
+        grids_target = ZarrBackend.from_url(interpolation_2d_dataset).selected_chunks_debug(
             pl.lit(True),
-            variables=["target"],
         )
+
+        chunks_source = _chunk_indices(grids_source, variable="source")
+        chunks_target = _chunk_indices(grids_target, variable="target")
         
         # Both should have chunks
         assert len(chunks_source) > 0
@@ -283,8 +291,8 @@ class TestInterpolation2D:
         # The grid shapes should be different
         # source: (6, 8) chunks -> grid (4, 4)
         # target: (8, 4) chunks -> grid (3, 8)
-        source_grid = set(tuple(c["indices"]) for c in chunks_source)
-        target_grid = set(tuple(c["indices"]) for c in chunks_target)
+        source_grid = chunks_source
+        target_grid = chunks_target
         
         # Number of chunks should differ due to different chunk shapes
         # source: 24/6 * 32/8 = 4 * 4 = 16 chunks

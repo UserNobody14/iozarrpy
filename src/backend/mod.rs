@@ -14,3 +14,4 @@ mod zarr;
 mod py;
 
 pub(crate) use py::PyZarrBackend;
+pub(crate) use sync::PyZarrBackendSync;

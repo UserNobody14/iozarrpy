@@ -8,20 +8,23 @@ These are intentionally focused on tricky Expr shapes that can appear in real co
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING
 
 import polars as pl
 import pytest
 
-from rainbear import _core
+from rainbear import ZarrBackend
+
+if TYPE_CHECKING:
+    from rainbear._core import SelectedChunksDebugReturn
 
 
-def _chunk_indices(chunks: list[dict[str, Any]]) -> set[tuple[int, ...]]:
-    out: set[tuple[int, ...]] = set()
-    for d in chunks:
-        out.add(tuple(int(x) for x in d["indices"]))
-    return out
-
+def _chunk_indices(chunks: SelectedChunksDebugReturn, variable: str = "2m_temperature") -> set[tuple[int, ...]]:
+    # Find a grid that includes the variable
+    for grid in chunks["grids"]:
+        if variable in grid["variables"]:
+            return {tuple(int(x) for x in c["indices"]) for c in grid["chunks"]}
+    raise ValueError(f"No grid found for variable '{variable}' in {chunks}")
 
 def _grid_expected(zarr_key: str) -> tuple[int, int, set[int]]:
     """Return (all_total, per_x, expected_x_chunks_for_0_and_200)."""
@@ -43,7 +46,8 @@ def test_selected_chunks_is_in_method(baseline_datasets: dict[str, str], zarr_ke
     all_total, per_x, expected_x = _grid_expected(zarr_key)
 
     pred = pl.col("x").is_in([0, 200])
-    chunks, _coord_reads = _core._selected_chunks_debug(zarr_url, pred, variables=["2m_temperature"])
+    chunks = ZarrBackend.from_url(zarr_url).selected_chunks_debug( pred)
+
     idxs = _chunk_indices(chunks)
 
     assert len(idxs) == 2 * per_x
@@ -57,7 +61,7 @@ def test_selected_chunks_is_between_method(baseline_datasets: dict[str, str], za
     _all_total, per_x, _expected_x = _grid_expected(zarr_key)
 
     pred = pl.col("x").is_between(0, 1)
-    chunks, _coord_reads = _core._selected_chunks_debug(zarr_url, pred, variables=["2m_temperature"])
+    chunks = ZarrBackend.from_url(zarr_url).selected_chunks_debug( pred)
     idxs = _chunk_indices(chunks)
 
     assert len(idxs) == per_x
@@ -70,7 +74,7 @@ def test_selected_chunks_not_is_conservative(baseline_datasets: dict[str, str], 
     all_total, _per_x, _expected_x = _grid_expected(zarr_key)
 
     pred = ~(pl.col("x") == 0)
-    chunks, _coord_reads = _core._selected_chunks_debug(zarr_url, pred, variables=["2m_temperature"])
+    chunks = ZarrBackend.from_url(zarr_url).selected_chunks_debug( pred)
     idxs = _chunk_indices(chunks)
 
     # We don't represent complements; must be conservative (all chunks).
@@ -84,13 +88,11 @@ def test_selected_chunks_is_null_is_not_null_do_not_crash(
     zarr_url = baseline_datasets[zarr_key]
     all_total, _per_x, _expected_x = _grid_expected(zarr_key)
 
-    chunks, _ = _core._selected_chunks_debug(
-        zarr_url, pl.col("x").is_null(), variables=["2m_temperature"]
+    chunks = ZarrBackend.from_url(zarr_url).selected_chunks_debug( pl.col("x").is_null()
     )
     assert len(_chunk_indices(chunks)) == all_total
 
-    chunks, _ = _core._selected_chunks_debug(
-        zarr_url, pl.col("x").is_not_null(), variables=["2m_temperature"]
+    chunks = ZarrBackend.from_url(zarr_url).selected_chunks_debug( pl.col("x").is_not_null()
     )
     assert len(_chunk_indices(chunks)) == all_total
 
@@ -101,7 +103,7 @@ def test_selected_chunks_ternary_when_then_otherwise(baseline_datasets: dict[str
     _all_total, per_x, _expected_x = _grid_expected(zarr_key)
 
     pred = pl.when(pl.col("x") == 0).then(pl.lit(True)).otherwise(pl.lit(False))
-    chunks, _ = _core._selected_chunks_debug(zarr_url, pred, variables=["2m_temperature"])
+    chunks = ZarrBackend.from_url(zarr_url).selected_chunks_debug( pred)
     idxs = _chunk_indices(chunks)
 
     assert len(idxs) == per_x
@@ -121,7 +123,7 @@ def test_selected_chunks_wrappers_alias_cast_keep_name(
     if hasattr(pred, "keep_name"):
         pred = pred.keep_name()  # type: ignore[union-attr]
 
-    chunks, _ = _core._selected_chunks_debug(zarr_url, pred, variables=["2m_temperature"])
+    chunks = ZarrBackend.from_url(zarr_url).selected_chunks_debug( pred)
     idxs = _chunk_indices(chunks)
 
     assert len(idxs) == per_x
@@ -133,8 +135,8 @@ def test_selected_chunks_coord_var_yx_not_overselected(baseline_datasets: dict[s
     zarr_url = baseline_datasets["orography_chunked_10x10"]
 
     pred = (pl.col("y") >= 0) & (pl.col("y") <= 8) & (pl.col("x") >= 0) & (pl.col("x") <= 8)
-    chunks, _ = _core._selected_chunks_debug(zarr_url, pred, variables=["latitude"])
-    idxs = sorted(_chunk_indices(chunks))
+    chunks = ZarrBackend.from_url(zarr_url).selected_chunks_debug( pred)
+    idxs = sorted(_chunk_indices(chunks, variable="geopotential_height"))
 
     # With chunks (10,10) and ny=16,nx=20, y<=8 and x<=8 hits only chunk (0,0).
     assert idxs == [(0, 0)]
