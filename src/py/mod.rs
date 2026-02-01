@@ -8,13 +8,7 @@ mod selected_chunks;
 pub(crate) fn init_module(
     m: &Bound<PyModule>,
 ) -> PyResult<()> {
-    use crate::py::debug::{
-        _debug_chunk_planning,
-        _debug_chunk_planning_async,
-        _debug_coord_array, _debug_expr_ast,
-        _debug_literal_conversion,
-        print_extension_info,
-    };
+    use crate::py::debug::print_extension_info;
     use crate::py::selected_chunks::{
         _selected_variables_debug,
         selected_chunks,
@@ -30,26 +24,6 @@ pub(crate) fn init_module(
     )?)?;
     m.add_function(wrap_pyfunction!(
         _selected_variables_debug,
-        m
-    )?)?;
-    m.add_function(wrap_pyfunction!(
-        _debug_expr_ast,
-        m
-    )?)?;
-    m.add_function(wrap_pyfunction!(
-        _debug_chunk_planning,
-        m
-    )?)?;
-    m.add_function(wrap_pyfunction!(
-        _debug_chunk_planning_async,
-        m
-    )?)?;
-    m.add_function(wrap_pyfunction!(
-        _debug_coord_array,
-        m
-    )?)?;
-    m.add_function(wrap_pyfunction!(
-        _debug_literal_conversion,
         m
     )?)?;
 

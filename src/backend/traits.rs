@@ -770,6 +770,68 @@ impl<
 }
 
 // =============================================================================
+// Combined ChunkDataSource traits for generic chunk processing
+// =============================================================================
+
+use crate::meta::{ZarrDatasetMeta, ZarrMeta};
+
+/// Synchronous chunk data source - provides all capabilities needed for chunk processing.
+///
+/// This trait combines chunk reading and metadata access into a single interface,
+/// enabling generic chunk processing code that can work with any backend implementation.
+pub trait ChunkDataSourceSync:
+    ChunkedDataBackendSync
+    + HasMetadataBackendSync<ZarrMeta>
+    + Send
+    + Sync
+{
+    /// Get the planning metadata (ZarrDatasetMeta) for schema and dimension info.
+    fn planning_meta(
+        &self,
+    ) -> Result<ZarrDatasetMeta, BackendError>
+    {
+        Ok(self.metadata()?.planning_meta())
+    }
+}
+
+/// Asynchronous chunk data source - provides all capabilities needed for chunk processing.
+///
+/// This trait combines chunk reading and metadata access into a single interface,
+/// enabling generic chunk processing code that can work with any backend implementation.
+#[async_trait::async_trait]
+pub trait ChunkDataSourceAsync:
+    ChunkedDataBackendAsync
+    + HasMetadataBackendAsync<ZarrMeta>
+    + Send
+    + Sync
+{
+    /// Get the planning metadata (ZarrDatasetMeta) for schema and dimension info.
+    async fn planning_meta(
+        &self,
+    ) -> Result<ZarrDatasetMeta, BackendError>
+    {
+        Ok(self.metadata().await?.planning_meta())
+    }
+}
+
+// Blanket implementations for types that implement both traits
+impl<T> ChunkDataSourceSync for T where
+    T: ChunkedDataBackendSync
+        + HasMetadataBackendSync<ZarrMeta>
+        + Send
+        + Sync
+{
+}
+
+impl<T> ChunkDataSourceAsync for T where
+    T: ChunkedDataBackendAsync
+        + HasMetadataBackendAsync<ZarrMeta>
+        + Send
+        + Sync
+{
+}
+
+// =============================================================================
 // Type aliases
 // =============================================================================
 

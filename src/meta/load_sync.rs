@@ -144,6 +144,22 @@ pub fn load_dataset_meta_from_opened(
             time_encoding.as_ref(),
         );
 
+        // Extract regular chunk shape by getting shape of chunk 0
+        let zero_idx: Vec<u64> =
+            vec![0u64; array.dimensionality()];
+        let chunk_shape: std::sync::Arc<[u64]> =
+            array
+                .chunk_shape(&zero_idx)
+                .map(|cs| {
+                    cs.iter()
+                        .map(|nz| nz.get())
+                        .collect::<Vec<_>>()
+                        .into()
+                })
+                .unwrap_or_else(|_| {
+                    shape.clone()
+                });
+
         let name = match seen_names.get_mut(&leaf)
         {
             None => {
@@ -162,6 +178,7 @@ pub fn load_dataset_meta_from_opened(
             ZarrArrayMeta {
                 path: path_str,
                 shape,
+                chunk_shape,
                 dims,
                 polars_dtype,
                 time_encoding,
@@ -280,6 +297,22 @@ pub fn load_zarr_meta_from_opened(
             time_encoding.as_ref(),
         );
 
+        // Extract regular chunk shape by getting shape of chunk 0
+        let zero_idx: Vec<u64> =
+            vec![0u64; array.dimensionality()];
+        let chunk_shape: std::sync::Arc<[u64]> =
+            array
+                .chunk_shape(&zero_idx)
+                .map(|cs| {
+                    cs.iter()
+                        .map(|nz| nz.get())
+                        .collect::<Vec<_>>()
+                        .into()
+                })
+                .unwrap_or_else(|_| {
+                    shape.clone()
+                });
+
         // Parse "coordinates" attribute (CF convention) to identify auxiliary coords
         if let Some(attrs) =
             array.attributes().get("coordinates")
@@ -300,6 +333,7 @@ pub fn load_zarr_meta_from_opened(
         let arr_meta = ZarrArrayMeta {
             path: path_str.istr(),
             shape,
+            chunk_shape,
             dims,
             polars_dtype,
             time_encoding,

@@ -611,6 +611,8 @@ pub struct ZarrArrayMeta {
     pub path: IStr,
     /// Shape wrapped in Arc for cheap cloning.
     pub shape: Arc<[u64]>,
+    /// Regular chunk shape (edge chunks may be smaller).
+    pub chunk_shape: Arc<[u64]>,
     pub dims: SmallVec<[IStr; 4]>,
     pub polars_dtype: PlDataType,
     pub time_encoding: Option<TimeEncoding>,

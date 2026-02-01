@@ -310,6 +310,96 @@ impl ColumnData {
         }
     }
 
+    /// Concatenate this ColumnData with another, returning a new value.
+    /// Panics if types don't match.
+    pub(crate) fn concat(
+        self,
+        other: &ColumnData,
+    ) -> ColumnData {
+        match (self, other) {
+            (
+                ColumnData::Bool(mut a),
+                ColumnData::Bool(b),
+            ) => {
+                a.extend_from_slice(b);
+                ColumnData::Bool(a)
+            }
+            (
+                ColumnData::I8(mut a),
+                ColumnData::I8(b),
+            ) => {
+                a.extend_from_slice(b);
+                ColumnData::I8(a)
+            }
+            (
+                ColumnData::I16(mut a),
+                ColumnData::I16(b),
+            ) => {
+                a.extend_from_slice(b);
+                ColumnData::I16(a)
+            }
+            (
+                ColumnData::I32(mut a),
+                ColumnData::I32(b),
+            ) => {
+                a.extend_from_slice(b);
+                ColumnData::I32(a)
+            }
+            (
+                ColumnData::I64(mut a),
+                ColumnData::I64(b),
+            ) => {
+                a.extend_from_slice(b);
+                ColumnData::I64(a)
+            }
+            (
+                ColumnData::U8(mut a),
+                ColumnData::U8(b),
+            ) => {
+                a.extend_from_slice(b);
+                ColumnData::U8(a)
+            }
+            (
+                ColumnData::U16(mut a),
+                ColumnData::U16(b),
+            ) => {
+                a.extend_from_slice(b);
+                ColumnData::U16(a)
+            }
+            (
+                ColumnData::U32(mut a),
+                ColumnData::U32(b),
+            ) => {
+                a.extend_from_slice(b);
+                ColumnData::U32(a)
+            }
+            (
+                ColumnData::U64(mut a),
+                ColumnData::U64(b),
+            ) => {
+                a.extend_from_slice(b);
+                ColumnData::U64(a)
+            }
+            (
+                ColumnData::F32(mut a),
+                ColumnData::F32(b),
+            ) => {
+                a.extend_from_slice(b);
+                ColumnData::F32(a)
+            }
+            (
+                ColumnData::F64(mut a),
+                ColumnData::F64(b),
+            ) => {
+                a.extend_from_slice(b);
+                ColumnData::F64(a)
+            }
+            _ => panic!(
+                "ColumnData::concat type mismatch"
+            ),
+        }
+    }
+
     /// Extend this ColumnData with another. Panics if types don't match.
     pub(crate) fn extend(
         &mut self,

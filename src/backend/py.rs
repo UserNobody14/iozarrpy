@@ -13,7 +13,6 @@ use pyo3_polars::PySchema;
 use crate::backend::compile::ChunkedExpressionCompilerAsync;
 use crate::backend::traits::{
     EvictableChunkCacheAsync,
-    EvictableChunkCacheSync, HasAsyncStore,
     HasMetadataBackendAsync,
 };
 use crate::backend::zarr::{
@@ -21,8 +20,7 @@ use crate::backend::zarr::{
     ZarrBackendAsync, to_fully_cached_async,
 };
 use crate::py::expr_extract::extract_expr;
-use crate::scan::chunk_to_df::chunk_to_df_from_grid;
-use crate::scan::open_arrays::open_arrays_async_unified;
+use crate::scan::chunk_to_df::chunk_to_df_from_grid_with_backend;
 use crate::store::StoreInput;
 use crate::{IStr, IntoIStr};
 
@@ -424,13 +422,12 @@ impl PyZarrBackend {
 
 /// Internal: Async scan using the backend.
 ///
-/// This reuses the existing scan infrastructure but uses the backend's cached metadata.
+/// This uses the backend's cached metadata and chunk reading directly.
 async fn scan_zarr_with_backend_async(
     backend: Arc<FullyCachedZarrBackendAsync>,
     expr: polars::prelude::Expr,
     max_concurrency: Option<usize>,
 ) -> Result<polars::prelude::DataFrame, PyErr> {
-    use crate::IntoIStr;
     use futures::stream::{
         FuturesUnordered, StreamExt,
     };
@@ -440,23 +437,8 @@ async fn scan_zarr_with_backend_async(
     const DEFAULT_MAX_CONCURRENCY: usize = 32;
     let meta = backend.metadata().await?;
 
-    // Open arrays for reading
     let planning_meta =
         StdArc::new(meta.planning_meta());
-    let (var_arrays, coord_arrays) =
-        open_arrays_async_unified(
-            backend.async_store().clone(),
-            meta.as_ref(),
-            &meta.all_data_var_paths(),
-            &meta.dim_analysis.all_dims,
-        )
-        .await
-        .map_err(|e| {
-            PyErr::new::<
-                pyo3::exceptions::PyValueError,
-                _,
-            >(e)
-        })?;
 
     // Compile grouped chunk plan
     let (grouped_plan, _stats) = backend
@@ -470,34 +452,30 @@ async fn scan_zarr_with_backend_async(
         tokio::sync::Semaphore::new(max_conc),
     );
 
-    let var_arrays = StdArc::new(var_arrays);
-    let coord_arrays = StdArc::new(coord_arrays);
-
     let mut futs = FuturesUnordered::new();
     for (sig, vars, subsets, chunkgrid) in
         grouped_plan.iter_grids()
     {
-        let vars = StdArc::new(
-            vars.into_iter()
-                .map(|v| v.istr())
-                .collect::<Vec<_>>(),
-        );
-        let dims =
-            StdArc::new(sig.dims().to_vec());
+        let vars: Vec<IStr> = vars
+            .into_iter()
+            .map(|v| v.istr())
+            .collect();
+        let array_shape =
+            chunkgrid.array_shape().to_vec();
 
         for subset in subsets.subsets_iter() {
             let chunk_indices = chunkgrid
-                .chunks_in_array_subset(subset).map_err(
-                    |e| PyErr::new::<
-                        pyo3::exceptions::PyValueError,
-                        _,
-                    >(e.to_string())
-                )?.ok_or(
+                .chunks_in_array_subset(subset)
+                .map_err(|e| {
                     PyErr::new::<
                         pyo3::exceptions::PyValueError,
                         _,
-                    >("no chunks found")
-                )?;
+                    >(e.to_string())
+                })?
+                .ok_or(PyErr::new::<
+                    pyo3::exceptions::PyValueError,
+                    _,
+                >("no chunks found"))?;
 
             for idx in chunk_indices.indices() {
                 let permit = semaphore
@@ -505,26 +483,21 @@ async fn scan_zarr_with_backend_async(
                     .acquire_owned()
                     .await
                     .unwrap();
-                let dims = StdArc::clone(&dims);
-                let vars = StdArc::clone(&vars);
-                let var_arrays =
-                    StdArc::clone(&var_arrays);
-                let coord_arrays =
-                    StdArc::clone(&coord_arrays);
-                let meta =
-                    StdArc::clone(&planning_meta);
+                let backend = backend.clone();
+                let sig = sig.clone();
+                let array_shape =
+                    array_shape.clone();
+                let vars = vars.clone();
 
                 futs.push(async move {
                     let _permit = permit;
-                    chunk_to_df_from_grid(
+                    chunk_to_df_from_grid_with_backend(
+                        backend.as_ref(),
                         idx.into(),
-                        sig.clone(),
-                        chunkgrid.clone(),
-                        meta,
-                        dims,
-                        vars,
-                        var_arrays,
-                        coord_arrays,
+                        &sig,
+                        &array_shape,
+                        &vars,
+                        None,
                     )
                     .await
                 });
@@ -549,9 +522,14 @@ async fn scan_zarr_with_backend_async(
         StdArc::clone(&planning_meta);
 
     Ok(out.unwrap_or_else(|| {
-        let keys: Vec<IStr> = grouped_plan.var_to_grid().keys().cloned().collect();
+        let keys: Vec<IStr> = grouped_plan
+            .var_to_grid()
+            .keys()
+            .cloned()
+            .collect();
         polars::prelude::DataFrame::empty_with_schema(
-            &planning_meta_clone.tidy_schema(Some(keys.as_slice())),
+            &planning_meta_clone
+                .tidy_schema(Some(keys.as_slice())),
         )
     }))
 }

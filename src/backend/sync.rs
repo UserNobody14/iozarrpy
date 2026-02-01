@@ -1,40 +1,27 @@
-//! Python bindings for ZarrBackend.
+//! Python bindings for ZarrBackendSync.
 //!
-//! Exposes the caching backend to Python with scan methods.
+//! Exposes the sync caching backend to Python with scan methods.
 
-use std::fmt::Pointer;
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use polars::prelude::{
-    AnonymousScanArgs, LazyFrame,
-    ScanArgsAnonymous, Selector,
-};
+use polars::prelude::*;
 use pyo3::prelude::*;
 use pyo3::types::PyAny;
 use pyo3_async_runtimes::tokio::future_into_py;
-use pyo3_polars::export::polars_plan::plans::DynLiteralValue;
-use pyo3_polars::{
-    PyDataFrame, PyLazyFrame, PySchema,
-};
+use pyo3_polars::{PyDataFrame, PySchema};
 
-use crate::backend::compile::ChunkedExpressionCompilerAsync;
 use crate::backend::lazy::scan_zarr_with_backend_sync;
 use crate::backend::traits::{
-    EvictableChunkCacheSync,
-    HasMetadataBackendSync,
+    EvictableChunkCacheSync, HasMetadataBackendSync,
 };
 use crate::backend::zarr::{
-    FullyCachedZarrBackendAsync,
-    FullyCachedZarrBackendSync, ZarrBackendAsync,
-    ZarrBackendSync, to_fully_cached_async,
+    FullyCachedZarrBackendSync, ZarrBackendSync,
     to_fully_cached_sync,
 };
 use crate::py::expr_extract::extract_expr;
-use crate::scan::chunk_to_df::chunk_to_df_from_grid;
 use crate::store::StoreInput;
-use crate::{FromIStr, IStr, IntoIStr};
-use polars::prelude::*;
-use polars_lazy::prelude::*;
+use crate::IntoIStr;
 
 /// Python-exposed Zarr backend with caching and scan methods.
 ///
@@ -127,9 +114,16 @@ impl PyZarrBackendSync {
                 // Use a filter expression that evaluates to true for all rows.
                 lit(true)
             };
+        let with_cols_set: Option<BTreeSet<crate::IStr>> =
+            with_columns.map(|cols| {
+                cols.into_iter()
+                    .map(|c| c.istr())
+                    .collect()
+            });
         let df = scan_zarr_with_backend_sync(
-            Arc::new(&self.inner),
+            &self.inner,
             prd.clone(),
+            with_cols_set,
         )?;
 
         let filtered = df
