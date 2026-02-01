@@ -113,7 +113,7 @@ pyo3-polars = { git = "https://github.com/pola-rs/polars.git", tag = "py-1.37.1"
 ] }
 tokio = { version = "1.45.1", features = ["rt-multi-thread", "macros", "sync"] }
 url = "2.5.4"
-zarrs = { version = "0.23.0-beta.3", features = ["async"] }
+zarrs = { version = "0.23.0-beta.3", features = ["async", "sharding"] }
 zarrs_object_store = { version = "0.6.1", features = [
     "aws",
     "azure",

@@ -1,77 +1,115 @@
-use zarrs::array::Array;
+use zarrs::array::codec::CodecOptions;
+use zarrs::array::{
+    Array, AsyncArrayShardedReadableExt,
+    AsyncArrayShardedReadableExtCache,
+};
 
 use crate::reader::ColumnData;
 use crate::reader::limits::max_chunk_elems;
 
+// Re-export the cache type for use in backends
+pub(crate) use zarrs::array::AsyncArrayShardedReadableExtCache as ShardedCacheAsync;
+
+/// Retrieve a chunk using the sharded-aware async API.
+///
+/// This function works for both sharded and unsharded arrays.
+/// For sharded arrays, the cache stores shard indexes to avoid
+/// repeated retrieval and decoding.
+///
+/// The chunk indices should be inner chunk indices (from inner_chunk_grid).
 pub(crate) async fn retrieve_chunk_async(
     array: &Array<dyn zarrs::storage::AsyncReadableWritableListableStorageTraits>,
+    cache: &AsyncArrayShardedReadableExtCache,
     chunk: &[u64],
 ) -> Result<ColumnData, String> {
     let id = array.data_type().identifier();
+    let options = CodecOptions::default();
     match id {
         "bool" => Ok(ColumnData::Bool(
             array
-                .async_retrieve_chunk::<Vec<bool>>(chunk)
+                .async_retrieve_inner_chunk_opt::<Vec<bool>>(
+                    cache, chunk, &options,
+                )
                 .await
                 .map_err(to_string_err)?,
         )),
         "int8" => Ok(ColumnData::I8(
             array
-                .async_retrieve_chunk::<Vec<i8>>(chunk)
+                .async_retrieve_inner_chunk_opt::<Vec<i8>>(
+                    cache, chunk, &options,
+                )
                 .await
                 .map_err(to_string_err)?,
         )),
         "int16" => Ok(ColumnData::I16(
             array
-                .async_retrieve_chunk::<Vec<i16>>(chunk)
+                .async_retrieve_inner_chunk_opt::<Vec<i16>>(
+                    cache, chunk, &options,
+                )
                 .await
                 .map_err(to_string_err)?,
         )),
         "int32" => Ok(ColumnData::I32(
             array
-                .async_retrieve_chunk::<Vec<i32>>(chunk)
+                .async_retrieve_inner_chunk_opt::<Vec<i32>>(
+                    cache, chunk, &options,
+                )
                 .await
                 .map_err(to_string_err)?,
         )),
         "int64" => Ok(ColumnData::I64(
             array
-                .async_retrieve_chunk::<Vec<i64>>(chunk)
+                .async_retrieve_inner_chunk_opt::<Vec<i64>>(
+                    cache, chunk, &options,
+                )
                 .await
                 .map_err(to_string_err)?,
         )),
         "uint8" => Ok(ColumnData::U8(
             array
-                .async_retrieve_chunk::<Vec<u8>>(chunk)
+                .async_retrieve_inner_chunk_opt::<Vec<u8>>(
+                    cache, chunk, &options,
+                )
                 .await
                 .map_err(to_string_err)?,
         )),
         "uint16" => Ok(ColumnData::U16(
             array
-                .async_retrieve_chunk::<Vec<u16>>(chunk)
+                .async_retrieve_inner_chunk_opt::<Vec<u16>>(
+                    cache, chunk, &options,
+                )
                 .await
                 .map_err(to_string_err)?,
         )),
         "uint32" => Ok(ColumnData::U32(
             array
-                .async_retrieve_chunk::<Vec<u32>>(chunk)
+                .async_retrieve_inner_chunk_opt::<Vec<u32>>(
+                    cache, chunk, &options,
+                )
                 .await
                 .map_err(to_string_err)?,
         )),
         "uint64" => Ok(ColumnData::U64(
             array
-                .async_retrieve_chunk::<Vec<u64>>(chunk)
+                .async_retrieve_inner_chunk_opt::<Vec<u64>>(
+                    cache, chunk, &options,
+                )
                 .await
                 .map_err(to_string_err)?,
         )),
         "float32" => Ok(ColumnData::F32(
             array
-                .async_retrieve_chunk::<Vec<f32>>(chunk)
+                .async_retrieve_inner_chunk_opt::<Vec<f32>>(
+                    cache, chunk, &options,
+                )
                 .await
                 .map_err(to_string_err)?,
         )),
         "float64" => Ok(ColumnData::F64(
             array
-                .async_retrieve_chunk::<Vec<f64>>(chunk)
+                .async_retrieve_inner_chunk_opt::<Vec<f64>>(
+                    cache, chunk, &options,
+                )
                 .await
                 .map_err(to_string_err)?,
         )),
@@ -83,9 +121,12 @@ pub(crate) async fn retrieve_chunk_async(
 
 pub(crate) async fn retrieve_1d_subset_async(
     array: &Array<dyn zarrs::storage::AsyncReadableWritableListableStorageTraits>,
+    cache: &AsyncArrayShardedReadableExtCache,
     start: u64,
     len: u64,
 ) -> Result<ColumnData, String> {
+    use zarrs::array::ArrayShardedExt;
+
     if len as u128 > max_chunk_elems() as u128 {
         return Err(
             "refusing to allocate extremely large coordinate subset; set RAINBEAR_MAX_CHUNK_ELEMS to override"
@@ -102,13 +143,18 @@ pub(crate) async fn retrieve_1d_subset_async(
             });
     }
 
-    // Get chunk grid info for dimension 0 (1D array).
-    let chunk_shape = array
-        .chunk_shape(&[0])
-        .map_err(to_string_err)?;
+    // Use inner_chunk_grid for sharded arrays
+    let inner_grid = array.inner_chunk_grid();
+    let chunk_shape = inner_grid
+        .chunk_shape_u64(&[0])
+        .map_err(to_string_err)?
+        .ok_or_else(|| {
+            "could not determine chunk shape"
+                .to_string()
+        })?;
     let chunk_size = chunk_shape
         .first()
-        .map(|s| s.get())
+        .copied()
         .unwrap_or(len);
 
     let end = start + len;
@@ -127,6 +173,7 @@ pub(crate) async fn retrieve_1d_subset_async(
     for chunk_idx in first_chunk..=last_chunk {
         let chunk_data = retrieve_chunk_async(
             array,
+            cache,
             &[chunk_idx],
         )
         .await?;

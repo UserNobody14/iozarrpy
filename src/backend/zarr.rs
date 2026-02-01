@@ -25,7 +25,8 @@ use crate::meta::{
     load_zarr_meta_from_opened_async,
 };
 use crate::reader::{
-    ColumnData, retrieve_chunk,
+    ColumnData, ShardedCacheAsync,
+    ShardedCacheSync, retrieve_chunk,
     retrieve_chunk_async,
 };
 use crate::store::{
@@ -33,10 +34,24 @@ use crate::store::{
 };
 use std::fmt::Display;
 use std::sync::Arc;
+
+/// An opened array with its sharded cache for sync access.
+struct OpenedArraySync {
+    array: Arc<Array<dyn ReadableWritableListableStorageTraits>>,
+    cache: ShardedCacheSync,
+}
+
+/// An opened array with its sharded cache for async access.
+struct OpenedArrayAsync {
+    array: Arc<Array<dyn AsyncReadableWritableListableStorageTraits>>,
+    cache: Arc<ShardedCacheAsync>,
+}
+
 pub struct ZarrBackendSync {
     store: Arc<OpenedStore>,
-    /// Opened arrays:
-    opened_arrays: RwLock<BTreeMap<IStr, Arc<Array<dyn ReadableWritableListableStorageTraits>>>>,
+    /// Opened arrays with their shard caches:
+    opened_arrays:
+        RwLock<BTreeMap<IStr, OpenedArraySync>>,
 }
 
 impl ZarrBackendSync {
@@ -91,45 +106,56 @@ impl ChunkedDataBackendSync for ZarrBackendSync {
     ) -> Result<ColumnData, BackendError> {
         let strtraits =
             self.store.as_ref().store.clone();
-        if let Some(array) = self
+
+        // Try to get existing array and cache
+        if let Some(opened) = self
             .opened_arrays
             .read()
             .unwrap()
             .get(var)
         {
-            let chunk =
-                retrieve_chunk(array, chunk_idx)
-                    .map_err(|e| {
-                        BackendError::Other(
-                            e.to_string(),
-                        )
-                    })?;
-            Ok(chunk)
-        } else {
-            let array =
-                Array::open(strtraits, var)
-                    .map_err(|e| {
-                        BackendError::Other(
-                            e.to_string(),
-                        )
-                    })?;
-            let array_arc = Arc::new(array);
-            self.opened_arrays
-                .write()
-                .unwrap()
-                .insert(
-                    var.clone(),
-                    array_arc.clone(),
-                );
             let chunk = retrieve_chunk(
-                array_arc.as_ref(),
+                &opened.array,
+                &opened.cache,
                 chunk_idx,
             )
             .map_err(|e| {
                 BackendError::Other(e.to_string())
             })?;
-            Ok(chunk)
+            return Ok(chunk);
         }
+
+        // Open array and create cache
+        let array = Array::open(strtraits, var)
+            .map_err(|e| {
+            BackendError::Other(e.to_string())
+        })?;
+        let array_arc = Arc::new(array);
+        let cache = ShardedCacheSync::new(
+            array_arc.as_ref(),
+        );
+
+        let chunk = retrieve_chunk(
+            array_arc.as_ref(),
+            &cache,
+            chunk_idx,
+        )
+        .map_err(|e| {
+            BackendError::Other(e.to_string())
+        })?;
+
+        self.opened_arrays
+            .write()
+            .unwrap()
+            .insert(
+                var.clone(),
+                OpenedArraySync {
+                    array: array_arc,
+                    cache,
+                },
+            );
+
+        Ok(chunk)
     }
 }
 
@@ -148,7 +174,8 @@ impl Display for ZarrBackendSync {
 
 pub struct ZarrBackendAsync {
     store: Arc<AsyncOpenedStore>,
-    opened_arrays: RwLock<BTreeMap<IStr, Arc<Array<dyn AsyncReadableWritableListableStorageTraits>>>>,
+    opened_arrays:
+        RwLock<BTreeMap<IStr, OpenedArrayAsync>>,
 }
 
 impl HasAsyncStore for ZarrBackendAsync {
@@ -207,49 +234,68 @@ impl ChunkedDataBackendAsync
     ) -> Result<ColumnData, BackendError> {
         let strtraits =
             self.store.as_ref().store.clone();
-        // Clone the Arc and drop the guard before await to keep the future Send
-        let existing_array = self
+
+        // Clone the Arc values and drop the guard before await to keep the future Send
+        let existing = self
             .opened_arrays
             .read()
             .unwrap()
             .get(var)
-            .cloned();
-        if let Some(array) = existing_array {
+            .map(|opened| {
+                (
+                    opened.array.clone(),
+                    opened.cache.clone(),
+                )
+            });
+
+        if let Some((array, cache)) = existing {
             let chunk = retrieve_chunk_async(
-                &array, chunk_idx,
+                &array, &cache, chunk_idx,
             )
             .await
             .map_err(|e| {
                 BackendError::Other(e.to_string())
             })?;
-            Ok(chunk)
-        } else {
-            let array =
-                Array::async_open(strtraits, var)
-                    .await
-                    .map_err(|e| {
-                        BackendError::Other(
-                            e.to_string(),
-                        )
-                    })?;
-            let array_arc = Arc::new(array);
-            self.opened_arrays
-                .write()
-                .unwrap()
-                .insert(
-                    var.clone(),
-                    array_arc.clone(),
-                );
-            let chunk = retrieve_chunk_async(
-                array_arc.as_ref(),
-                chunk_idx,
-            )
-            .await
-            .map_err(|e| {
-                BackendError::Other(e.to_string())
-            })?;
-            Ok(chunk)
+            return Ok(chunk);
         }
+
+        // Open array and create cache
+        let array =
+            Array::async_open(strtraits, var)
+                .await
+                .map_err(|e| {
+                    BackendError::Other(
+                        e.to_string(),
+                    )
+                })?;
+        let array_arc = Arc::new(array);
+        let cache =
+            Arc::new(ShardedCacheAsync::new(
+                array_arc.as_ref(),
+            ));
+
+        let chunk = retrieve_chunk_async(
+            array_arc.as_ref(),
+            &cache,
+            chunk_idx,
+        )
+        .await
+        .map_err(|e| {
+            BackendError::Other(e.to_string())
+        })?;
+
+        self.opened_arrays
+            .write()
+            .unwrap()
+            .insert(
+                var.clone(),
+                OpenedArrayAsync {
+                    array: array_arc,
+                    cache,
+                },
+            );
+
+        Ok(chunk)
     }
 }
 

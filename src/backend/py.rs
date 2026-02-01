@@ -550,11 +550,7 @@ async fn scan_zarr_with_backend_async(
                 >("no chunks found"))?;
 
             for idx in chunk_indices.indices() {
-                let permit = semaphore
-                    .clone()
-                    .acquire_owned()
-                    .await
-                    .unwrap();
+                let sem = semaphore.clone();
                 let backend = backend.clone();
                 let sig = sig.clone();
                 let array_shape =
@@ -564,7 +560,13 @@ async fn scan_zarr_with_backend_async(
                     expanded_with_columns.clone();
 
                 futs.push(async move {
-                    let _permit = permit;
+                    // Acquire permit inside the future - this ensures
+                    // permits are only acquired when the future is polled,
+                    // enabling proper pipelining instead of batch execution
+                    let _permit = sem
+                        .acquire_owned()
+                        .await
+                        .expect("semaphore closed");
                     chunk_to_df_from_grid_with_backend(
                         backend.as_ref(),
                         idx.into(),

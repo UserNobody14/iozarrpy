@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use smallvec::SmallVec;
 use zarrs::array::Array;
+use zarrs::array::ArrayShardedExt;
 use zarrs::hierarchy::NodeMetadata;
 
 use crate::meta::dims::{
@@ -144,21 +145,17 @@ pub fn load_dataset_meta_from_opened(
             time_encoding.as_ref(),
         );
 
-        // Extract regular chunk shape by getting shape of chunk 0
+        // Extract inner chunk shape (for sharded arrays) or regular chunk shape
         let zero_idx: Vec<u64> =
             vec![0u64; array.dimensionality()];
+        let inner_grid = array.inner_chunk_grid();
         let chunk_shape: std::sync::Arc<[u64]> =
-            array
-                .chunk_shape(&zero_idx)
-                .map(|cs| {
-                    cs.iter()
-                        .map(|nz| nz.get())
-                        .collect::<Vec<_>>()
-                        .into()
-                })
-                .unwrap_or_else(|_| {
-                    shape.clone()
-                });
+            inner_grid
+                .chunk_shape_u64(&zero_idx)
+                .ok()
+                .flatten()
+                .map(|cs| cs.into())
+                .unwrap_or_else(|| shape.clone());
 
         let name = match seen_names.get_mut(&leaf)
         {
@@ -297,21 +294,17 @@ pub fn load_zarr_meta_from_opened(
             time_encoding.as_ref(),
         );
 
-        // Extract regular chunk shape by getting shape of chunk 0
+        // Extract inner chunk shape (for sharded arrays) or regular chunk shape
         let zero_idx: Vec<u64> =
             vec![0u64; array.dimensionality()];
+        let inner_grid = array.inner_chunk_grid();
         let chunk_shape: std::sync::Arc<[u64]> =
-            array
-                .chunk_shape(&zero_idx)
-                .map(|cs| {
-                    cs.iter()
-                        .map(|nz| nz.get())
-                        .collect::<Vec<_>>()
-                        .into()
-                })
-                .unwrap_or_else(|_| {
-                    shape.clone()
-                });
+            inner_grid
+                .chunk_shape_u64(&zero_idx)
+                .ok()
+                .flatten()
+                .map(|cs| cs.into())
+                .unwrap_or_else(|| shape.clone());
 
         // Parse "coordinates" attribute (CF convention) to identify auxiliary coords
         if let Some(attrs) =
