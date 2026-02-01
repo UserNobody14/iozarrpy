@@ -106,11 +106,32 @@ impl PyZarrBackend {
         let expr = extract_expr(predicate)?;
         let expr2 = expr.clone();
 
+        // Combine with_columns and variables into a single projection set
         let with_columns_set: Option<
-            BTreeSet<String>,
-        > = with_columns.map(|v| {
-            v.into_iter().collect::<BTreeSet<_>>()
-        });
+            BTreeSet<IStr>,
+        > = match (with_columns, variables) {
+            (Some(cols), Some(vars)) => {
+                let mut set: BTreeSet<IStr> =
+                    cols.into_iter()
+                        .map(|s| s.istr())
+                        .collect();
+                for v in vars {
+                    set.insert(v.istr());
+                }
+                Some(set)
+            }
+            (Some(cols), None) => Some(
+                cols.into_iter()
+                    .map(|s| s.istr())
+                    .collect(),
+            ),
+            (None, Some(vars)) => Some(
+                vars.into_iter()
+                    .map(|s| s.istr())
+                    .collect(),
+            ),
+            (None, None) => None,
+        };
 
         let backend = self.inner.clone();
 
@@ -120,18 +141,20 @@ impl PyZarrBackend {
                     backend,
                     expr,
                     max_concurrency,
+                    with_columns_set,
                 )
                 .await?;
 
-            let filtered =
-                df.lazy().filter(expr2).collect().map_err(
-                    |e| {
-                        PyErr::new::<
+            let filtered = df
+                .lazy()
+                .filter(expr2)
+                .collect()
+                .map_err(|e| {
+                    PyErr::new::<
                         pyo3::exceptions::PyRuntimeError,
                         _,
                     >(e.to_string())
-                    },
-                )?;
+                })?;
 
             Python::attach(|py| {
                 Ok(PyDataFrame(filtered)
@@ -427,6 +450,9 @@ async fn scan_zarr_with_backend_async(
     backend: Arc<FullyCachedZarrBackendAsync>,
     expr: polars::prelude::Expr,
     max_concurrency: Option<usize>,
+    with_columns: Option<
+        std::collections::BTreeSet<IStr>,
+    >,
 ) -> Result<polars::prelude::DataFrame, PyErr> {
     use futures::stream::{
         FuturesUnordered, StreamExt,
@@ -440,6 +466,11 @@ async fn scan_zarr_with_backend_async(
     let planning_meta =
         StdArc::new(meta.planning_meta());
 
+    // Expand struct column names to flat paths for chunk reading
+    let expanded_with_columns = with_columns.as_ref().map(|cols| {
+        crate::backend::lazy::expand_projection_to_flat_paths(cols, &meta)
+    });
+
     // Compile grouped chunk plan
     let (grouped_plan, _stats) = backend
         .compile_expression_async(&expr)
@@ -451,6 +482,10 @@ async fn scan_zarr_with_backend_async(
     let semaphore = StdArc::new(
         tokio::sync::Semaphore::new(max_conc),
     );
+
+    // Wrap in Arc for sharing across tasks
+    let expanded_with_columns =
+        expanded_with_columns.map(StdArc::new);
 
     let mut futs = FuturesUnordered::new();
     for (sig, vars, subsets, chunkgrid) in
@@ -488,6 +523,8 @@ async fn scan_zarr_with_backend_async(
                 let array_shape =
                     array_shape.clone();
                 let vars = vars.clone();
+                let expanded_cols =
+                    expanded_with_columns.clone();
 
                 futs.push(async move {
                     let _permit = permit;
@@ -497,7 +534,9 @@ async fn scan_zarr_with_backend_async(
                         &sig,
                         &array_shape,
                         &vars,
-                        None,
+                        expanded_cols
+                            .as_ref()
+                            .map(|a| a.as_ref()),
                     )
                     .await
                 });
@@ -505,31 +544,40 @@ async fn scan_zarr_with_backend_async(
         }
     }
 
-    let mut out: Option<
-        polars::prelude::DataFrame,
-    > = None;
+    // Collect all chunk DataFrames
+    let mut dfs: Vec<polars::prelude::DataFrame> =
+        Vec::new();
     while let Some(r) = futs.next().await {
         let df = r?;
-        if let Some(acc) = &mut out {
-            acc.vstack_mut(&df)
-                .map_err(PyPolarsErr::from)?;
-        } else {
-            out = Some(df);
-        }
+        dfs.push(df);
     }
 
-    let planning_meta_clone =
-        StdArc::clone(&planning_meta);
-
-    Ok(out.unwrap_or_else(|| {
+    // Combine all chunk DataFrames
+    let result = if dfs.is_empty() {
         let keys: Vec<IStr> = grouped_plan
             .var_to_grid()
             .keys()
             .cloned()
             .collect();
         polars::prelude::DataFrame::empty_with_schema(
-            &planning_meta_clone
-                .tidy_schema(Some(keys.as_slice())),
+            &planning_meta.tidy_schema(Some(
+                keys.as_slice(),
+            )),
         )
-    }))
+    } else if dfs.len() == 1 {
+        dfs.into_iter().next().unwrap()
+    } else {
+        crate::backend::lazy::combine_chunk_dataframes(
+            dfs, &meta,
+        )?
+    };
+
+    // For hierarchical data, convert flat path columns to struct columns
+    if meta.is_hierarchical() {
+        crate::backend::lazy::restructure_to_structs(
+            &result, &meta,
+        )
+    } else {
+        Ok(result)
+    }
 }

@@ -6,12 +6,13 @@ use std::sync::Arc;
 use polars::prelude::*;
 use pyo3::PyErr;
 
-use crate::IStr;
 use crate::backend::compile::ChunkedExpressionCompilerSync;
 use crate::backend::traits::HasMetadataBackendSync;
 use crate::backend::zarr::FullyCachedZarrBackendSync;
 use crate::meta::ZarrMeta;
+use crate::meta::ZarrNode;
 use crate::scan::sync_chunk_to_df::chunk_to_df_from_grid_with_backend;
+use crate::{IStr, IntoIStr};
 
 /// Internal: scan using the backend.
 ///
@@ -21,7 +22,6 @@ pub fn scan_zarr_with_backend_sync(
     expr: polars::prelude::Expr,
     with_columns: Option<BTreeSet<IStr>>,
 ) -> Result<polars::prelude::DataFrame, PyErr> {
-    use crate::IntoIStr;
     use pyo3_polars::error::PyPolarsErr;
     use std::sync::Arc as StdArc;
 
@@ -29,6 +29,15 @@ pub fn scan_zarr_with_backend_sync(
     let meta = backend.metadata()?;
     let planning_meta =
         StdArc::new(meta.planning_meta());
+
+    // Expand struct column names to flat paths for chunk reading
+    // e.g., "model_a" -> ["model_a/temperature", "model_a/pressure"]
+    let expanded_with_columns =
+        with_columns.as_ref().map(|cols| {
+            expand_projection_to_flat_paths(
+                cols, &meta,
+            )
+        });
 
     // Compile grouped chunk plan
     let (grouped_plan, _stats) =
@@ -67,7 +76,7 @@ pub fn scan_zarr_with_backend_sync(
                         sig,
                         &array_shape,
                         &vars,
-                        with_columns.as_ref(),
+                        expanded_with_columns.as_ref(),
                     )?;
                 dfs.push(df);
             }
@@ -75,8 +84,7 @@ pub fn scan_zarr_with_backend_sync(
     }
 
     // Combine all chunk DataFrames
-    // For heterogeneous grids, we need to use diagonal concat
-    // to handle different column sets
+    // For heterogeneous grids, we need to join on coordinate columns
     let result = if dfs.is_empty() {
         let keys: Vec<IStr> = grouped_plan
             .var_to_grid()
@@ -91,29 +99,7 @@ pub fn scan_zarr_with_backend_sync(
     } else if dfs.len() == 1 {
         dfs.into_iter().next().unwrap()
     } else {
-        // Check if all DataFrames have the same columns
-        let first_cols: Vec<_> =
-            dfs[0].get_column_names_owned();
-        let all_same = dfs.iter().all(|df| {
-            df.get_column_names_owned()
-                == first_cols
-        });
-
-        if all_same {
-            // Fast path: simple vstack
-            let mut out = dfs.remove(0);
-            for df in dfs {
-                out.vstack_mut(&df)
-                    .map_err(PyPolarsErr::from)?;
-            }
-            out
-        } else {
-            // Diagonal concat for heterogeneous grids
-            polars::functions::concat_df_diagonal(
-                &dfs,
-            )
-            .map_err(PyPolarsErr::from)?
-        }
+        combine_chunk_dataframes(dfs, &meta)?
     };
 
     // For hierarchical data, convert flat path columns to struct columns
@@ -124,11 +110,149 @@ pub fn scan_zarr_with_backend_sync(
     }
 }
 
+/// Combine chunk DataFrames, handling heterogeneous schemas.
+///
+/// Strategy:
+/// 1. Group DataFrames by their column schema (signature)
+/// 2. Within each group, use vstack (same schema)
+/// 3. Across groups, join on shared coordinate columns
+pub fn combine_chunk_dataframes(
+    mut dfs: Vec<DataFrame>,
+    meta: &ZarrMeta,
+) -> Result<DataFrame, PyErr> {
+    use pyo3_polars::error::PyPolarsErr;
+    use std::collections::BTreeMap;
+
+    // Get dimension column names
+    let dim_cols: BTreeSet<&str> = meta
+        .dim_analysis
+        .all_dims
+        .iter()
+        .map(|d| d.as_ref())
+        .collect();
+
+    // Group DataFrames by schema signature
+    // (sorted list of column names)
+    let mut schema_groups: BTreeMap<
+        Vec<PlSmallStr>,
+        Vec<DataFrame>,
+    > = BTreeMap::new();
+
+    for df in dfs.drain(..) {
+        let mut cols: Vec<PlSmallStr> =
+            df.get_column_names_owned();
+        cols.sort();
+        schema_groups
+            .entry(cols)
+            .or_default()
+            .push(df);
+    }
+
+    // Combine within each group (vstack)
+    // Need to ensure consistent column order before vstacking
+    let mut vstacked: Vec<DataFrame> =
+        Vec::with_capacity(schema_groups.len());
+    for (_sig, group) in schema_groups {
+        let mut iter = group.into_iter();
+        let first = iter.next().unwrap();
+
+        // Get the column order from the first DataFrame
+        let col_order: Vec<PlSmallStr> =
+            first.get_column_names_owned();
+
+        let mut acc = first;
+        for df in iter {
+            // Reorder columns to match the first DataFrame
+            let reordered = df
+                .select(col_order.as_slice())
+                .map_err(PyPolarsErr::from)?;
+            acc.vstack_mut(&reordered)
+                .map_err(PyPolarsErr::from)?;
+        }
+        vstacked.push(acc);
+    }
+
+    if vstacked.len() == 1 {
+        return Ok(vstacked
+            .into_iter()
+            .next()
+            .unwrap());
+    }
+
+    // Multiple schema groups - join on coordinate columns
+    // Find shared coordinate columns across all vstacked DFs
+    let shared_coords: Vec<PlSmallStr> = {
+        let first_cols: BTreeSet<PlSmallStr> =
+            vstacked[0]
+                .get_column_names_owned()
+                .into_iter()
+                .filter(|c| {
+                    dim_cols.contains(c.as_str())
+                })
+                .collect();
+
+        vstacked
+            .iter()
+            .skip(1)
+            .fold(first_cols, |acc, df| {
+                let df_dims: BTreeSet<
+                    PlSmallStr,
+                > = df
+                    .get_column_names_owned()
+                    .into_iter()
+                    .filter(|c| {
+                        dim_cols
+                            .contains(c.as_str())
+                    })
+                    .collect();
+                acc.intersection(&df_dims)
+                    .cloned()
+                    .collect()
+            })
+            .into_iter()
+            .collect()
+    };
+
+    if shared_coords.is_empty() {
+        // No shared coordinates - fall back to diagonal concat
+        return polars::functions::concat_df_diagonal(
+            &vstacked,
+        )
+        .map_err(PyPolarsErr::from)
+        .map_err(|e| {
+            PyErr::new::<
+                pyo3::exceptions::PyValueError,
+                _,
+            >(e.to_string())
+        });
+    }
+
+    // Join on shared coordinates
+    // Start with the first DF and successively join others
+    let mut result = vstacked.remove(0);
+    for df in vstacked {
+        result = result
+            .join(
+                &df,
+                shared_coords.as_slice(),
+                shared_coords.as_slice(),
+                JoinArgs::new(JoinType::Full)
+                    .with_coalesce(
+                    JoinCoalesce::CoalesceColumns,
+                ),
+                None,
+            )
+            .map_err(PyPolarsErr::from)?;
+    }
+
+    Ok(result)
+}
+
 /// Convert flat path columns (e.g., "model_a/temperature") to nested struct columns.
 ///
 /// For hierarchical zarr stores, child groups should become struct columns
 /// containing their variables as fields.
-fn restructure_to_structs(
+pub fn restructure_to_structs(
     df: &DataFrame,
     meta: &ZarrMeta,
 ) -> Result<DataFrame, PyErr> {
@@ -260,4 +384,141 @@ fn build_struct_column_for_node(
         })?;
 
     Ok(Some(struct_series.into_column()))
+}
+
+// =============================================================================
+// Projection Expansion (struct columns -> flat paths)
+// =============================================================================
+
+/// Expand struct column names to their underlying flat paths.
+///
+/// When projection pushdown requests "model_a" (a struct column), we need to
+/// expand that to all the flat paths under that group:
+/// - "model_a" -> ["model_a/temperature", "model_a/pressure", ...]
+///
+/// This also handles:
+/// - Dimension columns (passed through as-is)
+/// - Root data variables (passed through as-is)
+/// - Nested struct access like "model_a" expanding to all nested paths
+pub fn expand_projection_to_flat_paths(
+    with_columns: &BTreeSet<IStr>,
+    meta: &ZarrMeta,
+) -> BTreeSet<IStr> {
+    let mut expanded = BTreeSet::new();
+
+    for col in with_columns {
+        let col_str: &str = col.as_ref();
+
+        // Check if it's a dimension - pass through
+        if meta.dim_analysis.all_dims.iter().any(
+            |d| {
+                let d_str: &str = d.as_ref();
+                d_str == col_str
+            },
+        ) {
+            expanded.insert(col.clone());
+            continue;
+        }
+
+        // Check if it's a root data variable - pass through
+        if meta.root.data_vars.iter().any(|v| {
+            let v_str: &str = v.as_ref();
+            v_str == col_str
+        }) {
+            expanded.insert(col.clone());
+            continue;
+        }
+
+        // Check if it's already a flat path that exists
+        if meta.path_to_array.contains_key(col) {
+            expanded.insert(col.clone());
+            continue;
+        }
+
+        // Check if it's a child group name - expand to all paths
+        if let Some(child_node) =
+            meta.root.children.get(col)
+        {
+            collect_all_paths_from_node(
+                child_node,
+                col_str,
+                &mut expanded,
+            );
+            continue;
+        }
+
+        // Try to match partial paths like "level_1/level_2"
+        // that might reference nested groups
+        if let Some(paths) =
+            find_paths_matching_prefix(
+                col_str, meta,
+            )
+        {
+            for p in paths {
+                expanded.insert(p);
+            }
+            continue;
+        }
+
+        // Unknown column - pass through (might be handled elsewhere)
+        expanded.insert(col.clone());
+    }
+
+    expanded
+}
+
+/// Recursively collect all variable paths from a node and its children.
+fn collect_all_paths_from_node(
+    node: &ZarrNode,
+    prefix: &str,
+    out: &mut BTreeSet<IStr>,
+) {
+    // Add all data variables in this node
+    for var in &node.data_vars {
+        let var_str: &str = var.as_ref();
+        let path =
+            format!("{}/{}", prefix, var_str);
+        out.insert(path.istr());
+    }
+
+    // Recursively add from child nodes
+    for (child_name, child_node) in &node.children
+    {
+        let child_name_str: &str =
+            child_name.as_ref();
+        let child_prefix = format!(
+            "{}/{}",
+            prefix, child_name_str
+        );
+        collect_all_paths_from_node(
+            child_node,
+            &child_prefix,
+            out,
+        );
+    }
+}
+
+/// Find all paths that start with the given prefix.
+fn find_paths_matching_prefix(
+    prefix: &str,
+    meta: &ZarrMeta,
+) -> Option<Vec<IStr>> {
+    let prefix_with_slash =
+        format!("{}/", prefix);
+    let matching: Vec<IStr> = meta
+        .path_to_array
+        .keys()
+        .filter(|p| {
+            let p_str: &str = p.as_ref();
+            p_str.starts_with(&prefix_with_slash)
+                || p_str == prefix
+        })
+        .cloned()
+        .collect();
+
+    if matching.is_empty() {
+        None
+    } else {
+        Some(matching)
+    }
 }

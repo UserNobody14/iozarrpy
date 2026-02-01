@@ -34,7 +34,7 @@ def test_selected_chunks_disjoint_or_ranges(tmp_path: Path) -> None:
     chunks = ZarrBackend.from_url(zarr_path).selected_chunks_debug(expr)  # type: ignore[attr-defined]
     # Find a grid that includes "mycoord"
     for grid in chunks["grids"]:
-        if "mycoord" in grid["variables"]:
+        if "v" in grid["variables"]:
             idxs = sorted({tuple(c["indices"]) for c in grid["chunks"]})
             break
     else:
@@ -55,7 +55,7 @@ def test_planner_coord_reads_are_sublinear(tmp_path: Path) -> None:
     coord_reads = chunks["coord_reads"]
     # Find a grid that includes "mycoord"
     for grid in chunks["grids"]:
-        if "mycoord" in grid["variables"]:
+        if "v" in grid["variables"]:
             idxs = sorted({tuple(c["indices"]) for c in grid["chunks"]})
             break
     else:
