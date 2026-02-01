@@ -1,0 +1,300 @@
+use crate::IStr;
+use std::collections::BTreeMap;
+use std::sync::RwLock;
+use zarrs::array::Array;
+use zarrs::storage::{
+    AsyncReadableWritableListableStorage,
+    AsyncReadableWritableListableStorageTraits,
+    ReadableWritableListableStorage,
+    ReadableWritableListableStorageTraits,
+};
+
+/// Backend handler for (non-icechunk) zarr datasets
+///
+use crate::backend::traits::{
+    BackendError, ChunkedDataBackendAsync,
+    ChunkedDataBackendSync,
+    ChunkedDataCacheAsync, ChunkedDataCacheSync,
+    HasAsyncStore, HasMetadataBackendAsync,
+    HasMetadataBackendCacheAsync,
+    HasMetadataBackendCacheSync,
+    HasMetadataBackendSync, HasStore,
+};
+use crate::meta::{
+    ZarrMeta, load_zarr_meta_from_opened,
+    load_zarr_meta_from_opened_async,
+};
+use crate::reader::{
+    ColumnData, retrieve_chunk,
+    retrieve_chunk_async,
+};
+use crate::store::{
+    AsyncOpenedStore, OpenedStore, StoreInput,
+};
+use std::fmt::Display;
+use std::sync::Arc;
+pub struct ZarrBackendSync {
+    store: Arc<OpenedStore>,
+    /// Opened arrays:
+    opened_arrays: RwLock<BTreeMap<IStr, Arc<Array<dyn ReadableWritableListableStorageTraits>>>>,
+}
+
+impl ZarrBackendSync {
+    pub fn new(
+        store: StoreInput,
+    ) -> Result<Self, BackendError> {
+        let opened =
+            store.open_sync().map_err(|e| {
+                BackendError::Other(e.to_string())
+            })?;
+        Ok(Self {
+            store: Arc::new(opened),
+            opened_arrays: RwLock::new(
+                BTreeMap::new(),
+            ),
+        })
+    }
+}
+
+impl HasStore for ZarrBackendSync {
+    fn store(
+        &self,
+    ) -> &ReadableWritableListableStorage {
+        &self.store.as_ref().store
+    }
+}
+
+impl HasMetadataBackendSync<ZarrMeta>
+    for ZarrBackendSync
+{
+    fn metadata(
+        &self,
+    ) -> Result<Arc<ZarrMeta>, BackendError> {
+        // Called underneath the cache, so we don't need to check if the store is loaded
+        // Instead we just load the metadata, caching is handled above
+        // by the cache wrapper
+        let meta = load_zarr_meta_from_opened(
+            &self.store,
+        )
+        .map_err(|e| {
+            BackendError::Other(e.to_string())
+        })?;
+        Ok(Arc::new(meta))
+    }
+}
+
+impl ChunkedDataBackendSync for ZarrBackendSync {
+    fn read_chunk_sync(
+        &self,
+        var: &IStr,
+        chunk_idx: &[u64],
+    ) -> Result<ColumnData, BackendError> {
+        let strtraits =
+            self.store.as_ref().store.clone();
+        if let Some(array) = self
+            .opened_arrays
+            .read()
+            .unwrap()
+            .get(var)
+        {
+            let chunk =
+                retrieve_chunk(array, chunk_idx)
+                    .map_err(|e| {
+                        BackendError::Other(
+                            e.to_string(),
+                        )
+                    })?;
+            Ok(chunk)
+        } else {
+            let array =
+                Array::open(strtraits, var)
+                    .map_err(|e| {
+                        BackendError::Other(
+                            e.to_string(),
+                        )
+                    })?;
+            let array_arc = Arc::new(array);
+            self.opened_arrays
+                .write()
+                .unwrap()
+                .insert(
+                    var.clone(),
+                    array_arc.clone(),
+                );
+            let chunk = retrieve_chunk(
+                array_arc.as_ref(),
+                chunk_idx,
+            )
+            .map_err(|e| {
+                BackendError::Other(e.to_string())
+            })?;
+            Ok(chunk)
+        }
+    }
+}
+
+impl Display for ZarrBackendSync {
+    fn fmt(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
+        write!(
+            f,
+            "ZarrBackendSync(root='{}')",
+            self.store.as_ref().root.to_string()
+        )
+    }
+}
+
+pub struct ZarrBackendAsync {
+    store: Arc<AsyncOpenedStore>,
+    opened_arrays: RwLock<BTreeMap<IStr, Arc<Array<dyn AsyncReadableWritableListableStorageTraits>>>>,
+}
+
+impl HasAsyncStore for ZarrBackendAsync {
+    fn async_store(
+        &self,
+    ) -> &AsyncReadableWritableListableStorage
+    {
+        &self.store.as_ref().store
+    }
+}
+
+impl ZarrBackendAsync {
+    pub fn new(
+        store: StoreInput,
+    ) -> Result<Self, BackendError> {
+        let opened =
+            store.open_async().map_err(|e| {
+                BackendError::Other(e.to_string())
+            })?;
+        Ok(Self {
+            store: Arc::new(opened),
+            opened_arrays: RwLock::new(
+                BTreeMap::new(),
+            ),
+        })
+    }
+}
+
+#[async_trait::async_trait]
+impl HasMetadataBackendAsync<ZarrMeta>
+    for ZarrBackendAsync
+{
+    async fn metadata(
+        &self,
+    ) -> Result<Arc<ZarrMeta>, BackendError> {
+        let meta =
+            load_zarr_meta_from_opened_async(
+                &self.store,
+            )
+            .await
+            .map_err(|e| {
+                BackendError::Other(e.to_string())
+            })?;
+        Ok(Arc::new(meta))
+    }
+}
+
+#[async_trait::async_trait]
+impl ChunkedDataBackendAsync
+    for ZarrBackendAsync
+{
+    async fn read_chunk_async(
+        &self,
+        var: &IStr,
+        chunk_idx: &[u64],
+    ) -> Result<ColumnData, BackendError> {
+        let strtraits =
+            self.store.as_ref().store.clone();
+        // Clone the Arc and drop the guard before await to keep the future Send
+        let existing_array = self
+            .opened_arrays
+            .read()
+            .unwrap()
+            .get(var)
+            .cloned();
+        if let Some(array) = existing_array {
+            let chunk = retrieve_chunk_async(
+                &array, chunk_idx,
+            )
+            .await
+            .map_err(|e| {
+                BackendError::Other(e.to_string())
+            })?;
+            Ok(chunk)
+        } else {
+            let array =
+                Array::async_open(strtraits, var)
+                    .await
+                    .map_err(|e| {
+                        BackendError::Other(
+                            e.to_string(),
+                        )
+                    })?;
+            let array_arc = Arc::new(array);
+            self.opened_arrays
+                .write()
+                .unwrap()
+                .insert(
+                    var.clone(),
+                    array_arc.clone(),
+                );
+            let chunk = retrieve_chunk_async(
+                array_arc.as_ref(),
+                chunk_idx,
+            )
+            .await
+            .map_err(|e| {
+                BackendError::Other(e.to_string())
+            })?;
+            Ok(chunk)
+        }
+    }
+}
+
+impl Display for ZarrBackendAsync {
+    fn fmt(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
+        write!(
+            f,
+            "ZarrBackendAsync(root='{}')",
+            self.store.as_ref().root.to_string()
+        )
+    }
+}
+
+pub type FullyCachedZarrBackendSync =
+    HasMetadataBackendCacheSync<
+        ZarrMeta,
+        ChunkedDataCacheSync<ZarrBackendSync>,
+    >;
+pub type FullyCachedZarrBackendAsync =
+    HasMetadataBackendCacheAsync<
+        ZarrMeta,
+        ChunkedDataCacheAsync<ZarrBackendAsync>,
+    >;
+
+pub fn to_fully_cached_sync(
+    backend: ZarrBackendSync,
+) -> Result<
+    FullyCachedZarrBackendSync,
+    BackendError,
+> {
+    Ok(HasMetadataBackendCacheSync::new(
+        ChunkedDataCacheSync::new(backend),
+    ))
+}
+
+pub fn to_fully_cached_async(
+    backend: ZarrBackendAsync,
+) -> Result<
+    FullyCachedZarrBackendAsync,
+    BackendError,
+> {
+    Ok(HasMetadataBackendCacheAsync::new(
+        ChunkedDataCacheAsync::new(backend),
+    ))
+}

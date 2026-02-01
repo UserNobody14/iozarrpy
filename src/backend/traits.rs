@@ -5,64 +5,21 @@
 //! - Thread-safe access to cached metadata
 //! - Extensibility for alternative backends (icechunk, gribberish, etc.)
 
+use std::collections::BTreeMap;
+use std::fmt::Display;
 use std::sync::Arc;
 
+use ambassador::{Delegate, delegatable_trait};
+use pyo3::PyErr;
+use tokio::sync::RwLock;
 use zarrs::storage::{
     AsyncReadableWritableListableStorage,
     ReadableWritableListableStorage,
 };
 
 use crate::IStr;
-use crate::meta::ZarrDatasetMeta;
-
-/// Cached chunk data for a coordinate array.
-///
-/// Stores decoded coordinate values in the appropriate numeric type.
-#[derive(Debug, Clone)]
-pub enum CoordChunkData {
-    F64(Vec<f64>),
-    I64(Vec<i64>),
-    U64(Vec<u64>),
-}
-
-impl CoordChunkData {
-    /// Get the length of the chunk data.
-    pub fn len(&self) -> usize {
-        match self {
-            CoordChunkData::F64(v) => v.len(),
-            CoordChunkData::I64(v) => v.len(),
-            CoordChunkData::U64(v) => v.len(),
-        }
-    }
-
-    /// Check if the chunk data is empty.
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-
-    /// Get a scalar value at the given offset.
-    ///
-    /// For I64 data with time encoding, the caller should apply time encoding separately.
-    pub fn get_raw(
-        &self,
-        offset: usize,
-    ) -> Option<CoordScalarRaw> {
-        match self {
-            CoordChunkData::F64(v) => v
-                .get(offset)
-                .copied()
-                .map(CoordScalarRaw::F64),
-            CoordChunkData::I64(v) => v
-                .get(offset)
-                .copied()
-                .map(CoordScalarRaw::I64),
-            CoordChunkData::U64(v) => v
-                .get(offset)
-                .copied()
-                .map(CoordScalarRaw::U64),
-        }
-    }
-}
+use crate::chunk_plan::CompileError;
+use crate::reader::ColumnData;
 
 /// Raw scalar value from a coordinate chunk (before time encoding).
 #[derive(Debug, Clone, Copy)]
@@ -75,6 +32,8 @@ pub enum CoordScalarRaw {
 /// Error type for backend operations.
 #[derive(Debug, Clone)]
 pub enum BackendError {
+    /// Compile error.
+    CompileError(Box<CompileError>),
     /// The requested coordinate array was not found.
     CoordNotFound(String),
     /// Failed to open the zarr array.
@@ -87,12 +46,25 @@ pub enum BackendError {
     Other(String),
 }
 
-impl std::fmt::Display for BackendError {
+impl From<CompileError> for BackendError {
+    fn from(v: CompileError) -> Self {
+        Self::CompileError(Box::new(v))
+    }
+}
+
+impl Display for BackendError {
     fn fmt(
         &self,
         f: &mut std::fmt::Formatter<'_>,
     ) -> std::fmt::Result {
         match self {
+            BackendError::CompileError(err) => {
+                write!(
+                    f,
+                    "compile error: {}",
+                    err
+                )
+            }
             BackendError::CoordNotFound(dim) => {
                 write!(
                     f,
@@ -133,91 +105,678 @@ impl std::fmt::Display for BackendError {
 
 impl std::error::Error for BackendError {}
 
-/// Synchronous Zarr backend trait.
+/// To Py Error
+impl From<BackendError> for PyErr {
+    fn from(error: BackendError) -> PyErr {
+        match error {
+            BackendError::CoordNotFound(msg) => {
+                PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                    "coordinate array not found: {}",
+                    msg
+                ))
+            }
+            _ => PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                error.to_string(),
+            ),
+        }
+    }
+}
+
+/// Synchronous chunked data backend trait.
 ///
-/// Provides access to Zarr data with optional caching of coordinate chunks
+/// Provides access to chunked data
 /// and dataset metadata.
-pub trait ZarrBackendSync: Send + Sync {
-    /// Get the cached dataset metadata.
-    ///
-    /// Returns `None` if metadata hasn't been loaded yet.
-    fn metadata(
-        &self,
-    ) -> Option<Arc<ZarrDatasetMeta>>;
-
-    /// Load and cache the dataset metadata.
-    fn load_metadata(
-        &self,
-    ) -> Result<Arc<ZarrDatasetMeta>, BackendError>;
-
-    /// Read a coordinate chunk, using cache if available.
+#[delegatable_trait]
+pub trait ChunkedDataBackendSync:
+    Send + Sync
+{
+    /// Read a chunk (coordinate or variable)
     ///
     /// # Arguments
-    /// * `dim` - The dimension/coordinate name
+    /// * `var` - The variable name
     /// * `chunk_idx` - The chunk index to read
     ///
     /// # Returns
-    /// The chunk data, either from cache or freshly loaded.
-    fn read_coord_chunk(
+    /// The chunk data, freshly loaded.
+    fn read_chunk_sync(
         &self,
-        dim: &IStr,
-        chunk_idx: u64,
-    ) -> Result<CoordChunkData, BackendError>;
-
-    /// Get the underlying sync store.
-    fn sync_store(
-        &self,
-    ) -> ReadableWritableListableStorage;
-
-    /// Get the root path within the store.
-    fn root(&self) -> &str;
+        var: &IStr,
+        chunk_idx: &[u64],
+    ) -> Result<ColumnData, BackendError>;
 }
 
-/// Asynchronous Zarr backend trait.
+/// Asynchronous chunked data backend trait.
 ///
-/// Provides async access to Zarr data with optional caching of coordinate chunks
+/// Provides async access to chunked data
 /// and dataset metadata.
 #[async_trait::async_trait]
-pub trait ZarrBackendAsync: Send + Sync {
-    /// Get the cached dataset metadata.
-    ///
-    /// Returns `None` if metadata hasn't been loaded yet.
-    fn metadata(
-        &self,
-    ) -> Option<Arc<ZarrDatasetMeta>>;
-
-    /// Load and cache the dataset metadata asynchronously.
-    async fn load_metadata(
-        &self,
-    ) -> Result<Arc<ZarrDatasetMeta>, BackendError>;
-
-    /// Read a coordinate chunk asynchronously, using cache if available.
+pub trait ChunkedDataBackendAsync:
+    Send + Sync
+{
+    /// Read a chunk (coordinate or variable) asynchronously
     ///
     /// # Arguments
-    /// * `dim` - The dimension/coordinate name
-    /// * `chunk_idx` - The chunk index to read
+    /// * `var` - The variable name
+    /// * `chunk_idx` - The indices of the chunk to read
     ///
     /// # Returns
-    /// The chunk data, either from cache or freshly loaded.
-    async fn read_coord_chunk(
+    /// The chunk data, freshly loaded.
+    async fn read_chunk_async(
         &self,
-        dim: &IStr,
-        chunk_idx: u64,
-    ) -> Result<CoordChunkData, BackendError>;
-
-    /// Get the underlying async store.
-    fn async_store(
-        &self,
-    ) -> AsyncReadableWritableListableStorage;
-
-    /// Get the root path within the store.
-    fn root(&self) -> &str;
+        var: &IStr,
+        chunk_idx: &[u64],
+    ) -> Result<ColumnData, BackendError>;
 }
 
+/// A backend that can retrieve metadata synchronously
+#[delegatable_trait]
+pub trait HasMetadataBackendSync<
+    METADATA: Send + Sync,
+>
+{
+    fn metadata(
+        &self,
+    ) -> Result<Arc<METADATA>, BackendError>;
+}
+
+/// A backend that can retrieve metadata asynchronously
+#[async_trait::async_trait]
+pub trait HasMetadataBackendAsync<
+    METADATA: Send + Sync,
+>: Send + Sync
+{
+    async fn metadata(
+        &self,
+    ) -> Result<Arc<METADATA>, BackendError>;
+}
+
+#[delegatable_trait]
+pub trait HasStore {
+    fn store(
+        &self,
+    ) -> &ReadableWritableListableStorage;
+}
+
+#[delegatable_trait]
+pub trait HasAsyncStore {
+    fn async_store(
+        &self,
+    ) -> &AsyncReadableWritableListableStorage;
+}
+
+// =============================================================================
+// Cache wrappers with ambassador delegation for sync traits
+// =============================================================================
+
+/// Sync cache for chunked data - delegates metadata and store traits to backend
+#[derive(Delegate)]
+#[delegate(HasMetadataBackendSync<METADATA>, target = "backend", generics = "METADATA", where = "METADATA: Send + Sync, BACKEND: HasMetadataBackendSync<METADATA>")]
+#[delegate(
+    HasStore,
+    target = "backend",
+    where = "BACKEND: HasStore"
+)]
+pub struct ChunkedDataCacheSync<
+    BACKEND: ChunkedDataBackendSync,
+> {
+    backend: BACKEND,
+    chunk_cache: RwLock<
+        BTreeMap<(IStr, Vec<u64>), ColumnData>,
+    >,
+}
+
+/// Async cache for chunked data
+pub struct ChunkedDataCacheAsync<
+    BACKEND: ChunkedDataBackendAsync,
+> {
+    backend: BACKEND,
+    chunk_cache: RwLock<
+        BTreeMap<(IStr, Vec<u64>), ColumnData>,
+    >,
+}
+
+/// Sync cache for metadata - delegates chunked data and store traits to backend
+#[derive(Delegate)]
+#[delegate(
+    ChunkedDataBackendSync,
+    target = "backend",
+    where = "BACKEND: ChunkedDataBackendSync"
+)]
+#[delegate(
+    HasStore,
+    target = "backend",
+    where = "BACKEND: HasStore"
+)]
+pub struct HasMetadataBackendCacheSync<
+    METADATA: Send + Sync,
+    BACKEND: HasMetadataBackendSync<METADATA>,
+> {
+    backend: BACKEND,
+    metadata: Option<Arc<METADATA>>,
+}
+
+/// Async cache for metadata
+pub struct HasMetadataBackendCacheAsync<
+    METADATA: Send + Sync,
+    BACKEND: HasMetadataBackendAsync<METADATA>,
+> {
+    backend: BACKEND,
+    metadata: RwLock<Option<Arc<METADATA>>>,
+}
+
+// =============================================================================
+// Constructors
+// =============================================================================
+
+impl<BACKEND: ChunkedDataBackendSync>
+    ChunkedDataCacheSync<BACKEND>
+{
+    pub fn new(backend: BACKEND) -> Self {
+        Self {
+            backend,
+            chunk_cache: RwLock::new(
+                BTreeMap::new(),
+            ),
+        }
+    }
+}
+
+impl<BACKEND: ChunkedDataBackendAsync>
+    ChunkedDataCacheAsync<BACKEND>
+{
+    pub fn new(backend: BACKEND) -> Self {
+        Self {
+            backend,
+            chunk_cache: RwLock::new(
+                BTreeMap::new(),
+            ),
+        }
+    }
+}
+
+impl<
+    METADATA: Send + Sync,
+    BACKEND: HasMetadataBackendSync<METADATA>,
+> HasMetadataBackendCacheSync<METADATA, BACKEND>
+{
+    pub fn new(backend: BACKEND) -> Self {
+        Self {
+            backend,
+            metadata: None,
+        }
+    }
+}
+
+impl<
+    METADATA: Send + Sync,
+    BACKEND: HasMetadataBackendAsync<METADATA>,
+>
+    HasMetadataBackendCacheAsync<
+        METADATA,
+        BACKEND,
+    >
+{
+    pub fn new(backend: BACKEND) -> Self {
+        Self {
+            backend,
+            metadata: RwLock::new(None),
+        }
+    }
+}
+
+// =============================================================================
+// Caching implementations (these add logic, not just delegation)
+// =============================================================================
+
+impl<BACKEND: ChunkedDataBackendSync>
+    ChunkedDataBackendSync
+    for ChunkedDataCacheSync<BACKEND>
+{
+    fn read_chunk_sync(
+        &self,
+        var: &IStr,
+        chunk_idx: &[u64],
+    ) -> Result<ColumnData, BackendError> {
+        let key =
+            (var.clone(), chunk_idx.to_vec());
+        let cache =
+            self.chunk_cache.blocking_read();
+        if let Some(data) = cache.get(&key) {
+            return Ok(data.clone());
+        }
+        drop(cache);
+        let data = self
+            .backend
+            .read_chunk_sync(var, chunk_idx)?;
+        self.chunk_cache
+            .blocking_write()
+            .insert(key, data.clone());
+        Ok(data)
+    }
+}
+
+#[async_trait::async_trait]
+impl<BACKEND: ChunkedDataBackendAsync>
+    ChunkedDataBackendAsync
+    for ChunkedDataCacheAsync<BACKEND>
+{
+    async fn read_chunk_async(
+        &self,
+        var: &IStr,
+        chunk_idx: &[u64],
+    ) -> Result<ColumnData, BackendError> {
+        let key =
+            (var.clone(), chunk_idx.to_vec());
+        let cache = self.chunk_cache.read().await;
+        if let Some(data) = cache.get(&key) {
+            return Ok(data.clone());
+        }
+        drop(cache);
+        let data = self
+            .backend
+            .read_chunk_async(var, chunk_idx)
+            .await?;
+        self.chunk_cache
+            .write()
+            .await
+            .insert(key, data.clone());
+        Ok(data)
+    }
+}
+
+impl<
+    METADATA: Send + Sync,
+    BACKEND: HasMetadataBackendSync<METADATA>,
+> HasMetadataBackendSync<METADATA>
+    for HasMetadataBackendCacheSync<
+        METADATA,
+        BACKEND,
+    >
+{
+    fn metadata(
+        &self,
+    ) -> Result<Arc<METADATA>, BackendError> {
+        if let Some(metadata) =
+            self.metadata.clone()
+        {
+            return Ok(metadata.clone());
+        }
+        let metadata = self.backend.metadata()?;
+        Ok(metadata)
+    }
+}
+
+#[async_trait::async_trait]
+impl<
+    METADATA: Send + Sync,
+    BACKEND: HasMetadataBackendAsync<METADATA>,
+> HasMetadataBackendAsync<METADATA>
+    for HasMetadataBackendCacheAsync<
+        METADATA,
+        BACKEND,
+    >
+{
+    async fn metadata(
+        &self,
+    ) -> Result<Arc<METADATA>, BackendError> {
+        if let Some(metadata) =
+            &*self.metadata.read().await
+        {
+            return Ok(metadata.clone());
+        }
+        let metadata =
+            self.backend.metadata().await?;
+        *self.metadata.write().await =
+            Some(metadata.clone());
+        Ok(metadata)
+    }
+}
+
+// =============================================================================
+// Manual async trait delegations (ambassador doesn't work well with async_trait)
+// =============================================================================
+
+#[async_trait::async_trait]
+impl<
+    METADATA: Send + Sync,
+    BACKEND: ChunkedDataBackendAsync
+        + HasMetadataBackendAsync<METADATA>,
+> ChunkedDataBackendAsync
+    for HasMetadataBackendCacheAsync<
+        METADATA,
+        BACKEND,
+    >
+{
+    async fn read_chunk_async(
+        &self,
+        var: &IStr,
+        chunk_idx: &[u64],
+    ) -> Result<ColumnData, BackendError> {
+        self.backend
+            .read_chunk_async(var, chunk_idx)
+            .await
+    }
+}
+
+#[async_trait::async_trait]
+impl<
+    METADATA: Send + Sync,
+    BACKEND: ChunkedDataBackendAsync
+        + HasMetadataBackendAsync<METADATA>,
+> HasMetadataBackendAsync<METADATA>
+    for ChunkedDataCacheAsync<BACKEND>
+{
+    async fn metadata(
+        &self,
+    ) -> Result<Arc<METADATA>, BackendError> {
+        self.backend.metadata().await
+    }
+}
+
+impl<
+    BACKEND: ChunkedDataBackendAsync + HasAsyncStore,
+> HasAsyncStore
+    for ChunkedDataCacheAsync<BACKEND>
+{
+    fn async_store(
+        &self,
+    ) -> &AsyncReadableWritableListableStorage
+    {
+        self.backend.async_store()
+    }
+}
+
+impl<
+    METADATA: Send + Sync,
+    BACKEND: HasMetadataBackendAsync<METADATA>
+        + HasAsyncStore,
+> HasAsyncStore
+    for HasMetadataBackendCacheAsync<
+        METADATA,
+        BACKEND,
+    >
+{
+    fn async_store(
+        &self,
+    ) -> &AsyncReadableWritableListableStorage
+    {
+        self.backend.async_store()
+    }
+}
+
+// =============================================================================
+// Display implementations (ambassador doesn't delegate std traits)
+// =============================================================================
+
+impl<BACKEND: ChunkedDataBackendSync + Display>
+    Display for ChunkedDataCacheSync<BACKEND>
+{
+    fn fmt(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
+        write!(
+            f,
+            "ChunkedDataCacheSync({})",
+            self.backend
+        )
+    }
+}
+
+impl<BACKEND: ChunkedDataBackendAsync + Display>
+    Display for ChunkedDataCacheAsync<BACKEND>
+{
+    fn fmt(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
+        write!(
+            f,
+            "ChunkedDataCacheAsync({})",
+            self.backend
+        )
+    }
+}
+
+impl<
+    METADATA: Send + Sync,
+    BACKEND: HasMetadataBackendSync<METADATA> + Display,
+> Display
+    for HasMetadataBackendCacheSync<
+        METADATA,
+        BACKEND,
+    >
+{
+    fn fmt(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
+        write!(
+            f,
+            "HasMetadataBackendCacheSync({})",
+            self.backend
+        )
+    }
+}
+
+impl<
+    METADATA: Send + Sync,
+    BACKEND: HasMetadataBackendAsync<METADATA> + Display,
+> Display
+    for HasMetadataBackendCacheAsync<
+        METADATA,
+        BACKEND,
+    >
+{
+    fn fmt(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
+        write!(
+            f,
+            "HasMetadataBackendCacheAsync({})",
+            self.backend
+        )
+    }
+}
+
+// =============================================================================
+// Blanket impls for Arc<T>
+// =============================================================================
+
+impl<T: HasStore> HasStore for Arc<T> {
+    fn store(
+        &self,
+    ) -> &ReadableWritableListableStorage {
+        (**self).store()
+    }
+}
+
+impl<T: HasAsyncStore> HasAsyncStore for Arc<T> {
+    fn async_store(
+        &self,
+    ) -> &AsyncReadableWritableListableStorage
+    {
+        (**self).async_store()
+    }
+}
+
+impl<T: ChunkedDataBackendSync>
+    ChunkedDataBackendSync for Arc<T>
+{
+    fn read_chunk_sync(
+        &self,
+        var: &IStr,
+        chunk_idx: &[u64],
+    ) -> Result<ColumnData, BackendError> {
+        (**self).read_chunk_sync(var, chunk_idx)
+    }
+}
+
+#[async_trait::async_trait]
+impl<T: ChunkedDataBackendAsync>
+    ChunkedDataBackendAsync for Arc<T>
+{
+    async fn read_chunk_async(
+        &self,
+        var: &IStr,
+        chunk_idx: &[u64],
+    ) -> Result<ColumnData, BackendError> {
+        (**self)
+            .read_chunk_async(var, chunk_idx)
+            .await
+    }
+}
+
+impl<
+    METADATA: Send + Sync,
+    T: HasMetadataBackendSync<METADATA>,
+> HasMetadataBackendSync<METADATA> for Arc<T>
+{
+    fn metadata(
+        &self,
+    ) -> Result<Arc<METADATA>, BackendError> {
+        (**self).metadata()
+    }
+}
+
+#[async_trait::async_trait]
+impl<
+    METADATA: Send + Sync,
+    T: HasMetadataBackendAsync<METADATA>,
+> HasMetadataBackendAsync<METADATA> for Arc<T>
+{
+    async fn metadata(
+        &self,
+    ) -> Result<Arc<METADATA>, BackendError> {
+        (**self).metadata().await
+    }
+}
+
+pub struct CacheStats {
+    pub chunk_entries: usize,
+}
+
+#[delegatable_trait]
+pub trait EvictableChunkCacheSync {
+    fn cache_stats(&self) -> CacheStats;
+    fn clear(&self);
+}
+
+#[async_trait::async_trait]
+pub trait EvictableChunkCacheAsync {
+    async fn cache_stats(&self) -> CacheStats;
+    async fn clear(&self);
+}
+
+impl<BACKEND: ChunkedDataBackendSync>
+    EvictableChunkCacheSync
+    for ChunkedDataCacheSync<BACKEND>
+{
+    fn cache_stats(&self) -> CacheStats {
+        CacheStats {
+            chunk_entries: self
+                .chunk_cache
+                .blocking_read()
+                .len(),
+        }
+    }
+    fn clear(&self) {
+        self.chunk_cache.blocking_write().clear();
+    }
+}
+
+#[async_trait::async_trait]
+impl<BACKEND: ChunkedDataBackendAsync>
+    EvictableChunkCacheAsync
+    for ChunkedDataCacheAsync<BACKEND>
+{
+    async fn cache_stats(&self) -> CacheStats {
+        CacheStats {
+            chunk_entries: self
+                .chunk_cache
+                .read()
+                .await
+                .len(),
+        }
+    }
+    async fn clear(&self) {
+        self.chunk_cache.write().await.clear();
+    }
+}
+
+impl<
+    BACKEND: ChunkedDataBackendSync
+        + EvictableChunkCacheSync,
+> EvictableChunkCacheSync for Arc<BACKEND>
+{
+    fn cache_stats(&self) -> CacheStats {
+        (**self).cache_stats()
+    }
+    fn clear(&self) {
+        (**self).clear()
+    }
+}
+
+#[async_trait::async_trait]
+impl<
+    BACKEND: ChunkedDataBackendAsync
+        + EvictableChunkCacheAsync,
+> EvictableChunkCacheAsync for Arc<BACKEND>
+{
+    async fn cache_stats(&self) -> CacheStats {
+        (**self).cache_stats().await
+    }
+    async fn clear(&self) {
+        (**self).clear().await
+    }
+}
+
+impl<
+    METADATA: Send + Sync,
+    BACKEND: HasMetadataBackendSync<METADATA>
+        + EvictableChunkCacheSync,
+> EvictableChunkCacheSync
+    for HasMetadataBackendCacheSync<
+        METADATA,
+        BACKEND,
+    >
+{
+    fn cache_stats(&self) -> CacheStats {
+        self.backend.cache_stats()
+    }
+    fn clear(&self) {
+        self.backend.clear()
+    }
+}
+
+#[async_trait::async_trait]
+impl<
+    METADATA: Send + Sync,
+    BACKEND: HasMetadataBackendAsync<METADATA>
+        + EvictableChunkCacheAsync,
+> EvictableChunkCacheAsync
+    for HasMetadataBackendCacheAsync<
+        METADATA,
+        BACKEND,
+    >
+{
+    async fn cache_stats(&self) -> CacheStats {
+        self.backend.cache_stats().await
+    }
+    async fn clear(&self) {
+        self.backend.clear().await
+    }
+}
+
+// =============================================================================
+// Type aliases
+// =============================================================================
+
 /// A type-erased async backend that can be shared across threads.
-pub type DynAsyncBackend =
-    Arc<dyn ZarrBackendAsync>;
+pub type DynChunkedDataAsyncBackend =
+    Arc<dyn ChunkedDataBackendAsync>;
 
 /// A type-erased sync backend that can be shared across threads.
-pub type DynSyncBackend =
-    Arc<dyn ZarrBackendSync>;
+pub type DynChunkedDataSyncBackend =
+    Arc<dyn ChunkedDataBackendSync>;

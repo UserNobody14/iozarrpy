@@ -5,8 +5,11 @@
 //! - [`CachingAsyncBackend`] - default caching implementation
 //! - [`PyZarrBackend`] - Python-exposed backend class with scan methods
 
-mod caching;
+mod compile;
+mod lazy;
+mod sync;
 mod traits;
+mod zarr;
 // mod source;  // TODO: This module was referenced but doesn't exist
 mod py;
 

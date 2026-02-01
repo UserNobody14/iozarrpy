@@ -2,6 +2,7 @@
 //!
 //! Exposes the caching backend to Python with scan methods.
 
+use std::fmt::Pointer;
 use std::sync::Arc;
 
 use pyo3::prelude::*;
@@ -9,9 +10,19 @@ use pyo3::types::PyAny;
 use pyo3_async_runtimes::tokio::future_into_py;
 use pyo3_polars::PySchema;
 
-use super::caching::CachingAsyncBackend;
-use super::traits::ZarrBackendAsync;
+use crate::IStr;
+use crate::backend::compile::ChunkedExpressionCompilerAsync;
+use crate::backend::traits::{
+    EvictableChunkCacheAsync,
+    EvictableChunkCacheSync, HasAsyncStore,
+    HasMetadataBackendAsync,
+};
+use crate::backend::zarr::{
+    FullyCachedZarrBackendAsync,
+    ZarrBackendAsync, to_fully_cached_async,
+};
 use crate::py::expr_extract::extract_expr;
+use crate::scan::chunk_to_df::chunk_to_df_from_grid;
 use crate::store::StoreInput;
 
 /// Python-exposed Zarr backend with caching and scan methods.
@@ -20,7 +31,7 @@ use crate::store::StoreInput;
 /// across multiple scan operations.
 #[pyclass(name = "ZarrBackend")]
 pub struct PyZarrBackend {
-    inner: Arc<CachingAsyncBackend>,
+    inner: Arc<FullyCachedZarrBackendAsync>,
 }
 
 #[pymethods]
@@ -36,19 +47,12 @@ impl PyZarrBackend {
         url: String,
         max_cache_entries: usize,
     ) -> PyResult<Self> {
-        let opened = crate::store::open_store_async(&url)
-            .map_err(|e| {
-            PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                e,
-            )
-        })?;
+        let backend = ZarrBackendAsync::new(
+            StoreInput::Url(url),
+        )?;
 
-        let backend = CachingAsyncBackend::new(
-            opened.store,
-            opened.root,
-            max_cache_entries,
-        );
-
+        let backend =
+            to_fully_cached_async(backend)?;
         Ok(Self {
             inner: Arc::new(backend),
         })
@@ -69,20 +73,10 @@ impl PyZarrBackend {
     ) -> PyResult<Self> {
         let store_input =
             StoreInput::from_py(store, prefix)?;
-        let opened =
-            store_input.open_async().map_err(|e| {
-                PyErr::new::<
-                    pyo3::exceptions::PyValueError,
-                    _,
-                >(e)
-            })?;
-
-        let backend = CachingAsyncBackend::new(
-            opened.store,
-            opened.root,
-            max_cache_entries,
-        );
-
+        let backend =
+            ZarrBackendAsync::new(store_input)?;
+        let backend =
+            to_fully_cached_async(backend)?;
         Ok(Self {
             inner: Arc::new(backend),
         })
@@ -126,9 +120,7 @@ impl PyZarrBackend {
                 scan_zarr_with_backend_async(
                     backend,
                     expr,
-                    variables,
                     max_concurrency,
-                    with_columns_set,
                 )
                 .await?;
 
@@ -171,13 +163,7 @@ impl PyZarrBackend {
             })?;
 
         let meta = runtime
-            .block_on(self.inner.load_metadata())
-            .map_err(|e| {
-                PyErr::new::<
-                    pyo3::exceptions::PyValueError,
-                    _,
-                >(e.to_string())
-            })?;
+            .block_on(self.inner.metadata())?;
 
         let vars: Option<Vec<crate::IStr>> =
             variables.map(|v| {
@@ -191,9 +177,9 @@ impl PyZarrBackend {
         Ok(PySchema(Arc::new(schema)))
     }
 
-    /// Get the store root path.
+    // / Get the store root path.
     fn root(&self) -> String {
-        self.inner.root().to_string()
+        return '/'.to_string();
     }
 
     /// Clear the coordinate cache.
@@ -203,7 +189,7 @@ impl PyZarrBackend {
     ) -> PyResult<Bound<'py, PyAny>> {
         let backend = self.inner.clone();
         future_into_py(py, async move {
-            backend.clear_coord_cache().await;
+            backend.clear().await;
             Ok(())
         })
     }
@@ -215,7 +201,7 @@ impl PyZarrBackend {
     ) -> PyResult<Bound<'py, PyAny>> {
         let backend = self.inner.clone();
         future_into_py(py, async move {
-            backend.clear_all_caches().await;
+            backend.clear().await;
             Ok(())
         })
     }
@@ -234,11 +220,11 @@ impl PyZarrBackend {
                     pyo3::types::PyDict::new(py);
                 dict.set_item(
                     "coord_entries",
-                    stats.coord_entries,
+                    stats.chunk_entries,
                 )?;
                 dict.set_item(
                     "has_metadata",
-                    stats.has_metadata,
+                    stats.chunk_entries > 0,
                 )?;
                 Ok(dict.into_any().unbind())
             })
@@ -248,7 +234,7 @@ impl PyZarrBackend {
     fn __repr__(&self) -> String {
         format!(
             "ZarrBackend(root='{}')",
-            self.inner.root()
+            self.inner
         )
     }
 }
@@ -257,70 +243,30 @@ impl PyZarrBackend {
 ///
 /// This reuses the existing scan infrastructure but uses the backend's cached metadata.
 async fn scan_zarr_with_backend_async(
-    backend: Arc<CachingAsyncBackend>,
+    backend: Arc<FullyCachedZarrBackendAsync>,
     expr: polars::prelude::Expr,
-    variables: Option<Vec<String>>,
     max_concurrency: Option<usize>,
-    with_columns: Option<
-        std::collections::BTreeSet<String>,
-    >,
 ) -> Result<polars::prelude::DataFrame, PyErr> {
     use crate::IntoIStr;
-    use crate::chunk_plan::compile_expr_to_grouped_chunk_plan_async;
-    use crate::scan::chunk_to_df::chunk_to_df;
     use crate::scan::open_arrays::open_arrays_async;
     use futures::stream::{
         FuturesUnordered, StreamExt,
     };
     use pyo3_polars::error::PyPolarsErr;
-    use std::collections::BTreeSet;
     use std::sync::Arc as StdArc;
 
     const DEFAULT_MAX_CONCURRENCY: usize = 32;
 
-    // Load metadata from cache
-    let meta = backend
-        .load_metadata()
-        .await
-        .map_err(|e| {
-            PyErr::new::<
-                pyo3::exceptions::PyValueError,
-                _,
-            >(e.to_string())
-        })?;
-
-    // Convert variables to IStr
-    let vars: Vec<crate::IStr> = variables
-        .map(|v| {
-            v.into_iter()
-                .map(|s| s.istr())
-                .collect()
-        })
-        .unwrap_or_else(|| {
-            meta.data_vars.clone()
-        });
-
-    if vars.is_empty() {
-        return Err(PyErr::new::<
-            pyo3::exceptions::PyValueError,
-            _,
-        >(
-            "no variables found/selected",
-        ));
-    }
-
-    // Use dataset dims directly
-    let dims = meta.dims.clone();
-
-    let store = backend.async_store();
-
     // Open arrays for reading
+    let planning_meta = StdArc::new(
+        backend.metadata().await?.planning_meta(),
+    );
     let (var_arrays, coord_arrays) =
         open_arrays_async(
-            store.clone(),
-            &meta,
-            &vars,
-            &dims,
+            backend.async_store().clone(),
+            &planning_meta,
+            &planning_meta.data_vars,
+            &planning_meta.dims,
         )
         .await
         .map_err(|e| {
@@ -330,115 +276,10 @@ async fn scan_zarr_with_backend_async(
             >(e)
         })?;
 
-    // Pick a reference variable for chunk iteration geometry
-    // TODO: Eventually iterate per-grid, but for now pick the first variable
-    let ref_var = &vars[0];
-    let ref_meta = meta
-        .arrays
-        .get(ref_var)
-        .ok_or_else(|| {
-            PyErr::new::<
-                pyo3::exceptions::PyValueError,
-                _,
-            >("unknown variable")
-        })?;
-    let ref_array =
-        zarrs::array::Array::async_open(
-            store.clone(),
-            ref_meta.path.as_ref(),
-        )
-        .await
-        .map_err(|e| {
-            PyErr::new::<
-                pyo3::exceptions::PyValueError,
-                _,
-            >(e.to_string())
-        })?;
-    let ref_array = StdArc::new(ref_array);
-
     // Compile grouped chunk plan
-    let (grouped_plan, _stats) =
-        match compile_expr_to_grouped_chunk_plan_async(
-            &expr,
-            &meta,
-            store.clone(),
-        )
-        .await
-        {
-            Ok(x) => x,
-            Err(_) => {
-                // Fall back to empty plan
-                (
-                crate::chunk_plan::GroupedChunkPlan::new(),
-                crate::chunk_plan::PlannerStats { coord_reads: 0 },
-            )
-            }
-        };
-
-    // Convert array subsets to chunk indices for the reference variable
-    let mut chunk_indices: Vec<Vec<u64>> =
-        Vec::new();
-
-    // Determine if we should scan all chunks
-    let should_scan_all = if let Some(subsets) =
-        grouped_plan.get_plan(ref_var.as_ref())
-    {
-        // If subsets is empty, it means "select all" (NoSelectionMade case)
-        if subsets.subsets_iter().next().is_none() {
-            true
-        } else {
-            // Use the subsets from the plan to select chunks
-            for subset in subsets.subsets_iter() {
-                if let Ok(Some(chunks)) = ref_array
-                    .chunks_in_array_subset(subset)
-                {
-                    for chunk_idx in
-                        chunks.indices().iter()
-                    {
-                        chunk_indices.push(
-                            chunk_idx
-                                .iter()
-                                .copied()
-                                .collect(),
-                        );
-                    }
-                }
-            }
-            false
-        }
-    } else {
-        // Variable not in plan or plan is empty - scan all
-        grouped_plan.is_empty()
-    };
-    
-    if should_scan_all {
-        // Scan all chunks for this variable
-        let shape = ref_array.shape().to_vec();
-        let full = zarrs::array_subset::ArraySubset::new_with_start_shape(
-            vec![0; shape.len()],
-            shape,
-        )
-        .map_err(|e| {
-            PyErr::new::<
-                pyo3::exceptions::PyValueError,
-                _,
-            >(e.to_string())
-        })?;
-        if let Ok(Some(chunks)) = ref_array
-            .chunks_in_array_subset(&full)
-        {
-            for chunk_idx in
-                chunks.indices().iter()
-            {
-                chunk_indices.push(
-                    chunk_idx
-                        .iter()
-                        .copied()
-                        .collect(),
-                );
-            }
-        }
-    }
+    let (grouped_plan, _stats) = backend
+        .compile_expression_async(&expr)
+        .await?;
 
     let max_conc = max_concurrency
         .filter(|&v| v > 0)
@@ -447,48 +288,66 @@ async fn scan_zarr_with_backend_async(
         tokio::sync::Semaphore::new(max_conc),
     );
 
-    let meta = StdArc::new((*meta).clone());
-    let dims = StdArc::new(dims);
-    let vars = StdArc::new(vars);
     let var_arrays = StdArc::new(var_arrays);
     let coord_arrays = StdArc::new(coord_arrays);
-    let with_columns: StdArc<
-        Option<BTreeSet<crate::IStr>>,
-    > = StdArc::new(with_columns.map(|s| {
-        s.into_iter().map(|c| c.istr()).collect()
-    }));
 
     let mut futs = FuturesUnordered::new();
-    for idx in chunk_indices {
-        let permit = semaphore
-            .clone()
-            .acquire_owned()
-            .await
-            .unwrap();
-        let ref_array = ref_array.clone();
-        let meta = StdArc::clone(&meta);
-        let dims = StdArc::clone(&dims);
-        let vars = StdArc::clone(&vars);
-        let var_arrays =
-            StdArc::clone(&var_arrays);
-        let coord_arrays =
-            StdArc::clone(&coord_arrays);
-        let with_columns =
-            StdArc::clone(&with_columns);
-        futs.push(async move {
-            let _permit = permit;
-            chunk_to_df(
-                idx,
-                ref_array,
-                meta,
-                dims,
-                vars,
-                var_arrays,
-                coord_arrays,
-                with_columns,
-            )
-            .await
-        });
+    for (sig, vars, subsets, chunkgrid) in
+        grouped_plan.iter_grids()
+    {
+        let vars = StdArc::new(
+            vars.into_iter()
+                .map(|v| v.istr())
+                .collect::<Vec<_>>(),
+        );
+        let dims =
+            StdArc::new(sig.dims().to_vec());
+
+        for subset in subsets.subsets_iter() {
+            let chunk_indices = chunkgrid
+                .chunks_in_array_subset(subset).map_err(
+                    |e| PyErr::new::<
+                        pyo3::exceptions::PyValueError,
+                        _,
+                    >(e.to_string())
+                )?.ok_or(
+                    PyErr::new::<
+                        pyo3::exceptions::PyValueError,
+                        _,
+                    >("no chunks found")
+                )?;
+
+            for idx in chunk_indices.indices() {
+                let permit = semaphore
+                    .clone()
+                    .acquire_owned()
+                    .await
+                    .unwrap();
+                let dims = StdArc::clone(&dims);
+                let vars = StdArc::clone(&vars);
+                let var_arrays =
+                    StdArc::clone(&var_arrays);
+                let coord_arrays =
+                    StdArc::clone(&coord_arrays);
+                let meta =
+                    StdArc::clone(&planning_meta);
+
+                futs.push(async move {
+                    let _permit = permit;
+                    chunk_to_df_from_grid(
+                        idx.into(),
+                        sig.clone(),
+                        chunkgrid.clone(),
+                        meta,
+                        dims,
+                        vars,
+                        var_arrays,
+                        coord_arrays,
+                    )
+                    .await
+                });
+            }
+        }
     }
 
     let mut out: Option<
@@ -504,9 +363,13 @@ async fn scan_zarr_with_backend_async(
         }
     }
 
+    let planning_meta_clone =
+        StdArc::clone(&planning_meta);
+
     Ok(out.unwrap_or_else(|| {
+        let keys: Vec<IStr> = grouped_plan.var_to_grid().keys().cloned().collect();
         polars::prelude::DataFrame::empty_with_schema(
-            &meta.tidy_schema(Some(&vars)),
+            &planning_meta_clone.tidy_schema(Some(keys.as_slice())),
         )
     }))
 }

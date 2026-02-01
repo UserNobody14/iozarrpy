@@ -4,7 +4,7 @@ use crate::chunk_plan::indexing::types::{
     IndexRange, ValueRange,
 };
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) enum CompileError {
     Unsupported(String),
     MissingPrimaryDims(String),
@@ -31,6 +31,8 @@ impl Display for CompileError {
         }
     }
 }
+
+impl std::error::Error for CompileError {}
 
 #[derive(Debug)]
 pub(crate) enum ResolveError {

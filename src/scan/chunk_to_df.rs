@@ -1,55 +1,23 @@
 use super::prelude::*;
 use crate::IntoIStr;
+use crate::chunk_plan::ChunkGridSignature;
 use crate::meta::dims::dims_for_array;
 use futures::future::BoxFuture;
+use zarrs::array::ChunkGrid;
 
 pub(crate) async fn chunk_to_df(
     idx: Vec<u64>,
-    primary: Arc<Array<dyn zarrs::storage::AsyncReadableWritableListableStorageTraits>>,
     meta: Arc<ZarrDatasetMeta>,
-    _dims: Arc<Vec<IStr>>,
-    _vars: Arc<Vec<IStr>>,
+    chunk_shape: &[u64],
+    chunk_len: usize,
+    origin: &[u64],
+    array_shape: &[u64],
+    dims: Arc<Vec<IStr>>,
+    vars: Arc<Vec<IStr>>,
     var_arrays: Arc<Vec<(IStr, Arc<Array<dyn zarrs::storage::AsyncReadableWritableListableStorageTraits>>)>>,
     coord_arrays: Arc<Vec<(IStr, Arc<Array<dyn zarrs::storage::AsyncReadableWritableListableStorageTraits>>)>>,
     with_columns: Arc<Option<BTreeSet<IStr>>>,
 ) -> Result<DataFrame, PyErr> {
-    // Get dimension names from the primary array itself, not from global meta.dims
-    // This ensures correct ordering for this specific array/grid
-    let dims: Arc<Vec<IStr>> = Arc::new(
-        dims_for_array(primary.as_ref())
-            .map(|sv| {
-                sv.into_iter()
-                    .collect::<Vec<IStr>>()
-            })
-            .unwrap_or_else(|| {
-                // Fallback to dim_0, dim_1, etc.
-                (0..primary.dimensionality())
-                    .map(|i| {
-                        format!("dim_{i}").istr()
-                    })
-                    .collect()
-            }),
-    );
-
-    // Compute primary chunk geometry.
-    let chunk_shape_nz = primary
-        .chunk_shape(&idx)
-        .map_err(to_py_err)?;
-    let chunk_shape: Vec<u64> = chunk_shape_nz
-        .iter()
-        .map(|x| x.get())
-        .collect();
-    let chunk_len =
-        checked_chunk_len(&chunk_shape)?;
-
-    let array_shape = primary.shape().to_vec();
-    let origin = primary
-        .chunk_grid()
-        .chunk_origin(&idx)
-        .map_err(to_py_err)?
-        .unwrap_or_else(|| {
-            vec![0; chunk_shape.len()]
-        });
     let strides = compute_strides(&chunk_shape);
 
     // In-bounds mask.
@@ -481,6 +449,107 @@ pub(crate) async fn chunk_to_df(
         .map_err(PyPolarsErr::from)?)
 }
 
+pub async fn chunk_to_df_from_grid(
+    idx: Vec<u64>,
+    sig: ChunkGridSignature,
+    grid: Arc<ChunkGrid>,
+    meta: Arc<ZarrDatasetMeta>,
+    dims: Arc<Vec<IStr>>,
+    _vars: Arc<Vec<IStr>>,
+    var_arrays: Arc<Vec<(IStr, Arc<Array<dyn zarrs::storage::AsyncReadableWritableListableStorageTraits>>)>>,
+    coord_arrays: Arc<Vec<(IStr, Arc<Array<dyn zarrs::storage::AsyncReadableWritableListableStorageTraits>>)>>,
+) -> Result<DataFrame, PyErr> {
+    let chunk_shape = sig.chunk_shape();
+
+    let chunk_len =
+        checked_chunk_len(&chunk_shape)?;
+
+    let array_shape = grid.array_shape().to_vec();
+    let origin = grid
+        .chunk_origin(&idx)
+        .map_err(to_py_err)?
+        .unwrap_or_else(|| {
+            vec![0; chunk_shape.len()]
+        });
+    return chunk_to_df(
+        idx,
+        meta,
+        &chunk_shape,
+        chunk_len,
+        &origin,
+        &array_shape,
+        dims,
+        _vars,
+        var_arrays,
+        coord_arrays,
+        Arc::new(None),
+    )
+    .await;
+}
+
+pub async fn chunk_to_df_from_primary(
+    idx: Vec<u64>,
+    primary: Arc<Array<dyn zarrs::storage::AsyncReadableWritableListableStorageTraits>>,
+    meta: Arc<ZarrDatasetMeta>,
+    _dims: Arc<Vec<IStr>>,
+    _vars: Arc<Vec<IStr>>,
+    var_arrays: Arc<Vec<(IStr, Arc<Array<dyn zarrs::storage::AsyncReadableWritableListableStorageTraits>>)>>,
+    coord_arrays: Arc<Vec<(IStr, Arc<Array<dyn zarrs::storage::AsyncReadableWritableListableStorageTraits>>)>>,
+    with_columns: Arc<Option<BTreeSet<IStr>>>,
+) -> Result<DataFrame, PyErr> {
+    // Get dimension names from the primary array itself, not from global meta.dims
+    // This ensures correct ordering for this specific array/grid
+    let dims: Arc<Vec<IStr>> = Arc::new(
+        dims_for_array(primary.as_ref())
+            .map(|sv| {
+                sv.into_iter()
+                    .collect::<Vec<IStr>>()
+            })
+            .unwrap_or_else(|| {
+                // Fallback to dim_0, dim_1, etc.
+                (0..primary.dimensionality())
+                    .map(|i| {
+                        format!("dim_{i}").istr()
+                    })
+                    .collect()
+            }),
+    );
+
+    // Compute primary chunk geometry.
+    let chunk_shape_nz = primary
+        .chunk_shape(&idx)
+        .map_err(to_py_err)?;
+    let chunk_shape: Vec<u64> = chunk_shape_nz
+        .iter()
+        .map(|x| x.get())
+        .collect();
+    let chunk_len =
+        checked_chunk_len(&chunk_shape)?;
+
+    let array_shape = primary.shape().to_vec();
+    let origin = primary
+        .chunk_grid()
+        .chunk_origin(&idx)
+        .map_err(to_py_err)?
+        .unwrap_or_else(|| {
+            vec![0; chunk_shape.len()]
+        });
+    return chunk_to_df(
+        idx,
+        meta,
+        &chunk_shape,
+        chunk_len,
+        &origin,
+        &array_shape,
+        _dims,
+        _vars,
+        var_arrays,
+        coord_arrays,
+        with_columns,
+    )
+    .await;
+}
+
 // =============================================================================
 // Hierarchical DataTree Chunk Loading
 // =============================================================================
@@ -511,7 +580,7 @@ pub(crate) async fn chunk_to_df_tree(
         );
         let vars =
             Arc::new(meta.root.data_vars.clone());
-        return chunk_to_df(
+        return chunk_to_df_from_primary(
             idx,
             primary,
             Arc::new(legacy_meta),

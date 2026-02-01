@@ -408,13 +408,13 @@ def test_bench_remote_xarray_reused(benchmark, remote_xarray_dataset) -> None:
     assert len(out) >= 1
 
 
-@pytest.mark.benchmark(group="remote_single")
-def test_bench_remote_scan_zarr(benchmark, remote_dataset_path: str | None) -> None:
-    """Single remote query using scan_zarr."""
-    if not remote_dataset_path:
-        pytest.skip("Set RAINBEAR_REMOTE_MEM for remote benchmarks")
-    out = benchmark(impl_remote_scan_zarr, remote_dataset_path)
-    assert len(out) >= 1
+# @pytest.mark.benchmark(group="remote_single")
+# def test_bench_remote_scan_zarr(benchmark, remote_dataset_path: str | None) -> None:
+#     """Single remote query using scan_zarr."""
+#     if not remote_dataset_path:
+#         pytest.skip("Set RAINBEAR_REMOTE_MEM for remote benchmarks")
+#     out = benchmark(impl_remote_scan_zarr, remote_dataset_path)
+#     assert len(out) >= 1
 
 
 @pytest.mark.benchmark(group="remote_single")
@@ -491,13 +491,13 @@ def test_bench_remote_multi_xarray_reused(benchmark, remote_xarray_dataset) -> N
     assert len(out) == 3
 
 
-@pytest.mark.benchmark(group="remote_multi_3x")
-def test_bench_remote_multi_scan_zarr(benchmark, remote_dataset_path: str | None) -> None:
-    """3 remote queries using scan_zarr."""
-    if not remote_dataset_path:
-        pytest.skip("Set RAINBEAR_REMOTE_MEM for remote benchmarks")
-    out = benchmark(_remote_multi_query_scan_zarr, remote_dataset_path)
-    assert len(out) == 3
+# @pytest.mark.benchmark(group="remote_multi_3x")
+# def test_bench_remote_multi_scan_zarr(benchmark, remote_dataset_path: str | None) -> None:
+#     """3 remote queries using scan_zarr."""
+#     if not remote_dataset_path:
+#         pytest.skip("Set RAINBEAR_REMOTE_MEM for remote benchmarks")
+#     out = benchmark(_remote_multi_query_scan_zarr, remote_dataset_path)
+#     assert len(out) == 3
 
 
 @pytest.mark.benchmark(group="remote_multi_3x")

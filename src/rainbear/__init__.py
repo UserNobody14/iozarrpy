@@ -10,8 +10,6 @@ from rainbear._core import (
     ZarrSource,
     exceptions,
     print_extension_info,
-    scan_zarr_async,
-    selected_chunks,
     store,
 )
 
@@ -23,8 +21,6 @@ __all__ = [
     "ZarrSource",
     "print_extension_info",
     "scan_zarr",
-    "scan_zarr_async",
-    "selected_chunks",
     "store",
     "exceptions",
     "main",
@@ -94,6 +90,42 @@ def scan_zarr(
 
     src = ZarrSource(store_or_url, 0, 0, variables, max_chunks_to_read, prefix)
     return register_io_source(io_source=source_generator, schema=src.schema())
+
+
+
+def scan_zarr_async(
+    store: StoreInput,
+    predicate: pl.Expr,
+    variables: list[str] | None = None,
+    max_concurrency: int | None = None,
+    with_columns: list[str] | None = None,
+    prefix: str | None = None,
+) -> Any:
+    """Async scan a Zarr store and return a DataFrame.
+    
+    Args:
+        store: Either a URL string or an ObjectStore instance.
+        predicate: Filter expression to apply.
+        variables: Optional list of variable names to read.
+        max_concurrency: Maximum number of concurrent chunk reads.
+        with_columns: Optional list of columns to read.
+        prefix: Optional path prefix within the store (for ObjectStore instances).
+    """
+    backend = ZarrBackend.from_store(store, prefix=prefix)
+    return backend.scan_zarr_async(predicate, variables, max_concurrency, with_columns)
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 def main() -> None:

@@ -11,6 +11,7 @@ pub use load_async::{
     open_and_load_zarr_meta_from_input_async,
 };
 pub use load_sync::{
+    load_zarr_meta_from_opened,
     open_and_load_dataset_meta_from_input,
     open_and_load_zarr_meta,
     open_and_load_zarr_meta_from_input,

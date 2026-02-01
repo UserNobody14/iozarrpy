@@ -37,6 +37,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 
 [[package]]
+name = "ambassador"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8184c5d23ba3829fb1e93388d776c3469cd9f4162af65250490b4f22d3ecf614"
+dependencies = [
+ "itertools 0.10.5",
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "android-tzdata"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1268,6 +1280,15 @@ checksum = "071ed4cc1afd86650602c7b11aa2e1ce30762a1c27193201cb5cee9c6ebb1294"
 
 [[package]]
 name = "itertools"
+version = "0.10.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b0fd2260e829bddf4cb6ea802289de2f86d6a7a690192fbe91b3f46e0f2c8473"
+dependencies = [
+ "either",
+]
+
+[[package]]
+name = "itertools"
 version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2b192c782037fadd9cfa75548310488aabdbf3d2da73885b31bd0abd03351285"
@@ -1671,7 +1692,7 @@ dependencies = [
  "httparse",
  "humantime",
  "hyper",
- "itertools",
+ "itertools 0.14.0",
  "md-5",
  "parking_lot",
  "percent-encoding",
@@ -2499,7 +2520,7 @@ dependencies = [
  "futures",
  "http",
  "humantime",
- "itertools",
+ "itertools 0.14.0",
  "object_store",
  "percent-encoding",
  "pyo3",
@@ -2642,6 +2663,7 @@ checksum = "69cdb34c158ceb288df11e18b4bd39de994f6657d83847bdffdbd7f346754b0f"
 name = "rainbear"
 version = "0.1.0"
 dependencies = [
+ "ambassador",
  "async-trait",
  "chrono",
  "futures",
@@ -4155,7 +4177,7 @@ dependencies = [
  "getrandom 0.3.4",
  "half",
  "inventory",
- "itertools",
+ "itertools 0.14.0",
  "itoa",
  "libz-sys",
  "log",
@@ -4192,7 +4214,7 @@ checksum = "f916f16fdf69ebb75f6c10525402a4c2ac744effb52c6537086f13d904f38afc"
 dependencies = [
  "derive_more",
  "inventory",
- "itertools",
+ "itertools 0.14.0",
  "rayon",
  "thiserror 2.0.17",
  "tinyvec",
@@ -4223,7 +4245,7 @@ checksum = "b56c130d3dbd382a30a2b1e374b01ba69d1444417abacee27a6ae4c9846dab74"
 dependencies = [
  "bytes",
  "derive_more",
- "itertools",
+ "itertools 0.14.0",
  "libc",
  "page_size",
  "pathdiff",
@@ -4295,7 +4317,7 @@ dependencies = [
  "bytes",
  "derive_more",
  "futures",
- "itertools",
+ "itertools 0.14.0",
  "thiserror 2.0.17",
  "unsafe_cell_slice",
 ]

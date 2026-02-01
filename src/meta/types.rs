@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::Display;
 use std::sync::Arc;
 
 use polars::prelude::{
@@ -294,14 +295,22 @@ impl ZarrMeta {
             return Some(raw);
         }
 
-        let trimmed = path.trim_start_matches('/');
-        let with_slash = format!("/{}", trimmed).istr();
-        if self.path_to_array.contains_key(&with_slash) {
+        let trimmed =
+            path.trim_start_matches('/');
+        let with_slash =
+            format!("/{}", trimmed).istr();
+        if self
+            .path_to_array
+            .contains_key(&with_slash)
+        {
             return Some(with_slash);
         }
 
         let trimmed_key = trimmed.istr();
-        if self.path_to_array.contains_key(&trimmed_key) {
+        if self
+            .path_to_array
+            .contains_key(&trimmed_key)
+        {
             return Some(trimmed_key);
         }
 
@@ -313,15 +322,20 @@ impl ZarrMeta {
         &self,
         path: &str,
     ) -> Option<&ZarrArrayMeta> {
-        let key = self.normalize_array_path(path)?;
+        let key =
+            self.normalize_array_path(path)?;
         self.path_to_array.get(&key)
     }
 
     /// Legacy meta for planning, includes all data var paths for hierarchical stores.
-    pub fn planning_meta(&self) -> ZarrDatasetMeta {
-        let mut legacy = ZarrDatasetMeta::from(self);
+    pub fn planning_meta(
+        &self,
+    ) -> ZarrDatasetMeta {
+        let mut legacy =
+            ZarrDatasetMeta::from(self);
         if self.is_hierarchical() {
-            legacy.data_vars = self.all_data_var_paths();
+            legacy.data_vars =
+                self.all_data_var_paths();
         }
         legacy
     }
@@ -541,6 +555,31 @@ impl ZarrNode {
                     .values()
                     .flat_map(|c| c.all_nodes()),
             ),
+        )
+    }
+}
+
+impl Display for ZarrNode {
+    fn fmt(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
+        write!(
+            f,
+            "ZarrNode(path='{}')",
+            self.path
+        )
+    }
+}
+impl Display for ZarrMeta {
+    fn fmt(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
+        write!(
+            f,
+            "ZarrMeta(root='{}')",
+            self.root
         )
     }
 }
