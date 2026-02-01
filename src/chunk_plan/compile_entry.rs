@@ -14,6 +14,7 @@ use crate::chunk_plan::exprs::LazyCompileCtx;
 use crate::chunk_plan::exprs::compile_node_lazy;
 use crate::chunk_plan::indexing::AsyncCoordResolver;
 use crate::chunk_plan::indexing::AsyncMonotonicResolver;
+use crate::chunk_plan::indexing::BackendAsyncResolver;
 use crate::chunk_plan::indexing::MonotonicCoordResolver;
 use crate::chunk_plan::indexing::SyncCoordResolver;
 use crate::chunk_plan::indexing::lazy_materialize::{
@@ -294,7 +295,10 @@ pub(crate) fn resolve_lazy_selection_sync_unified(
     lazy_selection: &LazyDatasetSelection,
     meta: &ZarrMeta,
     store: zarrs::storage::ReadableWritableListableStorage,
-) -> Result<(DatasetSelection, PlannerStats), CompileError> {
+) -> Result<
+    (DatasetSelection, PlannerStats),
+    CompileError,
+> {
     let legacy_meta = meta.planning_meta();
     let (dims, dim_lengths) =
         compute_dims_and_lengths_unified(meta);
@@ -308,9 +312,12 @@ pub(crate) fn resolve_lazy_selection_sync_unified(
         );
 
     let mut resolver =
-        MonotonicCoordResolver::new(&legacy_meta, store);
-    let resolved_cache =
-        resolver.resolve_batch(&requests, &legacy_meta);
+        MonotonicCoordResolver::new(
+            &legacy_meta,
+            store,
+        );
+    let resolved_cache = resolver
+        .resolve_batch(&requests, &legacy_meta);
 
     let merged = MergedCache::new(
         &*resolved_cache,
@@ -342,9 +349,14 @@ pub(crate) fn compile_expr_to_dataset_selection_unified(
     expr: &Expr,
     meta: &ZarrMeta,
     store: zarrs::storage::ReadableWritableListableStorage,
-) -> Result<(DatasetSelection, PlannerStats), CompileError> {
+) -> Result<
+    (DatasetSelection, PlannerStats),
+    CompileError,
+> {
     let lazy_selection =
-        compile_expr_to_lazy_selection_unified(expr, meta)?;
+        compile_expr_to_lazy_selection_unified(
+            expr, meta,
+        )?;
     resolve_lazy_selection_sync_unified(
         &lazy_selection,
         meta,
@@ -352,33 +364,15 @@ pub(crate) fn compile_expr_to_dataset_selection_unified(
     )
 }
 
-/// Compile an expression to a dataset selection (async).
-pub(crate) async fn compile_expr_to_dataset_selection_async(
-    expr: &Expr,
-    meta: &ZarrDatasetMeta,
-    store: zarrs::storage::AsyncReadableWritableListableStorage,
-) -> Result<
-    (DatasetSelection, PlannerStats),
-    CompileError,
-> {
-    let lazy_selection =
-        compile_expr_to_lazy_selection(
-            expr, meta,
-        )?;
-    resolve_lazy_selection_async(
-        &lazy_selection,
-        meta,
-        store,
-    )
-    .await
-}
-
 /// Resolve a lazy selection using async I/O and unified metadata.
 pub(crate) async fn resolve_lazy_selection_async_unified(
     lazy_selection: &LazyDatasetSelection,
     meta: &ZarrMeta,
     store: zarrs::storage::AsyncReadableWritableListableStorage,
-) -> Result<(DatasetSelection, PlannerStats), CompileError> {
+) -> Result<
+    (DatasetSelection, PlannerStats),
+    CompileError,
+> {
     let legacy_meta = meta.planning_meta();
     let (dims, dim_lengths) =
         compute_dims_and_lengths_unified(meta);
@@ -423,9 +417,14 @@ pub(crate) async fn compile_expr_to_dataset_selection_unified_async(
     expr: &Expr,
     meta: &ZarrMeta,
     store: zarrs::storage::AsyncReadableWritableListableStorage,
-) -> Result<(DatasetSelection, PlannerStats), CompileError> {
+) -> Result<
+    (DatasetSelection, PlannerStats),
+    CompileError,
+> {
     let lazy_selection =
-        compile_expr_to_lazy_selection_unified(expr, meta)?;
+        compile_expr_to_lazy_selection_unified(
+            expr, meta,
+        )?;
     resolve_lazy_selection_async_unified(
         &lazy_selection,
         meta,
@@ -463,70 +462,20 @@ pub(crate) fn compile_expr_to_lazy_selection_unified(
 
 use crate::chunk_plan::indexing::GroupedChunkPlan;
 use crate::chunk_plan::indexing::selection_to_chunks::{
-    selection_to_grouped_chunk_plan,
-    selection_to_grouped_chunk_plan_async,
     selection_to_grouped_chunk_plan_unified,
     selection_to_grouped_chunk_plan_unified_async,
+    selection_to_grouped_chunk_plan_unified_from_meta,
 };
-
-/// Compile an expression to a grouped chunk plan (sync).
-///
-/// This handles heterogeneous chunk grids: variables with the same dimensions
-/// but different chunk shapes will have separate ChunkPlans.
-pub(crate) fn compile_expr_to_grouped_chunk_plan(
-    expr: &Expr,
-    meta: &ZarrDatasetMeta,
-    store: zarrs::storage::ReadableWritableListableStorage,
-) -> Result<
-    (GroupedChunkPlan, PlannerStats),
-    CompileError,
-> {
-    let (selection, stats) =
-        compile_expr_to_dataset_selection(
-            expr,
-            meta,
-            store.clone(),
-        )?;
-    let grouped_plan =
-        selection_to_grouped_chunk_plan(
-            &selection, meta, store,
-        )?;
-    Ok((grouped_plan, stats))
-}
-
-/// Compile an expression to a grouped chunk plan (async).
-///
-/// This handles heterogeneous chunk grids: variables with the same dimensions
-/// but different chunk shapes will have separate ChunkPlans.
-pub(crate) async fn compile_expr_to_grouped_chunk_plan_async(
-    expr: &Expr,
-    meta: &ZarrDatasetMeta,
-    store: zarrs::storage::AsyncReadableWritableListableStorage,
-) -> Result<
-    (GroupedChunkPlan, PlannerStats),
-    CompileError,
-> {
-    let (selection, stats) =
-        compile_expr_to_dataset_selection_async(
-            expr,
-            meta,
-            store.clone(),
-        )
-        .await?;
-    let grouped_plan =
-        selection_to_grouped_chunk_plan_async(
-            &selection, meta, store,
-        )
-        .await?;
-    Ok((grouped_plan, stats))
-}
 
 /// Compile an expression to a grouped chunk plan (sync, unified ZarrMeta).
 pub(crate) fn compile_expr_to_grouped_chunk_plan_unified(
     expr: &Expr,
     meta: &ZarrMeta,
     store: zarrs::storage::ReadableWritableListableStorage,
-) -> Result<(GroupedChunkPlan, PlannerStats), CompileError> {
+) -> Result<
+    (GroupedChunkPlan, PlannerStats),
+    CompileError,
+> {
     let (selection, stats) =
         compile_expr_to_dataset_selection_unified(
             expr,
@@ -545,7 +494,10 @@ pub(crate) async fn compile_expr_to_grouped_chunk_plan_unified_async(
     expr: &Expr,
     meta: &ZarrMeta,
     store: zarrs::storage::AsyncReadableWritableListableStorage,
-) -> Result<(GroupedChunkPlan, PlannerStats), CompileError> {
+) -> Result<
+    (GroupedChunkPlan, PlannerStats),
+    CompileError,
+> {
     let (selection, stats) =
         compile_expr_to_dataset_selection_unified_async(
             expr,
@@ -558,5 +510,72 @@ pub(crate) async fn compile_expr_to_grouped_chunk_plan_unified_async(
             &selection, meta, store,
         )
         .await?;
+    Ok((grouped_plan, stats))
+}
+
+/// Compile an expression to a grouped chunk plan using a generic backend.
+///
+/// This version uses the backend's `read_chunk_async` method for coordinate
+/// resolution, enabling backends that don't expose a raw store.
+pub async fn compile_expr_with_backend_async<
+    B: crate::backend::traits::ChunkedDataBackendAsync + 'static,
+>(
+    expr: &Expr,
+    meta: std::sync::Arc<ZarrMeta>,
+    backend: std::sync::Arc<B>,
+) -> Result<(GroupedChunkPlan, PlannerStats), CompileError>{
+    use super::indexing::BackendAsyncResolver;
+
+    // Compile to lazy selection
+    let lazy_selection =
+        compile_expr_to_lazy_selection_unified(
+            expr, &meta,
+        )?;
+
+    // Resolve using backend-based resolver
+    let legacy_meta = meta.planning_meta();
+    let (dims, dim_lengths) =
+        compute_dims_and_lengths_unified(&meta);
+
+    let (requests, immediate_cache) =
+        collect_requests_with_meta(
+            &lazy_selection,
+            &legacy_meta,
+            &dim_lengths,
+            &dims,
+        );
+
+    let resolver = BackendAsyncResolver::new(
+        backend.clone(),
+        meta.clone(),
+    );
+    let resolved_cache = resolver
+        .resolve_batch(requests, &legacy_meta)
+        .await;
+
+    let merged = MergedCache::new(
+        &*resolved_cache,
+        &immediate_cache,
+    );
+    let selection = materialize(
+        &lazy_selection,
+        &legacy_meta,
+        &merged,
+    )
+    .map_err(|e| {
+        CompileError::Unsupported(format!(
+            "materialization failed: {}",
+            e
+        ))
+    })?;
+
+    let stats = PlannerStats { coord_reads: 0 };
+
+    // Convert selection to grouped chunk plan
+    let grouped_plan =
+        selection_to_grouped_chunk_plan_unified_from_meta(
+            &selection, &meta,
+        )?;
+
     Ok((grouped_plan, stats))
 }

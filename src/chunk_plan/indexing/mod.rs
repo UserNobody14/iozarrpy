@@ -19,6 +19,10 @@ pub(crate) use monotonic_scalar::MonotonicCoordResolver;
 pub mod monotonic_async;
 pub(crate) use monotonic_async::AsyncMonotonicResolver;
 
+// Backend-based async resolver (generic, doesn't need raw store)
+pub mod backend_resolver_async;
+pub(crate) use backend_resolver_async::BackendAsyncResolver;
+
 // Generic grouped selection types
 pub mod grouped_selection;
 

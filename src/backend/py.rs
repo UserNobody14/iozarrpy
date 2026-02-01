@@ -10,7 +10,7 @@ use pyo3::types::PyAny;
 use pyo3_async_runtimes::tokio::future_into_py;
 use pyo3_polars::PySchema;
 
-use crate::backend::compile::ChunkedExpressionCompilerAsync;
+use crate::backend::compile::ChunkedExpressionCompilerWithBackendAsync;
 use crate::backend::traits::{
     EvictableChunkCacheAsync,
     HasMetadataBackendAsync,
@@ -247,9 +247,10 @@ impl PyZarrBackend {
 
         let (grids, coord_reads): (Vec<GridInfo>, u64) =
             runtime.block_on(async {
-                // Compile expression to grouped chunk plan
+                // Compile expression to grouped chunk plan using backend-based resolver
                 let (grouped_plan, stats) = backend
-                    .compile_expression_async(&expr)
+                    .clone()
+                    .compile_expression_with_backend_async(&expr)
                     .await?;
 
                 let mut grids: Vec<GridInfo> =
@@ -475,9 +476,12 @@ async fn scan_zarr_with_backend_async(
         crate::backend::lazy::expand_projection_to_flat_paths(cols, &meta)
     });
 
-    // Compile grouped chunk plan
+    // Compile grouped chunk plan using backend-based resolver
     let (grouped_plan, _stats) = backend
-        .compile_expression_async(&expr)
+        .clone()
+        .compile_expression_with_backend_async(
+            &expr,
+        )
         .await?;
 
     // Count total chunks to read if max_chunks_to_read is set

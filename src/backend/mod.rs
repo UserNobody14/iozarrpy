@@ -24,3 +24,10 @@ pub(crate) use traits::{
     HasMetadataBackendAsync,
     HasMetadataBackendSync,
 };
+
+// Re-export compile traits
+pub(crate) use compile::{
+    ChunkedExpressionCompilerAsync,
+    ChunkedExpressionCompilerSync,
+    ChunkedExpressionCompilerWithBackendAsync,
+};

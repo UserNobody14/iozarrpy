@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use polars::prelude::Expr;
 
 use crate::backend::traits::{
@@ -7,15 +9,12 @@ use crate::backend::traits::{
     HasMetadataBackendSync, HasStore,
 };
 
+use crate::chunk_plan::GroupedChunkPlan;
 use crate::chunk_plan::{
-    CompileError, PlannerStats,
-    compile_expr_to_grouped_chunk_plan,
-    compile_expr_to_grouped_chunk_plan_async,
-    compile_expr_to_grouped_chunk_plan_unified_async,
-};
-use crate::chunk_plan::{
-    GroupedChunkPlan,
+    PlannerStats,
     compile_expr_to_grouped_chunk_plan_unified,
+    compile_expr_to_grouped_chunk_plan_unified_async,
+    compile_expr_with_backend_async,
 };
 use crate::meta::ZarrMeta;
 
@@ -89,5 +88,52 @@ impl<
             &meta,
             self.async_store().clone(),
         ).await?)
+    }
+}
+
+/// Trait for backends that can compile expressions using their own
+/// chunk reading capabilities, without needing a raw store.
+///
+/// This is useful for backends that wrap or abstract storage in ways
+/// that don't expose a raw zarrs store.
+#[async_trait::async_trait]
+pub trait ChunkedExpressionCompilerWithBackendAsync:
+    HasMetadataBackendAsync<ZarrMeta>
+    + ChunkedDataBackendAsync
+    + Send
+    + Sync
+    + 'static
+{
+    async fn compile_expression_with_backend_async(
+        self: Arc<Self>,
+        expr: &Expr,
+    ) -> Result<
+        (GroupedChunkPlan, PlannerStats),
+        BackendError,
+    >;
+}
+
+#[async_trait::async_trait]
+impl<
+    B: HasMetadataBackendAsync<ZarrMeta>
+        + ChunkedDataBackendAsync
+        + Send
+        + Sync
+        + 'static,
+> ChunkedExpressionCompilerWithBackendAsync
+    for B
+{
+    async fn compile_expression_with_backend_async(
+        self: Arc<Self>,
+        expr: &Expr,
+    ) -> Result<
+        (GroupedChunkPlan, PlannerStats),
+        BackendError,
+    > {
+        let meta = self.metadata().await?;
+        Ok(compile_expr_with_backend_async(
+            expr, meta, self,
+        )
+        .await?)
     }
 }
