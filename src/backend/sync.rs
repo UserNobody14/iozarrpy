@@ -12,6 +12,7 @@ use polars::prelude::{
 use pyo3::prelude::*;
 use pyo3::types::PyAny;
 use pyo3_async_runtimes::tokio::future_into_py;
+use pyo3_polars::export::polars_plan::plans::DynLiteralValue;
 use pyo3_polars::{
     PyDataFrame, PyLazyFrame, PySchema,
 };
@@ -120,16 +121,12 @@ impl PyZarrBackendSync {
         };
         let prd =
             if let Some(predicate) = predicate {
-                Ok(extract_expr(predicate)?)
+                extract_expr(predicate)?
             } else {
-                Err(PyErr::new::<
-                pyo3::exceptions::PyRuntimeError,
-                _,
-            >(
-                "predicate is required"
-                    .to_string(),
-            ))
-            }?;
+                // Filter that will pass all chunks
+                // Use a filter expression that evaluates to true for all rows.
+                lit(true)
+            };
         let df = scan_zarr_with_backend_sync(
             Arc::new(&self.inner),
             prd.clone(),
