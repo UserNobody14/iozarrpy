@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from itertools import chain
 from typing import TYPE_CHECKING
 
 import polars as pl
@@ -7,7 +8,6 @@ import polars.selectors as cs
 import pytest
 
 from rainbear import ZarrBackend
-from rainbear._core import _selected_variables_debug
 
 if TYPE_CHECKING:
     from conftest import MultiVarDatasetInfo
@@ -34,14 +34,21 @@ needs_expr_support = pytest.mark.xfail(
 
 def get_inferred_vars(zarr_url: str, expr: pl.Expr) -> set[str]:
     """Get the set of variables inferred from an expression."""
-    inferred, _, _ = _selected_variables_debug(zarr_url, expr)
-    return set(inferred)
+    inferred = ZarrBackend.from_url(zarr_url).selected_chunks_debug(expr)
+    list_of_vars: list[list[str]] = [grid["variables"] for grid in inferred["grids"]]
+    # Combine all the variables from the grids
+    return set(chain.from_iterable(list_of_vars))
 
 
 def get_per_var_chunks(zarr_url: str, expr: pl.Expr) -> dict[str, int]:
     """Get per-variable chunk counts from an expression."""
-    _, per_var, _ = _selected_variables_debug(zarr_url, expr)
-    return {var: len(chunks) for var, chunks in per_var.items()}
+    grid_plans = ZarrBackend.from_url(zarr_url).selected_chunks_debug(expr)
+    # For each grid, get the variables and count the chunks
+    per_var = {}
+    for grid in grid_plans["grids"]:
+        for var in grid["variables"]:
+            per_var[var] = len(grid["chunks"])
+    return per_var
 
 
 

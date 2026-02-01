@@ -26,7 +26,6 @@ from typing import TYPE_CHECKING
 import polars as pl
 import pytest
 
-import rainbear._core as _core
 from rainbear import ZarrBackend
 
 if TYPE_CHECKING:
@@ -60,8 +59,13 @@ def get_chunk_count(zarr_url: str, expr: pl.Expr) -> int:
 
 def get_per_var_chunks(zarr_url: str, expr: pl.Expr) -> dict[str, int]:
     """Get per-variable chunk counts from an expression."""
-    _, per_var, _ = _core._selected_variables_debug(zarr_url, expr)
-    return {var: len(chunks) for var, chunks in per_var.items()}
+    grid_plans = ZarrBackend.from_url(zarr_url).selected_chunks_debug(expr)
+    # For each grid, get the variables and count the chunks
+    per_var = {}
+    for grid in grid_plans["grids"]:
+        for var in grid["variables"]:
+            per_var[var] = len(grid["chunks"])
+    return per_var
 
 
 # =============================================================================
