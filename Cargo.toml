@@ -14,13 +14,13 @@ categories = ["data-processing"]
 
 [lib]
 name = "_core"
-# "cdylib" is necessary to produce a shared library for Python to import from.
-crate-type = ["cdylib"]
+# "cdylib" for Python extension, "rlib" for tests
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-# "extension-module" tells pyo3 we want to build an extension module (skips linking against libpython.so)
 # "abi3-py39" tells pyo3 (and maturin) to build using the stable ABI with minimum Python version 3.9
-pyo3 = { version = "0.27.2", features = ["extension-module", "abi3-py39"] }
+# "extension-module" is enabled via feature flag (only for cdylib builds, not tests)
+pyo3 = { version = "0.27.2", features = ["abi3-py39"] }
 
 # Get polars from git.
 #
@@ -132,6 +132,16 @@ async-trait = "0.1"
 internment = { version = "0.8", features = ["arc"] }
 pyo3-object_store = "0.8"
 ambassador = "0.5.0"
+
+# Profiling/tracing support (behind feature flag)
+console-subscriber = { version = "0.4", optional = true }
+tracing = { version = "0.1", optional = true }
+
+[features]
+default = ["extension-module"]
+# extension-module: Enable for Python extension builds (maturin), disable for cargo test
+extension-module = ["pyo3/extension-module"]
+tokio-console = ["dep:console-subscriber", "dep:tracing", "tokio/tracing"]
 
 [profile.release]
 lto = false

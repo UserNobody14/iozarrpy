@@ -63,6 +63,16 @@ fn _core(
     py: Python<'_>,
     m: &Bound<PyModule>,
 ) -> PyResult<()> {
+    // Initialize tokio-console subscriber for async profiling (when feature enabled)
+    #[cfg(feature = "tokio-console")]
+    {
+        use std::sync::Once;
+        static INIT: Once = Once::new();
+        INIT.call_once(|| {
+            console_subscriber::init();
+        });
+    }
+
     // Register object store builders under rainbear._core.store
     // This allows users to create stores with full connection pooling
     pyo3_object_store::register_store_module(

@@ -5,9 +5,19 @@ default:
 
 
 [group: 'tests']
-[doc('Run the test suite')]
+[doc('Run the Python test suite')]
 test:
     uv run pytest
+
+[group: 'tests']
+[doc('Run Rust unit tests (requires --no-default-features to avoid libpython linking)')]
+test-rust:
+    cargo test --no-default-features
+
+[group: 'tests']
+[doc('Run Rust tests with tokio-console instrumentation')]
+test-rust-console:
+    cargo test --no-default-features --features tokio-console
 
 [group: 'build']
 [doc('Build the project')]

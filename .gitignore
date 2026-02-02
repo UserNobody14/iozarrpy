@@ -18,3 +18,5 @@ tests/output-datasets/
 
 # Other
 .env
+
+profile.svg
