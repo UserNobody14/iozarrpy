@@ -7,6 +7,7 @@ mod types;
 
 pub use load_async::{
     load_zarr_meta_from_opened_async,
+    load_zarr_meta_from_store_async,
     open_and_load_zarr_meta_async,
     open_and_load_zarr_meta_from_input_async,
 };

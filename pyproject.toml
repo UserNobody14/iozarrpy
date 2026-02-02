@@ -66,12 +66,20 @@ dev = [
     "gcsfs>=2026.1.0",
     "obstore>=0.8.2",
     "py-spy>=0.4.1",
+    "icechunk>=0.3.0",
+    "pyrefly>=0.50.1",
 ]
 
 build = [
     "maturin>=1.10.2",
     "patchelf>=0.17.2.2; sys_platform == 'linux'"
 ]
+
+[tool.pyright]
+extraPaths = ["."]
+
+[tool.pyrefly]
+site_package_path = ["."]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

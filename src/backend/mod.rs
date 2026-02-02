@@ -4,15 +4,18 @@
 //! - [`ZarrBackendSync`] and [`ZarrBackendAsync`] traits for backend abstraction
 //! - [`CachingAsyncBackend`] - default caching implementation
 //! - [`PyZarrBackend`] - Python-exposed backend class with scan methods
+//! - [`PyIcechunkBackend`] - Python-exposed Icechunk backend (async-only)
 
 mod compile;
+mod icechunk;
+mod icechunk_py;
 mod lazy;
+mod py;
 mod sync;
 pub(crate) mod traits;
 mod zarr;
-// mod source;  // TODO: This module was referenced but doesn't exist
-mod py;
 
+pub(crate) use icechunk_py::PyIcechunkBackend;
 pub(crate) use py::PyZarrBackend;
 pub(crate) use sync::PyZarrBackendSync;
 

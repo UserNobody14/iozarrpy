@@ -703,3 +703,98 @@ def get_datatree_config(name: str) -> DataTreeConfig:
         if cfg.name == name:
             return cfg
     raise ValueError(f"Unknown datatree config: {name}")
+
+
+# ---------------------------------------------------------------------------
+# Icechunk test datasets
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class IcechunkDatasetInfo:
+    """Metadata about an Icechunk test dataset."""
+
+    path: str
+    # Chunk grid shape
+    chunk_grid: tuple[int, ...]
+    # Total number of chunks
+    total_chunks: int
+    # Dimension names
+    dims: list[str]
+    # Data variable names
+    data_vars: list[str]
+
+
+def _generate_icechunk_datasets(output_dir: Path) -> dict[str, IcechunkDatasetInfo]:
+    """Generate Icechunk test datasets and return a mapping of name -> info."""
+    from tests import zarr_generators
+    from tests.icechunk_fixtures import (
+        create_icechunk_repo_from_xarray_sync,
+        get_comprehensive_3d_encoding,
+        get_multi_var_encoding,
+        get_orography_encoding,
+    )
+
+    datasets: dict[str, IcechunkDatasetInfo] = {}
+    icechunk_dir = output_dir / "icechunk"
+    icechunk_dir.mkdir(parents=True, exist_ok=True)
+
+    # Orography dataset (2D) - simple spatial data
+    ds = zarr_generators.create_orography_dataset(nx=20, ny=16, sigma=4.0, seed=1)
+    path = create_icechunk_repo_from_xarray_sync(
+        ds,
+        icechunk_dir / "orography.icechunk",
+        encoding=get_orography_encoding((10, 10)),
+    )
+    datasets["icechunk_orography"] = IcechunkDatasetInfo(
+        path=path,
+        chunk_grid=(2, 2),  # 16/10 rounded up, 20/10 rounded up
+        total_chunks=4,
+        dims=["y", "x"],
+        data_vars=["geopotential_height", "latitude", "longitude"],
+    )
+
+    # Comprehensive 3D dataset - for predicate pushdown testing
+    ds = zarr_generators.create_comprehensive_test_dataset(use_cartopy=False)
+    path = create_icechunk_repo_from_xarray_sync(
+        ds,
+        icechunk_dir / "comprehensive_3d.icechunk",
+        encoding=get_comprehensive_3d_encoding(10),
+    )
+    datasets["icechunk_comprehensive_3d"] = IcechunkDatasetInfo(
+        path=path,
+        chunk_grid=(7, 5, 3),
+        total_chunks=7 * 5 * 3,  # = 105
+        dims=["a", "b", "c"],
+        data_vars=["data", "data2", "surface"],
+    )
+
+    # Multi-variable dataset - for variable inference testing
+    ds = zarr_generators.create_multi_var_test_dataset()
+    path = create_icechunk_repo_from_xarray_sync(
+        ds,
+        icechunk_dir / "multi_var.icechunk",
+        encoding=get_multi_var_encoding(10),
+    )
+    datasets["icechunk_multi_var"] = IcechunkDatasetInfo(
+        path=path,
+        chunk_grid=(5, 4, 3),
+        total_chunks=5 * 4 * 3,  # = 60
+        dims=["a", "b", "c"],
+        data_vars=["temp", "precip", "wind_u", "wind_v", "pressure", "surface"],
+    )
+
+    return datasets
+
+
+@pytest.fixture(scope="session")
+def icechunk_datasets() -> dict[str, IcechunkDatasetInfo]:
+    """Session-scoped fixture that generates Icechunk test datasets once.
+
+    Returns a dict with keys:
+    - 'icechunk_orography': 2D orography dataset (2x2=4 chunks)
+    - 'icechunk_comprehensive_3d': 3D dataset (7x5x3=105 chunks) for predicate testing
+    - 'icechunk_multi_var': Multi-variable dataset (5x4x3=60 chunks)
+    """
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    return _generate_icechunk_datasets(OUTPUT_DIR)

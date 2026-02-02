@@ -6,6 +6,7 @@ import polars as pl
 from polars.io.plugins import register_io_source
 
 from rainbear._core import (
+    IcechunkBackend,
     ZarrBackend,
     ZarrBackendSync,
     exceptions,
@@ -17,6 +18,7 @@ from rainbear._core import (
 StoreInput = str | Any  # Any here represents ObjectStore instances from store module or obstore
 
 __all__ = [
+    "IcechunkBackend",
     "ZarrBackend",
     "ZarrBackendSync",
     "print_extension_info",

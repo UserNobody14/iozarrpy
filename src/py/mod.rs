@@ -18,6 +18,8 @@ pub(crate) fn init_module(
     )?;
     m.add_class::<crate::backend::PyZarrBackendSync>(
     )?;
+    m.add_class::<crate::backend::PyIcechunkBackend>(
+    )?;
 
     Ok(())
 }

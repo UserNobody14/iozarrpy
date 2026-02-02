@@ -267,6 +267,7 @@ class ZarrBackendSync:
         variables: list[str] | None = None,
         max_concurrency: int | None = None,
         with_columns: list[str] | None = None,
+        max_chunks_to_read: int | None = None,
     ) -> pl.DataFrame:
         """Async scan the zarr store and return a DataFrame.
         
@@ -317,6 +318,106 @@ class ZarrBackendSync:
             - has_metadata: Whether metadata is cached
         """
         ...
+class IcechunkBackend:
+    """Icechunk backend with persistent caching across scans (async-only).
+    
+    Provides access to Icechunk-backed Zarr stores with version control support.
+    The backend owns the Icechunk session and caches coordinate array chunks
+    and metadata across multiple scan operations.
+    
+    Examples:
+        >>> # Create a backend from filesystem path (async)
+        >>> backend = await IcechunkBackend.from_filesystem("/path/to/icechunk/repo")
+        >>> 
+        >>> # Async scan with caching
+        >>> df1 = await backend.scan_zarr_async(pl.col("time") > datetime(2024, 1, 1))
+        >>> df2 = await backend.scan_zarr_async(pl.col("time") > datetime(2024, 6, 1))  # Uses cached coords
+        >>>
+        >>> # Check cache statistics
+        >>> stats = await backend.cache_stats()
+        >>> print(f"Cached {stats['coord_entries']} coordinate chunks")
+    """
+    
+    @staticmethod
+    def from_filesystem(
+        path: str,
+        branch: str | None = None,
+        root: str | None = None,
+    ) -> Any:
+        """Create a backend from a filesystem path to an Icechunk repository.
+        
+        Opens a readonly session on the specified branch.
+        
+        Args:
+            path: Path to the Icechunk repository
+            branch: Branch name to read from (default: "main")
+            root: Optional root path within the store (default: "/")
+        
+        Returns:
+            An awaitable that resolves to an IcechunkBackend
+        """
+        ...
+    
+    def scan_zarr_async(
+        self,
+        predicate: pl.Expr,
+        variables: list[str] | None = None,
+        max_concurrency: int | None = None,
+        with_columns: list[str] | None = None,
+        max_chunks_to_read: int | None = None,
+    ) -> Any:
+        """Async scan the Icechunk store and return a DataFrame.
+        
+        Uses the backend's cached coordinates for efficient predicate pushdown.
+        
+        Args:
+            predicate: Polars expression for filtering
+            variables: Optional list of variable names to read
+            max_concurrency: Maximum concurrent chunk reads
+            with_columns: Optional list of columns to include
+            max_chunks_to_read: Maximum number of chunks to read (safety limit)
+        
+        Returns:
+            An awaitable that resolves to a pl.DataFrame
+        """
+        ...
+
+    def selected_chunks_debug(
+        self,
+        predicate: pl.Expr
+    ) -> SelectedChunksDebugReturn: ...
+    
+    def schema(self, variables: list[str] | None = None) -> Any:
+        """Get the schema for the zarr dataset.
+        
+        Args:
+            variables: Optional list of variable names to include
+        """
+        ...
+    
+    def root(self) -> str:
+        """Get the store root path."""
+        ...
+    
+    def clear_coord_cache(self) -> Any:
+        """Clear the coordinate cache (async)."""
+        ...
+    
+    def clear_all_caches(self) -> Any:
+        """Clear all caches - metadata and coordinates (async)."""
+        ...
+    
+    def cache_stats(self) -> Any:
+        """Get cache statistics (async).
+        
+        Returns:
+            An awaitable that resolves to a dict with:
+            - coord_entries: Number of cached coordinate chunks
+            - has_metadata: Whether metadata is cached
+        """
+        ...
+
+
 # Store module - provides ObjectStore builders with full connection pooling
 class store:
     """Object store builders for S3, GCS, Azure, HTTP, and local filesystem.
