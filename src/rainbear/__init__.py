@@ -1,5 +1,4 @@
-import os
-import sys
+
 from typing import Any, Iterator
 
 import polars as pl
@@ -7,7 +6,6 @@ from polars.io.plugins import register_io_source
 
 from rainbear._core import (
     IcechunkBackend,
-    Session,
     ZarrBackend,
     ZarrBackendSync,
     exceptions,
@@ -20,7 +18,6 @@ StoreInput = str | Any  # Any here represents ObjectStore instances from store m
 
 __all__ = [
     "IcechunkBackend",
-    "Session",
     "ZarrBackend",
     "ZarrBackendSync",
     "print_extension_info",

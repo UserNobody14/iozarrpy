@@ -49,26 +49,7 @@ fn extract_session_bytes(
         return Ok(bytes);
     }
 
-    // Try 2: Check if it's our own PySession (has .as_bytes() method directly)
-    if let Ok(py_session) =
-        session.downcast::<PySession>()
-    {
-        let inner = py_session.borrow();
-        let session_guard = inner.inner.read().map_err(|e| {
-            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
-                "Failed to read session: {}",
-                e
-            ))
-        })?;
-        return session_guard.as_bytes().map_err(|e| {
-            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
-                "Failed to serialize session: {}",
-                e
-            ))
-        });
-    }
-
-    // Try 3: icechunk-python Session - access `._session.as_bytes()`
+    // Try 2: icechunk-python Session - access `._session.as_bytes()`
     if let Ok(inner_session) =
         session.getattr("_session")
     {
@@ -87,7 +68,7 @@ fn extract_session_bytes(
         }
     }
 
-    // Try 4: Object has .as_bytes() method directly (e.g., PySession from icechunk internal)
+    // Try 3: Object has .as_bytes() method directly (e.g., PySession from icechunk internal)
     if let Ok(as_bytes_method) =
         session.getattr("as_bytes")
     {
@@ -109,90 +90,6 @@ fn extract_session_bytes(
         "Expected an icechunk Session, rainbear Session, or bytes. \
          Could not extract session bytes from the provided object.",
     ))
-}
-
-/// Python-exposed wrapper for an Icechunk Session.
-///
-/// Sessions can be serialized to bytes and passed between processes.
-#[pyclass(name = "Session")]
-pub struct PySession {
-    inner: RwLock<Session>,
-}
-
-#[pymethods]
-impl PySession {
-    /// Create a Session from serialized bytes.
-    ///
-    /// # Arguments
-    /// * `bytes` - Serialized session bytes from `as_bytes()`
-    #[staticmethod]
-    fn from_bytes(
-        bytes: Vec<u8>,
-    ) -> PyResult<Self> {
-        let session = Session::from_bytes(bytes).map_err(|e| {
-            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string())
-        })?;
-        Ok(PySession {
-            inner: RwLock::new(session),
-        })
-    }
-
-    /// Serialize this session to bytes.
-    ///
-    /// The bytes can be used to recreate the session with `from_bytes()`.
-    fn as_bytes(&self) -> PyResult<Vec<u8>> {
-        let session = self.inner.read().map_err(|e| {
-            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string())
-        })?;
-        session.as_bytes().map_err(|e| {
-            PyErr::new::<
-                pyo3::exceptions::PyRuntimeError,
-                _,
-            >(e.to_string())
-        })
-    }
-
-    /// Check if this is a read-only session.
-    #[getter]
-    fn read_only(&self) -> PyResult<bool> {
-        let session = self.inner.read().map_err(|e| {
-            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string())
-        })?;
-        Ok(session.read_only())
-    }
-
-    /// Get the snapshot ID of this session.
-    #[getter]
-    fn snapshot_id(&self) -> PyResult<String> {
-        let session = self.inner.read().map_err(|e| {
-            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string())
-        })?;
-        Ok(session.snapshot_id().to_string())
-    }
-
-    /// Get the branch name if this session is on a branch.
-    #[getter]
-    fn branch(&self) -> PyResult<Option<String>> {
-        let session = self.inner.read().map_err(|e| {
-            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string())
-        })?;
-        Ok(session
-            .branch()
-            .map(|b| b.to_string()))
-    }
-
-    fn __repr__(&self) -> String {
-        if let Ok(session) = self.inner.read() {
-            format!(
-                "Session(snapshot_id='{}', branch={:?}, read_only={})",
-                session.snapshot_id(),
-                session.branch(),
-                session.read_only()
-            )
-        } else {
-            "Session(<locked>)".to_string()
-        }
-    }
 }
 
 /// Python-exposed Icechunk backend with caching and scan methods.

@@ -66,7 +66,7 @@ dev = [
     "gcsfs>=2026.1.0",
     "obstore>=0.8.2",
     "py-spy>=0.4.1",
-    "icechunk>=1.1.18",
+    "icechunk==1.1.4",
     "pyrefly>=0.50.1",
 ]
 

@@ -20,7 +20,6 @@ pub(crate) fn init_module(
     )?;
     m.add_class::<crate::backend::PyIcechunkBackend>(
     )?;
-    m.add_class::<crate::backend::PySession>()?;
 
     Ok(())
 }

@@ -573,31 +573,6 @@ class TestSessionSerialization:
 
         assert _normalize(df_fs) == _normalize(df_bytes)
 
-    async def test_from_session_with_rainbear_session(
-        self,
-        icechunk_datasets: dict[str, IcechunkDatasetInfo],
-    ) -> None:
-        """Test that from_session accepts rainbear.Session objects."""
-        from icechunk import Repository, local_filesystem_storage
-
-        info = icechunk_datasets["icechunk_orography"]
-
-        # Get session bytes
-        storage = local_filesystem_storage(info.path)
-        repo = Repository.open(storage)
-        icechunk_session = repo.readonly_session("main")
-        session_bytes = icechunk_session._session.as_bytes()
-
-        # Create rainbear Session
-        rb_session = rainbear.Session.from_bytes(session_bytes)
-
-        # Pass rainbear Session to from_session
-        backend = await rainbear.IcechunkBackend.from_session(rb_session)
-
-        # Verify backend works
-        df = await backend.scan_zarr_async(pl.lit(True))
-        assert df.height > 0
-
 
 class TestIcechunkZarrEquivalence:
     """Tests comparing IcechunkBackend results with ZarrBackend.

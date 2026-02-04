@@ -318,56 +318,6 @@ class ZarrBackendSync:
             - has_metadata: Whether metadata is cached
         """
         ...
-class Session:
-    """Icechunk session wrapper for serialization and passing between processes.
-    
-    Sessions can be serialized to bytes using `as_bytes()` and reconstructed
-    using `from_bytes()`, enabling distributed computing workflows.
-    
-    Examples:
-        >>> # Serialize a session for passing to another process
-        >>> session_bytes = session.as_bytes()
-        >>> 
-        >>> # Reconstruct the session in another process
-        >>> session = Session.from_bytes(session_bytes)
-        >>> backend = await IcechunkBackend.from_session(session)
-    """
-    
-    @staticmethod
-    def from_bytes(bytes: bytes) -> Session:
-        """Create a Session from serialized bytes.
-        
-        Args:
-            bytes: Serialized session bytes from `as_bytes()`
-        
-        Returns:
-            A reconstructed Session
-        """
-        ...
-    
-    def as_bytes(self) -> bytes:
-        """Serialize this session to bytes.
-        
-        Returns:
-            Bytes that can be used to recreate the session with `from_bytes()`
-        """
-        ...
-    
-    @property
-    def read_only(self) -> bool:
-        """Whether this is a read-only session."""
-        ...
-    
-    @property
-    def snapshot_id(self) -> str:
-        """The snapshot ID of this session."""
-        ...
-    
-    @property
-    def branch(self) -> str | None:
-        """The branch name if this session is on a branch."""
-        ...
-
 
 class IcechunkBackend:
     """Icechunk backend with persistent caching across scans (async-only).
