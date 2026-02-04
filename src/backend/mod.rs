@@ -15,7 +15,9 @@ mod sync;
 pub(crate) mod traits;
 mod zarr;
 
-pub(crate) use icechunk_py::PyIcechunkBackend;
+pub(crate) use icechunk_py::{
+    PyIcechunkBackend, PySession,
+};
 pub(crate) use py::PyZarrBackend;
 pub(crate) use sync::PyZarrBackendSync;
 

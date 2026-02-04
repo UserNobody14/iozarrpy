@@ -7,6 +7,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use icechunk::repository::VersionInfo;
+use icechunk::session::Session;
 use icechunk::storage::new_local_filesystem_storage;
 use icechunk::{Repository, RepositoryConfig};
 use pyo3::prelude::*;
@@ -29,6 +30,92 @@ use crate::meta::ZarrMeta;
 use crate::py::expr_extract::extract_expr;
 use crate::scan::chunk_to_df::chunk_to_df_from_grid_with_backend;
 use crate::{IStr, IntoIStr};
+
+use std::sync::RwLock;
+
+/// Python-exposed wrapper for an Icechunk Session.
+///
+/// Sessions can be serialized to bytes and passed between processes.
+#[pyclass(name = "Session")]
+pub struct PySession {
+    inner: RwLock<Session>,
+}
+
+#[pymethods]
+impl PySession {
+    /// Create a Session from serialized bytes.
+    ///
+    /// # Arguments
+    /// * `bytes` - Serialized session bytes from `as_bytes()`
+    #[staticmethod]
+    fn from_bytes(
+        bytes: Vec<u8>,
+    ) -> PyResult<Self> {
+        let session = Session::from_bytes(bytes).map_err(|e| {
+            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string())
+        })?;
+        Ok(PySession {
+            inner: RwLock::new(session),
+        })
+    }
+
+    /// Serialize this session to bytes.
+    ///
+    /// The bytes can be used to recreate the session with `from_bytes()`.
+    fn as_bytes(&self) -> PyResult<Vec<u8>> {
+        let session = self.inner.read().map_err(|e| {
+            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string())
+        })?;
+        session.as_bytes().map_err(|e| {
+            PyErr::new::<
+                pyo3::exceptions::PyRuntimeError,
+                _,
+            >(e.to_string())
+        })
+    }
+
+    /// Check if this is a read-only session.
+    #[getter]
+    fn read_only(&self) -> PyResult<bool> {
+        let session = self.inner.read().map_err(|e| {
+            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string())
+        })?;
+        Ok(session.read_only())
+    }
+
+    /// Get the snapshot ID of this session.
+    #[getter]
+    fn snapshot_id(&self) -> PyResult<String> {
+        let session = self.inner.read().map_err(|e| {
+            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string())
+        })?;
+        Ok(session.snapshot_id().to_string())
+    }
+
+    /// Get the branch name if this session is on a branch.
+    #[getter]
+    fn branch(&self) -> PyResult<Option<String>> {
+        let session = self.inner.read().map_err(|e| {
+            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string())
+        })?;
+        Ok(session
+            .branch()
+            .map(|b| b.to_string()))
+    }
+
+    fn __repr__(&self) -> String {
+        if let Ok(session) = self.inner.read() {
+            format!(
+                "Session(snapshot_id='{}', branch={:?}, read_only={})",
+                session.snapshot_id(),
+                session.branch(),
+                session.read_only()
+            )
+        } else {
+            "Session(<locked>)".to_string()
+        }
+    }
+}
 
 /// Python-exposed Icechunk backend with caching and scan methods.
 ///
@@ -106,6 +193,54 @@ impl PyIcechunkBackend {
 
             let backend =
                 IcechunkBackendAsync::from_session(session, root_clone);
+            let backend =
+                to_fully_cached_icechunk_async(
+                    backend,
+                )?;
+
+            Python::attach(|py| {
+                let py_backend =
+                    PyIcechunkBackend {
+                        inner: Arc::new(backend),
+                    };
+                Ok(Py::new(py, py_backend)?
+                    .into_any())
+            })
+        })
+    }
+
+    /// Create a backend from an Icechunk session.
+    ///
+    /// # Arguments
+    /// * `session` - A PySession (use Session.from_bytes() to create one)
+    /// * `root` - Optional root path within the store (default: "/")
+    ///
+    /// # Example
+    /// ```python
+    /// # From serialized bytes (e.g., passed from another process)
+    /// session = Session.from_bytes(session_bytes)
+    /// backend = await IcechunkBackend.from_session(session)
+    /// ```
+    #[staticmethod]
+    #[pyo3(signature = (session, root=None))]
+    fn from_session<'py>(
+        py: Python<'py>,
+        session: PyRef<'py, PySession>,
+        root: Option<String>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let root_clone = root.clone();
+
+        // Clone the session from the PySession wrapper
+        let inner_session = session.inner.read().map_err(|e| {
+            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
+                "Failed to read session: {}",
+                e
+            ))
+        })?.clone();
+
+        future_into_py(py, async move {
+            let backend =
+                IcechunkBackendAsync::from_session(inner_session, root_clone);
             let backend =
                 to_fully_cached_icechunk_async(
                     backend,

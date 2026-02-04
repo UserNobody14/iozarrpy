@@ -370,6 +370,309 @@ class TestIcechunkCaching:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Session Serialization Tests (icechunk-python -> rainbear via bytes)
+# ---------------------------------------------------------------------------
+
+
+def _get_session_bytes(icechunk_session) -> bytes:
+    """Extract session bytes from an icechunk-python Session.
+
+    The icechunk-python Session class wraps an internal PySession that has
+    as_bytes()/from_bytes() methods. This helper accesses the internal API.
+    """
+    # Access the internal PySession's as_bytes method
+    return icechunk_session._session.as_bytes()
+
+
+class TestSessionSerialization:
+    """Tests for passing sessions from icechunk-python to rainbear via bytes.
+
+    These tests verify that:
+    1. Sessions can be serialized to bytes from icechunk-python
+    2. Those bytes can be deserialized by rainbear's Session.from_bytes()
+    3. Backends created from serialized sessions produce identical results
+       to backends created directly from the filesystem
+
+    Note: icechunk-python's public Session class doesn't expose as_bytes() directly,
+    so we access the internal _session.as_bytes() for serialization.
+    """
+
+    async def test_session_from_bytes_basic(
+        self,
+        icechunk_datasets: dict[str, IcechunkDatasetInfo],
+    ) -> None:
+        """Test basic session serialization round-trip."""
+        from icechunk import Repository, local_filesystem_storage
+
+        info = icechunk_datasets["icechunk_orography"]
+
+        # Get session from icechunk-python
+        storage = local_filesystem_storage(info.path)
+        repo = Repository.open(storage)
+        icechunk_session = repo.readonly_session("main")
+
+        # Serialize to bytes (via internal API)
+        session_bytes = _get_session_bytes(icechunk_session)
+        assert isinstance(session_bytes, bytes)
+        assert len(session_bytes) > 0
+
+        # Deserialize via rainbear
+        rainbear_session = rainbear.Session.from_bytes(session_bytes)
+        assert rainbear_session is not None
+
+        # Verify properties match
+        assert rainbear_session.read_only == icechunk_session.read_only
+        assert rainbear_session.snapshot_id == icechunk_session.snapshot_id
+
+    async def test_session_properties(
+        self,
+        icechunk_datasets: dict[str, IcechunkDatasetInfo],
+    ) -> None:
+        """Test that session properties are correctly exposed."""
+        from icechunk import Repository, local_filesystem_storage
+
+        info = icechunk_datasets["icechunk_orography"]
+
+        # Get session from icechunk-python
+        storage = local_filesystem_storage(info.path)
+        repo = Repository.open(storage)
+        icechunk_session = repo.readonly_session("main")
+
+        # Round-trip through bytes
+        session_bytes = _get_session_bytes(icechunk_session)
+        rainbear_session = rainbear.Session.from_bytes(session_bytes)
+
+        # Check properties
+        assert rainbear_session.read_only is True
+        # Note: branch may be None for readonly sessions (icechunk behavior)
+        assert rainbear_session.branch is None or rainbear_session.branch == "main"
+        assert len(rainbear_session.snapshot_id) > 0
+
+        # Check repr
+        repr_str = repr(rainbear_session)
+        assert "Session" in repr_str
+        assert "snapshot_id" in repr_str
+
+    async def test_backend_from_session_basic(
+        self,
+        icechunk_datasets: dict[str, IcechunkDatasetInfo],
+    ) -> None:
+        """Test creating backend from a serialized session."""
+        from icechunk import Repository, local_filesystem_storage
+
+        info = icechunk_datasets["icechunk_orography"]
+
+        # Get session from icechunk-python and serialize
+        storage = local_filesystem_storage(info.path)
+        repo = Repository.open(storage)
+        icechunk_session = repo.readonly_session("main")
+        session_bytes = _get_session_bytes(icechunk_session)
+
+        # Create backend via rainbear
+        rainbear_session = rainbear.Session.from_bytes(session_bytes)
+        backend = await rainbear.IcechunkBackend.from_session(rainbear_session)
+
+        # Verify backend works
+        assert backend is not None
+        schema = backend.schema()
+        assert len(schema) > 0
+
+    async def test_session_scan_equivalence(
+        self,
+        icechunk_datasets: dict[str, IcechunkDatasetInfo],
+    ) -> None:
+        """Test that scans from session-based backend match filesystem-based backend."""
+        from icechunk import Repository, local_filesystem_storage
+
+        info = icechunk_datasets["icechunk_orography"]
+
+        # Backend from filesystem (reference)
+        backend_fs = await rainbear.IcechunkBackend.from_filesystem(info.path)
+
+        # Backend from serialized session
+        storage = local_filesystem_storage(info.path)
+        repo = Repository.open(storage)
+        icechunk_session = repo.readonly_session("main")
+        session_bytes = _get_session_bytes(icechunk_session)
+        rainbear_session = rainbear.Session.from_bytes(session_bytes)
+        backend_session = await rainbear.IcechunkBackend.from_session(rainbear_session)
+
+        # Scan with same predicate
+        pred = pl.lit(True)
+        df_fs = await backend_fs.scan_zarr_async(pred)
+        df_session = await backend_session.scan_zarr_async(pred)
+
+        # Results should be identical
+        assert _normalize(df_fs) == _normalize(df_session)
+
+    async def test_session_scan_with_predicate_equivalence(
+        self,
+        icechunk_datasets: dict[str, IcechunkDatasetInfo],
+    ) -> None:
+        """Test predicate-filtered scans produce same results from both backends."""
+        from icechunk import Repository, local_filesystem_storage
+
+        info = icechunk_datasets["icechunk_orography"]
+
+        # Backend from filesystem
+        backend_fs = await rainbear.IcechunkBackend.from_filesystem(info.path)
+
+        # Backend from session
+        storage = local_filesystem_storage(info.path)
+        repo = Repository.open(storage)
+        icechunk_session = repo.readonly_session("main")
+        rainbear_session = rainbear.Session.from_bytes(
+            _get_session_bytes(icechunk_session)
+        )
+        backend_session = await rainbear.IcechunkBackend.from_session(rainbear_session)
+
+        # Scan with filtering predicate
+        pred = (pl.col("y") >= 3) & (pl.col("y") <= 10)
+        df_fs = await backend_fs.scan_zarr_async(pred)
+        df_session = await backend_session.scan_zarr_async(pred)
+
+        # Apply filter and compare
+        df_fs_filtered = df_fs.filter(pred)
+        df_session_filtered = df_session.filter(pred)
+
+        assert _normalize(df_fs_filtered) == _normalize(df_session_filtered)
+
+    async def test_session_selected_chunks_equivalence(
+        self,
+        icechunk_datasets: dict[str, IcechunkDatasetInfo],
+    ) -> None:
+        """Test that chunk selection produces same results from both backends."""
+        from icechunk import Repository, local_filesystem_storage
+
+        info = icechunk_datasets["icechunk_comprehensive_3d"]
+
+        # Backend from filesystem
+        backend_fs = await rainbear.IcechunkBackend.from_filesystem(info.path)
+
+        # Backend from session
+        storage = local_filesystem_storage(info.path)
+        repo = Repository.open(storage)
+        icechunk_session = repo.readonly_session("main")
+        rainbear_session = rainbear.Session.from_bytes(
+            _get_session_bytes(icechunk_session)
+        )
+        backend_session = await rainbear.IcechunkBackend.from_session(rainbear_session)
+
+        # Compare chunk selection
+        pred = pl.col("a") < 20
+        debug_fs = backend_fs.selected_chunks_debug(pred)
+        debug_session = backend_session.selected_chunks_debug(pred)
+
+        # Should select same number of grids and chunks
+        assert len(debug_fs["grids"]) == len(debug_session["grids"])
+
+        # Compare chunk counts per grid
+        for grid_fs, grid_session in zip(debug_fs["grids"], debug_session["grids"]):
+            assert len(grid_fs["chunks"]) == len(grid_session["chunks"])
+
+    async def test_session_schema_equivalence(
+        self,
+        icechunk_datasets: dict[str, IcechunkDatasetInfo],
+    ) -> None:
+        """Test that schema retrieval matches between backends."""
+        from icechunk import Repository, local_filesystem_storage
+
+        info = icechunk_datasets["icechunk_multi_var"]
+
+        # Backend from filesystem
+        backend_fs = await rainbear.IcechunkBackend.from_filesystem(info.path)
+
+        # Backend from session
+        storage = local_filesystem_storage(info.path)
+        repo = Repository.open(storage)
+        icechunk_session = repo.readonly_session("main")
+        rainbear_session = rainbear.Session.from_bytes(
+            _get_session_bytes(icechunk_session)
+        )
+        backend_session = await rainbear.IcechunkBackend.from_session(rainbear_session)
+
+        # Compare schemas
+        schema_fs = backend_fs.schema()
+        schema_session = backend_session.schema()
+
+        assert schema_fs == schema_session
+
+    async def test_session_multi_var_scan_equivalence(
+        self,
+        icechunk_datasets: dict[str, IcechunkDatasetInfo],
+    ) -> None:
+        """Test multi-variable scans produce same results from both backends."""
+        from icechunk import Repository, local_filesystem_storage
+
+        info = icechunk_datasets["icechunk_multi_var"]
+
+        # Backend from filesystem
+        backend_fs = await rainbear.IcechunkBackend.from_filesystem(info.path)
+
+        # Backend from session
+        storage = local_filesystem_storage(info.path)
+        repo = Repository.open(storage)
+        icechunk_session = repo.readonly_session("main")
+        rainbear_session = rainbear.Session.from_bytes(
+            _get_session_bytes(icechunk_session)
+        )
+        backend_session = await rainbear.IcechunkBackend.from_session(rainbear_session)
+
+        # Scan specific variables with predicate on dimension coords
+        # (dimension coords are always available even when selecting specific variables)
+        pred = (pl.col("a") < 30) & (pl.col("b") < 25)
+        vars_to_read = ["temp", "precip"]
+        # Include dimension coords in with_columns for filtering
+        cols_to_read = ["a", "b", "c", "temp", "precip"]
+
+        df_fs = await backend_fs.scan_zarr_async(pred, with_columns=cols_to_read)
+        df_session = await backend_session.scan_zarr_async(pred, with_columns=cols_to_read)
+
+        # Filter and compare
+        df_fs_filtered = df_fs.filter(pred)
+        df_session_filtered = df_session.filter(pred)
+
+        assert _normalize(df_fs_filtered) == _normalize(df_session_filtered)
+
+    async def test_session_roundtrip_rainbear_to_rainbear(
+        self,
+        icechunk_datasets: dict[str, IcechunkDatasetInfo],
+    ) -> None:
+        """Test that rainbear Session can be serialized and deserialized."""
+        from icechunk import Repository, local_filesystem_storage
+
+        info = icechunk_datasets["icechunk_orography"]
+
+        # Create initial session via icechunk-python
+        storage = local_filesystem_storage(info.path)
+        repo = Repository.open(storage)
+        icechunk_session = repo.readonly_session("main")
+
+        # Create rainbear session
+        session1 = rainbear.Session.from_bytes(_get_session_bytes(icechunk_session))
+
+        # Serialize rainbear session back to bytes
+        bytes1 = session1.as_bytes()
+
+        # Deserialize again
+        session2 = rainbear.Session.from_bytes(bytes1)
+
+        # Verify properties match
+        assert session1.snapshot_id == session2.snapshot_id
+        assert session1.branch == session2.branch
+        assert session1.read_only == session2.read_only
+
+        # Create backends from both and verify they produce same results
+        backend1 = await rainbear.IcechunkBackend.from_session(session1)
+        backend2 = await rainbear.IcechunkBackend.from_session(session2)
+
+        df1 = await backend1.scan_zarr_async(pl.lit(True))
+        df2 = await backend2.scan_zarr_async(pl.lit(True))
+
+        assert _normalize(df1) == _normalize(df2)
+
+
 class TestIcechunkZarrEquivalence:
     """Tests comparing IcechunkBackend results with ZarrBackend.
 
