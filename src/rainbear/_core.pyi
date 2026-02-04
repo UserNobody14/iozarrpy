@@ -411,25 +411,33 @@ class IcechunkBackend:
     
     @staticmethod
     def from_session(
-        session: Session,
+        session: Any,  # icechunk.Session, rainbear.Session, or bytes
         root: str | None = None,
     ) -> Any:
         """Create a backend from an Icechunk Session.
         
-        Useful for passing sessions between processes or using sessions
-        created from icechunk-python directly.
+        Accepts icechunk-python Session objects directly, no manual
+        serialization required.
         
         Args:
-            session: A Session (use Session.from_bytes() to create one)
+            session: An icechunk Session (from icechunk-python), rainbear Session,
+                     or raw serialized bytes
             root: Optional root path within the store (default: "/")
         
         Returns:
             An awaitable that resolves to an IcechunkBackend
         
         Examples:
-            >>> # From serialized bytes (e.g., passed from another process)
-            >>> session = Session.from_bytes(session_bytes)
-            >>> backend = await IcechunkBackend.from_session(session)
+            >>> from icechunk import Repository, local_filesystem_storage
+            >>> import rainbear
+            >>>
+            >>> # Get session from icechunk-python
+            >>> storage = local_filesystem_storage("/path/to/repo")
+            >>> repo = Repository.open(storage)
+            >>> session = repo.readonly_session("main")
+            >>>
+            >>> # Directly create backend - no bytes conversion needed!
+            >>> backend = await rainbear.IcechunkBackend.from_session(session)
         """
         ...
     

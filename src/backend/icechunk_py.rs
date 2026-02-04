@@ -33,6 +33,84 @@ use crate::{IStr, IntoIStr};
 
 use std::sync::RwLock;
 
+/// Extract session bytes from a Python session object.
+///
+/// Supports:
+/// - icechunk-python Session: extracts via `._session.as_bytes()`
+/// - rainbear PySession: extracts via `.as_bytes()`
+/// - Raw bytes: uses directly
+fn extract_session_bytes(
+    session: &Bound<'_, PyAny>,
+) -> PyResult<Vec<u8>> {
+    // Try 1: Check if it's raw bytes
+    if let Ok(bytes) =
+        session.extract::<Vec<u8>>()
+    {
+        return Ok(bytes);
+    }
+
+    // Try 2: Check if it's our own PySession (has .as_bytes() method directly)
+    if let Ok(py_session) =
+        session.downcast::<PySession>()
+    {
+        let inner = py_session.borrow();
+        let session_guard = inner.inner.read().map_err(|e| {
+            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
+                "Failed to read session: {}",
+                e
+            ))
+        })?;
+        return session_guard.as_bytes().map_err(|e| {
+            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
+                "Failed to serialize session: {}",
+                e
+            ))
+        });
+    }
+
+    // Try 3: icechunk-python Session - access `._session.as_bytes()`
+    if let Ok(inner_session) =
+        session.getattr("_session")
+    {
+        if let Ok(as_bytes_method) =
+            inner_session.getattr("as_bytes")
+        {
+            if let Ok(bytes_obj) =
+                as_bytes_method.call0()
+            {
+                if let Ok(bytes) =
+                    bytes_obj.extract::<Vec<u8>>()
+                {
+                    return Ok(bytes);
+                }
+            }
+        }
+    }
+
+    // Try 4: Object has .as_bytes() method directly (e.g., PySession from icechunk internal)
+    if let Ok(as_bytes_method) =
+        session.getattr("as_bytes")
+    {
+        if let Ok(bytes_obj) =
+            as_bytes_method.call0()
+        {
+            if let Ok(bytes) =
+                bytes_obj.extract::<Vec<u8>>()
+            {
+                return Ok(bytes);
+            }
+        }
+    }
+
+    Err(PyErr::new::<
+        pyo3::exceptions::PyTypeError,
+        _,
+    >(
+        "Expected an icechunk Session, rainbear Session, or bytes. \
+         Could not extract session bytes from the provided object.",
+    ))
+}
+
 /// Python-exposed wrapper for an Icechunk Session.
 ///
 /// Sessions can be serialized to bytes and passed between processes.
@@ -211,32 +289,48 @@ impl PyIcechunkBackend {
 
     /// Create a backend from an Icechunk session.
     ///
+    /// Accepts either:
+    /// - An icechunk-python Session object directly
+    /// - A rainbear Session object  
+    /// - Raw bytes from session serialization
+    ///
     /// # Arguments
-    /// * `session` - A PySession (use Session.from_bytes() to create one)
+    /// * `session` - An icechunk Session object (from icechunk-python or rainbear)
     /// * `root` - Optional root path within the store (default: "/")
     ///
     /// # Example
     /// ```python
-    /// # From serialized bytes (e.g., passed from another process)
-    /// session = Session.from_bytes(session_bytes)
-    /// backend = await IcechunkBackend.from_session(session)
+    /// from icechunk import Repository, local_filesystem_storage
+    /// import rainbear
+    ///
+    /// # Get session from icechunk-python
+    /// storage = local_filesystem_storage("/path/to/repo")
+    /// repo = Repository.open(storage)
+    /// session = repo.readonly_session("main")
+    ///
+    /// # Directly create backend from icechunk-python session
+    /// backend = await rainbear.IcechunkBackend.from_session(session)
     /// ```
     #[staticmethod]
     #[pyo3(signature = (session, root=None))]
     fn from_session<'py>(
         py: Python<'py>,
-        session: PyRef<'py, PySession>,
+        session: &Bound<'py, PyAny>,
         root: Option<String>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let root_clone = root.clone();
 
-        // Clone the session from the PySession wrapper
-        let inner_session = session.inner.read().map_err(|e| {
+        // Extract session bytes from the Python object
+        let session_bytes =
+            extract_session_bytes(session)?;
+
+        // Deserialize to Rust Session
+        let inner_session = Session::from_bytes(session_bytes).map_err(|e| {
             PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
-                "Failed to read session: {}",
+                "Failed to deserialize session: {}",
                 e
             ))
-        })?.clone();
+        })?;
 
         future_into_py(py, async move {
             let backend =
