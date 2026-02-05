@@ -14,6 +14,11 @@ pub(crate) fn collect_column_refs(
     out: &mut Vec<IStr>,
 ) {
     match expr {
+        Expr::AnonymousAgg { .. } => {
+            panic!(
+                "AnonymousAgg is not supported"
+            );
+        }
         Expr::Column(name) => {
             out.push(name.istr())
         }

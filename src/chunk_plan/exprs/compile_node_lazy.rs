@@ -40,6 +40,9 @@ pub(crate) fn compile_node_lazy(
     let expr: &Expr =
         std::borrow::Borrow::borrow(&expr);
     match expr {
+        Expr::AnonymousAgg { .. } => {
+            panic!("AnonymousAgg is not supported");
+        }
         Expr::Alias(inner, _) => {
             compile_node_lazy(inner.as_ref(), ctx)
         }
