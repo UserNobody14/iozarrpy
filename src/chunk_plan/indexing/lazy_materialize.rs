@@ -225,9 +225,11 @@ fn materialize_rectangle(
     // Each element in current_subsets is a vec of ranges, one per dimension
     let mut current_subsets: Vec<
         Vec<Range<u64>>,
-    > = vec![(0..dims.len())
-        .map(|i| 0..shape[i])
-        .collect()];
+    > = vec![
+        (0..dims.len())
+            .map(|i| 0..shape[i])
+            .collect(),
+    ];
 
     for (dim, constraint) in rect.dims() {
         let dim_idx_option =

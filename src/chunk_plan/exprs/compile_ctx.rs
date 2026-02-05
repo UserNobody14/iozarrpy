@@ -1,8 +1,8 @@
 //! Compilation context for lazy chunk planning.
 
+use crate::IStr;
 use crate::chunk_plan::prelude::ZarrDatasetMeta;
 use crate::meta::ZarrMeta;
-use crate::IStr;
 
 /// Compilation context for the lazy compilation path.
 ///

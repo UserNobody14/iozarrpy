@@ -11,7 +11,7 @@ use zarrs::storage::{
 
 /// Backend handler for (non-icechunk) zarr datasets
 ///
-use crate::backend::traits::{
+use super::traits::{
     BackendError, ChunkedDataBackendAsync,
     ChunkedDataBackendSync,
     ChunkedDataCacheAsync, ChunkedDataCacheSync,

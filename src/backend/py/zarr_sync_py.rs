@@ -12,16 +12,16 @@ use pyo3_async_runtimes::tokio::future_into_py;
 use pyo3_polars::{PyDataFrame, PySchema};
 
 use crate::IntoIStr;
-use crate::backend::lazy::scan_zarr_with_backend_sync;
-use crate::backend::traits::{
+use crate::backend::implementation::scan_zarr_with_backend_sync;
+use crate::py::expr_extract::extract_expr;
+use crate::shared::{
     EvictableChunkCacheSync,
     HasMetadataBackendSync,
 };
-use crate::backend::zarr::{
+use crate::shared::{
     FullyCachedZarrBackendSync, ZarrBackendSync,
     to_fully_cached_sync,
 };
-use crate::py::expr_extract::extract_expr;
 use crate::store::StoreInput;
 
 /// Python-exposed Zarr backend with caching and scan methods.

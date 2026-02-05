@@ -1,0 +1,39 @@
+mod compile;
+mod structural;
+mod traits;
+mod zarr;
+
+// Re-export commonly used traits
+pub(crate) use traits::{
+    BackendError, ChunkDataSourceAsync,
+    ChunkDataSourceSync, ChunkedDataBackendAsync,
+    ChunkedDataBackendSync,
+    ChunkedDataCacheAsync, ChunkedDataCacheSync,
+    EvictableChunkCacheAsync,
+    EvictableChunkCacheSync, HasAsyncStore,
+    HasMetadataBackendAsync,
+    HasMetadataBackendCacheAsync,
+    HasMetadataBackendCacheSync,
+    HasMetadataBackendSync,
+};
+
+// Re-export compile traits
+pub(crate) use compile::{
+    ChunkedExpressionCompilerAsync,
+    ChunkedExpressionCompilerSync,
+};
+
+// Re-export zarr traits
+pub(crate) use zarr::{
+    FullyCachedZarrBackendAsync,
+    FullyCachedZarrBackendSync, ZarrBackendAsync,
+    ZarrBackendSync, to_fully_cached_async,
+    to_fully_cached_sync,
+};
+
+// Re-export structural traits
+pub(crate) use structural::{
+    combine_chunk_dataframes,
+    expand_projection_to_flat_paths,
+    restructure_to_structs,
+};

@@ -7,8 +7,8 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use crate::meta::ZarrDatasetMeta;
 use crate::IStr;
+use crate::meta::ZarrDatasetMeta;
 
 use super::selection::{
     Emptyable, SetOperations,

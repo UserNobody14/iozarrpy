@@ -17,7 +17,7 @@ use crate::chunk_plan::CompileError;
 use crate::chunk_plan::indexing::selection::ArraySubsetList;
 
 use crate::IntoIStr;
-use crate::meta::{ZarrDatasetMeta, ZarrMeta};
+use crate::meta::ZarrMeta;
 
 /// Create an ArraySubsetList that covers the entire array shape.
 fn all_chunks_subset(
@@ -83,113 +83,6 @@ pub(crate) fn selection_to_grouped_chunk_plan_unified(
             store.clone(),
             var_meta.path.as_ref(),
         )
-        .map_err(|e| {
-            CompileError::Unsupported(format!(
-                "failed to open array '{var}': {e}"
-            ))
-        })?;
-
-        // Use inner_chunk_grid which gives inner chunks for sharded arrays,
-        // or regular chunks for non-sharded arrays
-        let inner_grid = arr.inner_chunk_grid();
-
-        let zero =
-            vec![0u64; arr.dimensionality()];
-        let chunk_shape_opt = inner_grid
-            .chunk_shape_u64(&zero)
-            .map_err(|e| {
-                CompileError::Unsupported(
-                    e.to_string(),
-                )
-            })?
-            .ok_or_else(|| {
-                CompileError::Unsupported(
-                    "could not determine chunk shape".to_string(),
-                )
-            })?;
-        let chunk_shape: SmallVec<[u64; 4]> =
-            chunk_shape_opt.into_iter().collect();
-
-        let sig = ChunkGridSignature::new(
-            var_meta.dims.clone(),
-            chunk_shape,
-        );
-        let sig_arc = sig_cache
-            .entry(sig.clone())
-            .or_insert_with(|| Arc::new(sig))
-            .clone();
-
-        // When maybe_sel is None, we select ALL chunks (conservative fallback)
-        let chunk_plan =
-            if let Some(sel) = maybe_sel {
-                sel.clone().into()
-            } else {
-                all_chunks_subset(arr.shape())
-            };
-
-        grouped_plan.insert(
-            var_key,
-            sig_arc,
-            chunk_plan,
-            Arc::new(inner_grid),
-        );
-    }
-
-    Ok(grouped_plan)
-}
-
-/// Async version: Convert a DatasetSelection to a GroupedChunkPlan (unified ZarrMeta).
-pub(crate) async fn selection_to_grouped_chunk_plan_unified_async(
-    selection: &DatasetSelection,
-    meta: &ZarrMeta,
-    store: zarrs::storage::AsyncReadableWritableListableStorage,
-) -> Result<GroupedChunkPlan, CompileError> {
-    let mut grouped_plan =
-        GroupedChunkPlan::new();
-
-    let mut sig_cache: BTreeMap<
-        ChunkGridSignature,
-        Arc<ChunkGridSignature>,
-    > = BTreeMap::new();
-
-    let all_vars;
-    let vars_to_process: Vec<(
-        &str,
-        Option<
-            &super::selection::DataArraySelection,
-        >,
-    )> = match selection {
-        DatasetSelection::NoSelectionMade => {
-            all_vars = meta.all_data_var_paths();
-            all_vars
-                .iter()
-                .map(|v| (v.as_ref(), None))
-                .collect()
-        }
-        DatasetSelection::Empty => {
-            return Ok(grouped_plan);
-        }
-        DatasetSelection::Selection(
-            grouped_sel,
-        ) => grouped_sel
-            .vars()
-            .map(|(v, sel)| (v, Some(sel)))
-            .collect(),
-    };
-
-    for (var, maybe_sel) in vars_to_process {
-        let var_key = var.istr();
-        let Some(var_meta) =
-            meta.array_by_path(var)
-        else {
-            continue;
-        };
-
-        let arr = zarrs::array::Array::async_open(
-            store.clone(),
-            var_meta.path.as_ref(),
-        )
-        .await
         .map_err(|e| {
             CompileError::Unsupported(format!(
                 "failed to open array '{var}': {e}"

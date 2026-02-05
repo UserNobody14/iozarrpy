@@ -17,7 +17,7 @@ use zarrs::storage::{
 use zarrs_icechunk::AsyncIcechunkStore;
 
 use crate::IStr;
-use crate::backend::traits::{
+use crate::shared::{
     BackendError, ChunkedDataBackendAsync,
     ChunkedDataCacheAsync, HasAsyncStore,
     HasMetadataBackendAsync,

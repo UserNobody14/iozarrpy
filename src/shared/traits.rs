@@ -21,14 +21,6 @@ use crate::IStr;
 use crate::chunk_plan::CompileError;
 use crate::reader::ColumnData;
 
-/// Raw scalar value from a coordinate chunk (before time encoding).
-#[derive(Debug, Clone, Copy)]
-pub enum CoordScalarRaw {
-    F64(f64),
-    I64(i64),
-    U64(u64),
-}
-
 /// Error type for backend operations.
 #[derive(Debug, Clone)]
 pub enum BackendError {

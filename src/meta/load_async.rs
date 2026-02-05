@@ -1,6 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use smallvec::SmallVec;
 use zarrs::array::Array;
 use zarrs::array::ArrayShardedExt;
 use zarrs::hierarchy::NodeMetadata;
@@ -12,226 +11,11 @@ use crate::meta::dims::{
 use crate::meta::dtype::zarr_dtype_to_polars;
 use crate::meta::time_encoding::extract_time_encoding;
 use crate::meta::types::{
-    DimensionAnalysis, ZarrArrayMeta,
-    ZarrDatasetMeta, ZarrMeta, ZarrNode,
+    DimensionAnalysis, ZarrArrayMeta, ZarrMeta,
+    ZarrNode,
 };
-use crate::store::{
-    AsyncOpenedStore, StoreInput,
-    open_store_async,
-};
+use crate::store::AsyncOpenedStore;
 use crate::{IStr, IntoIStr};
-
-pub async fn open_and_load_dataset_meta_async(
-    zarr_url: &str,
-) -> Result<
-    (AsyncOpenedStore, ZarrDatasetMeta),
-    String,
-> {
-    let opened = open_store_async(zarr_url)?;
-    let meta =
-        load_dataset_meta_from_opened_async(
-            &opened,
-        )
-        .await?;
-    Ok((opened, meta))
-}
-
-/// Open and load dataset metadata from a StoreInput (URL string or ObjectStore instance).
-pub async fn open_and_load_dataset_meta_from_input_async(
-    store_input: StoreInput,
-) -> Result<
-    (AsyncOpenedStore, ZarrDatasetMeta),
-    String,
-> {
-    let opened = store_input.open_async()?;
-    let meta =
-        load_dataset_meta_from_opened_async(
-            &opened,
-        )
-        .await?;
-    Ok((opened, meta))
-}
-
-pub async fn load_dataset_meta_from_opened_async(
-    opened: &AsyncOpenedStore,
-) -> Result<ZarrDatasetMeta, String> {
-    let store = opened.store.clone();
-    let root = opened.root.clone();
-
-    let group = zarrs::group::Group::async_open(
-        store.clone(),
-        &root,
-    )
-    .await
-    .map_err(to_string_err)?;
-    let nodes = group
-        .async_traverse()
-        .await
-        .map_err(to_string_err)?;
-
-    let mut arrays: BTreeMap<
-        IStr,
-        ZarrArrayMeta,
-    > = BTreeMap::new();
-    let mut seen_names: BTreeMap<IStr, usize> =
-        BTreeMap::new();
-    let mut dims_seen: BTreeSet<IStr> =
-        BTreeSet::new();
-    let mut dims_ordered: Vec<IStr> = Vec::new();
-    let mut coord_candidates: BTreeMap<
-        IStr,
-        (Vec<u64>, _),
-    > = BTreeMap::new();
-    let mut primary_dims: Option<
-        SmallVec<[IStr; 4]>,
-    > = None;
-    let mut max_ndim = 0usize;
-    // Collect auxiliary coordinates from "coordinates" attribute (CF convention)
-    let mut aux_coords: BTreeSet<IStr> =
-        BTreeSet::new();
-
-    for (path, md) in nodes {
-        let NodeMetadata::Array(array_md) = md
-        else {
-            continue;
-        };
-
-        let path_str = path.as_str().istr();
-        let leaf = leaf_name(path_str.as_ref());
-
-        let array = Array::new_with_metadata(
-            store.clone(),
-            path_str.as_ref(),
-            array_md.clone(),
-        )
-        .map_err(to_string_err)?;
-
-        let shape: std::sync::Arc<[u64]> =
-            array.shape().into();
-        let dims = dims_for_array(&array)
-            .unwrap_or_else(|| {
-                default_dims(shape.len())
-            });
-
-        for d in &dims {
-            if dims_seen.insert(d.clone()) {
-                dims_ordered.push(d.clone());
-            }
-        }
-        if dims.len() > max_ndim {
-            max_ndim = dims.len();
-            primary_dims = Some(dims.clone());
-        }
-
-        let time_encoding =
-            extract_time_encoding(&array);
-
-        if shape.len() == 1
-            && dims.len() == 1
-            && leaf == dims[0]
-        {
-            let dt = zarr_dtype_to_polars(
-                array.data_type().identifier(),
-                time_encoding.as_ref(),
-            );
-            coord_candidates.insert(
-                leaf.clone(),
-                (shape.to_vec(), dt),
-            );
-        }
-
-        // Parse "coordinates" attribute (CF convention) to identify auxiliary coords
-        if let Some(attrs) =
-            array.attributes().get("coordinates")
-            && let Some(coord_str) =
-                attrs.as_str()
-        {
-            for coord_name in
-                coord_str.split_whitespace()
-            {
-                aux_coords
-                    .insert(coord_name.istr());
-            }
-        }
-
-        let polars_dtype = zarr_dtype_to_polars(
-            array.data_type().identifier(),
-            time_encoding.as_ref(),
-        );
-
-        // Extract inner chunk shape (for sharded arrays) or regular chunk shape
-        let zero_idx: Vec<u64> =
-            vec![0u64; array.dimensionality()];
-        let inner_grid = array.inner_chunk_grid();
-        let chunk_shape: std::sync::Arc<[u64]> =
-            inner_grid
-                .chunk_shape_u64(&zero_idx)
-                .ok()
-                .flatten()
-                .map(|cs| cs.into())
-                .unwrap_or_else(|| shape.clone());
-
-        let name = match seen_names.get_mut(&leaf)
-        {
-            None => {
-                seen_names
-                    .insert(leaf.clone(), 1);
-                leaf.clone()
-            }
-            Some(n) => {
-                *n += 1;
-                format!("{leaf}__{n}").istr()
-            }
-        };
-
-        arrays.insert(
-            name.clone(),
-            ZarrArrayMeta {
-                path: path_str,
-                shape,
-                chunk_shape,
-                dims,
-                polars_dtype,
-                time_encoding,
-            },
-        );
-    }
-
-    let dims: Vec<IStr> = primary_dims
-        .map(|pd| pd.into_iter().collect())
-        .unwrap_or(dims_ordered);
-
-    // Collect dimension coordinate arrays (1D arrays matching their dimension name)
-    let mut coords: BTreeSet<IStr> =
-        BTreeSet::new();
-    for dim in &dims {
-        if let Some((shape, _dtype)) =
-            coord_candidates.get(dim)
-            && shape.len() == 1
-        {
-            coords.insert(dim.clone());
-        }
-    }
-
-    // Add auxiliary coordinates (only those that exist as arrays)
-    for aux in &aux_coords {
-        if arrays.contains_key(aux) {
-            coords.insert(aux.clone());
-        }
-    }
-
-    let data_vars: Vec<IStr> = arrays
-        .keys()
-        .filter(|k| !coords.contains(*k))
-        .cloned()
-        .collect();
-
-    Ok(ZarrDatasetMeta {
-        arrays,
-        dims,
-        data_vars,
-    })
-}
 
 // =============================================================================
 // Unified Hierarchical Metadata Loading
@@ -524,30 +308,6 @@ fn build_node_tree(
     node
 }
 
-/// Open and load unified metadata (async).
-pub async fn open_and_load_zarr_meta_async(
-    zarr_url: &str,
-) -> Result<(AsyncOpenedStore, ZarrMeta), String>
-{
-    let opened = open_store_async(zarr_url)?;
-    let meta =
-        load_zarr_meta_from_opened_async(&opened)
-            .await?;
-    Ok((opened, meta))
-}
-
-/// Open and load unified metadata from a StoreInput (async).
-pub async fn open_and_load_zarr_meta_from_input_async(
-    store_input: StoreInput,
-) -> Result<(AsyncOpenedStore, ZarrMeta), String>
-{
-    let opened = store_input.open_async()?;
-    let meta =
-        load_zarr_meta_from_opened_async(&opened)
-            .await?;
-    Ok((opened, meta))
-}
-
 fn to_string_err<E: std::fmt::Display>(
     e: E,
 ) -> String {
@@ -575,16 +335,20 @@ pub async fn load_zarr_meta_from_store_async(
         .map_err(to_string_err)?;
 
     // First pass: collect all arrays and identify group structure
-    let mut all_arrays: BTreeMap<IStr, ZarrArrayMeta> =
-        BTreeMap::new();
+    let mut all_arrays: BTreeMap<
+        IStr,
+        ZarrArrayMeta,
+    > = BTreeMap::new();
     let mut group_arrays: BTreeMap<
         IStr,
         Vec<(IStr, ZarrArrayMeta)>,
     > = BTreeMap::new();
-    let mut aux_coords: BTreeSet<IStr> = BTreeSet::new();
+    let mut aux_coords: BTreeSet<IStr> =
+        BTreeSet::new();
 
     for (path, md) in nodes {
-        let NodeMetadata::Array(array_md) = md else {
+        let NodeMetadata::Array(array_md) = md
+        else {
             continue;
         };
 
@@ -592,7 +356,8 @@ pub async fn load_zarr_meta_from_store_async(
         let rel_path = if root_path != "/"
             && path_str.starts_with(root_path)
         {
-            let stripped = &path_str[root_path.len()..];
+            let stripped =
+                &path_str[root_path.len()..];
             if stripped.is_empty() {
                 "/"
             } else {
@@ -604,7 +369,8 @@ pub async fn load_zarr_meta_from_store_async(
         let leaf = leaf_name(rel_path);
 
         // Determine the parent group path
-        let parent_path = parent_group_path(rel_path);
+        let parent_path =
+            parent_group_path(rel_path);
 
         let array = Array::new_with_metadata(
             store.clone(),
@@ -616,8 +382,11 @@ pub async fn load_zarr_meta_from_store_async(
         let shape: std::sync::Arc<[u64]> =
             array.shape().into();
         let dims = dims_for_array(&array)
-            .unwrap_or_else(|| default_dims(shape.len()));
-        let time_encoding = extract_time_encoding(&array);
+            .unwrap_or_else(|| {
+                default_dims(shape.len())
+            });
+        let time_encoding =
+            extract_time_encoding(&array);
         let polars_dtype = zarr_dtype_to_polars(
             array.data_type().identifier(),
             time_encoding.as_ref(),
@@ -627,18 +396,27 @@ pub async fn load_zarr_meta_from_store_async(
         let zero_idx: Vec<u64> =
             vec![0u64; array.dimensionality()];
         let inner_grid = array.inner_chunk_grid();
-        let chunk_shape: std::sync::Arc<[u64]> = inner_grid
-            .chunk_shape_u64(&zero_idx)
-            .ok()
-            .flatten()
-            .map(|cs| cs.into())
-            .unwrap_or_else(|| shape.clone());
+        let chunk_shape: std::sync::Arc<[u64]> =
+            inner_grid
+                .chunk_shape_u64(&zero_idx)
+                .ok()
+                .flatten()
+                .map(|cs| cs.into())
+                .unwrap_or_else(|| shape.clone());
 
         // Parse "coordinates" attribute (CF convention) to identify auxiliary coords
-        if let Some(attrs) = array.attributes().get("coordinates") {
-            if let Some(coord_str) = attrs.as_str() {
-                for coord_name in coord_str.split_whitespace() {
-                    aux_coords.insert(coord_name.istr());
+        if let Some(attrs) =
+            array.attributes().get("coordinates")
+        {
+            if let Some(coord_str) =
+                attrs.as_str()
+            {
+                for coord_name in
+                    coord_str.split_whitespace()
+                {
+                    aux_coords.insert(
+                        coord_name.istr(),
+                    );
                 }
             }
         }
@@ -653,7 +431,10 @@ pub async fn load_zarr_meta_from_store_async(
         };
 
         // Store in both flat and grouped maps
-        all_arrays.insert(rel_path.istr(), arr_meta.clone());
+        all_arrays.insert(
+            rel_path.istr(),
+            arr_meta.clone(),
+        );
         group_arrays
             .entry(parent_path)
             .or_default()
@@ -661,29 +442,39 @@ pub async fn load_zarr_meta_from_store_async(
     }
 
     // Build the hierarchical node structure
-    let root_node =
-        build_node_tree("/".istr(), &group_arrays, &aux_coords);
+    let root_node = build_node_tree(
+        "/".istr(),
+        &group_arrays,
+        &aux_coords,
+    );
 
     // Build path_to_array map with both full paths and leaf names for root arrays
-    let mut path_to_array: BTreeMap<IStr, ZarrArrayMeta> =
-        BTreeMap::new();
+    let mut path_to_array: BTreeMap<
+        IStr,
+        ZarrArrayMeta,
+    > = BTreeMap::new();
     let root_path_check: &str = "/";
     for (path, arr) in &all_arrays {
         // Store by full path
-        path_to_array.insert(path.clone(), arr.clone());
+        path_to_array
+            .insert(path.clone(), arr.clone());
 
         // For root-level arrays, also store by leaf name
         let path_str: &str = path.as_ref();
-        let parent_istr = parent_group_path(path_str);
-        let parent_path: &str = parent_istr.as_ref();
+        let parent_istr =
+            parent_group_path(path_str);
+        let parent_path: &str =
+            parent_istr.as_ref();
         if parent_path == root_path_check {
             let leaf = leaf_name(path_str);
-            path_to_array.insert(leaf, arr.clone());
+            path_to_array
+                .insert(leaf, arr.clone());
         }
     }
 
     // Compute dimension analysis
-    let dim_analysis = DimensionAnalysis::compute(&root_node);
+    let dim_analysis =
+        DimensionAnalysis::compute(&root_node);
 
     // For flat datasets (no children), allow leaf-name lookup even if paths are nested.
     if root_node.children.is_empty() {

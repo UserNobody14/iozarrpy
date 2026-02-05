@@ -1,19 +1,8 @@
-use std::{
-    hash::{Hash, Hasher},
-    sync::Arc,
-};
+use std::hash::{Hash, Hasher};
 
 use smallvec::SmallVec;
-use zarrs::array::ChunkGrid;
 
 use crate::IStr;
-
-#[derive(Debug, Clone)]
-pub(crate) struct ChunkId {
-    pub(crate) indices: Vec<u64>,
-    pub(crate) origin: Vec<u64>,
-    pub(crate) shape: Vec<u64>,
-}
 
 /// Chunk grid signature - dimensions + chunk shape for grouping.
 ///
@@ -67,32 +56,6 @@ impl ChunkGridSignature {
     /// Get the chunk shape.
     pub fn chunk_shape(&self) -> &[u64] {
         &self.chunk_shape
-    }
-
-    /// Get the number of dimensions.
-    pub fn len(&self) -> usize {
-        self.dims.len()
-    }
-
-    /// Check if this signature has no dimensions.
-    pub fn is_empty(&self) -> bool {
-        self.dims.is_empty()
-    }
-
-    /// Check if chunk shape is set (non-empty).
-    pub fn has_chunk_shape(&self) -> bool {
-        !self.chunk_shape.is_empty()
-    }
-
-    /// Create a new signature with chunk shape set.
-    pub fn with_chunk_shape(
-        &self,
-        chunk_shape: impl Into<SmallVec<[u64; 4]>>,
-    ) -> Self {
-        Self {
-            dims: self.dims.clone(),
-            chunk_shape: chunk_shape.into(),
-        }
     }
 }
 
@@ -390,33 +353,5 @@ pub(crate) struct IndexRange {
 impl IndexRange {
     pub(crate) fn is_empty(&self) -> bool {
         self.end_exclusive <= self.start
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct DimChunkRange {
-    pub(crate) start_chunk: u64,
-    pub(crate) end_chunk_inclusive: u64,
-}
-
-impl DimChunkRange {
-    pub(crate) fn intersect(
-        &self,
-        other: &DimChunkRange,
-    ) -> Option<DimChunkRange> {
-        let s = self
-            .start_chunk
-            .max(other.start_chunk);
-        let e = self
-            .end_chunk_inclusive
-            .min(other.end_chunk_inclusive);
-        if e < s {
-            None
-        } else {
-            Some(DimChunkRange {
-                start_chunk: s,
-                end_chunk_inclusive: e,
-            })
-        }
     }
 }

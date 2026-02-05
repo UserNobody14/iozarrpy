@@ -10,20 +10,23 @@ use pyo3::types::PyAny;
 use pyo3_async_runtimes::tokio::future_into_py;
 use pyo3_polars::PySchema;
 
-use crate::backend::compile::ChunkedExpressionCompilerWithBackendAsync;
-use crate::backend::traits::{
-    EvictableChunkCacheAsync,
-    HasMetadataBackendAsync,
-};
-use crate::backend::zarr::{
-    FullyCachedZarrBackendAsync,
-    ZarrBackendAsync, to_fully_cached_async,
-};
 use crate::py::expr_extract::extract_expr;
 use crate::scan::chunk_to_df::chunk_to_df_from_grid_with_backend;
+use crate::shared::ChunkedExpressionCompilerAsync;
+use crate::shared::{
+    EvictableChunkCacheAsync,
+    FullyCachedZarrBackendAsync,
+    HasMetadataBackendAsync, ZarrBackendAsync,
+    to_fully_cached_async,
+};
 use crate::store::StoreInput;
 use crate::{IStr, IntoIStr};
 
+use crate::shared::{
+    combine_chunk_dataframes,
+    expand_projection_to_flat_paths,
+    restructure_to_structs,
+};
 /// Python-exposed Zarr backend with caching and scan methods.
 ///
 /// The backend owns the store and caches coordinate array chunks and metadata
@@ -250,7 +253,7 @@ impl PyZarrBackend {
                 // Compile expression to grouped chunk plan using backend-based resolver
                 let (grouped_plan, stats) = backend
                     .clone()
-                    .compile_expression_with_backend_async(&expr)
+                    .compile_expression_async(&expr)
                     .await?;
 
                 let mut grids: Vec<GridInfo> =
@@ -472,16 +475,17 @@ async fn scan_zarr_with_backend_async(
         StdArc::new(meta.planning_meta());
 
     // Expand struct column names to flat paths for chunk reading
-    let expanded_with_columns = with_columns.as_ref().map(|cols| {
-        crate::backend::lazy::expand_projection_to_flat_paths(cols, &meta)
-    });
+    let expanded_with_columns =
+        with_columns.as_ref().map(|cols| {
+            expand_projection_to_flat_paths(
+                cols, &meta,
+            )
+        });
 
     // Compile grouped chunk plan using backend-based resolver
     let (grouped_plan, _stats) = backend
         .clone()
-        .compile_expression_with_backend_async(
-            &expr,
-        )
+        .compile_expression_async(&expr)
         .await?;
 
     // Count total chunks to read if max_chunks_to_read is set
@@ -606,16 +610,12 @@ async fn scan_zarr_with_backend_async(
     } else if dfs.len() == 1 {
         dfs.into_iter().next().unwrap()
     } else {
-        crate::backend::lazy::combine_chunk_dataframes(
-            dfs, &meta,
-        )?
+        combine_chunk_dataframes(dfs, &meta)?
     };
 
     // For hierarchical data, convert flat path columns to struct columns
     if meta.is_hierarchical() {
-        crate::backend::lazy::restructure_to_structs(
-            &result, &meta,
-        )
+        restructure_to_structs(&result, &meta)
     } else {
         Ok(result)
     }

@@ -4,21 +4,20 @@
 //! using a generic backend interface that can work with any implementation.
 
 use crate::IStr;
-use crate::backend::{
-    BackendError, ChunkDataSourceSync,
-    ChunkedDataBackendSync,
-};
 use crate::chunk_plan::ChunkGridSignature;
 use crate::meta::{ZarrDatasetMeta, ZarrMeta};
 use crate::reader::{
     ColumnData, checked_chunk_len,
     compute_strides,
 };
+use crate::shared::{
+    BackendError, ChunkDataSourceSync,
+    ChunkedDataBackendSync,
+};
 use polars::prelude::*;
 use pyo3::prelude::*;
 use pyo3_polars::error::PyPolarsErr;
 use std::collections::BTreeSet;
-use std::sync::Arc;
 
 fn to_py_err<E: std::fmt::Display>(
     e: E,
