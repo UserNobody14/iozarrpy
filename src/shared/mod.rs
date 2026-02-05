@@ -1,7 +1,10 @@
 mod compile;
+mod stats;
 mod structural;
 mod traits;
 mod zarr;
+
+pub(crate) use stats::PlannerStats;
 
 // Re-export commonly used traits
 pub(crate) use traits::{
@@ -14,7 +17,7 @@ pub(crate) use traits::{
     HasMetadataBackendAsync,
     HasMetadataBackendCacheAsync,
     HasMetadataBackendCacheSync,
-    HasMetadataBackendSync,
+    HasMetadataBackendSync, HasStats,
 };
 
 // Re-export compile traits

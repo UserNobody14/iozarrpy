@@ -9,6 +9,7 @@
 //! This enables efficient I/O batching and concurrent resolution for async stores.
 
 use crate::IStr;
+use crate::PlannerStats;
 use crate::chunk_plan::exprs::CompileError;
 use crate::chunk_plan::exprs::LazyCompileCtx;
 use crate::chunk_plan::exprs::compile_node_lazy;
@@ -21,12 +22,6 @@ use crate::chunk_plan::indexing::lazy_selection::LazyDatasetSelection;
 use crate::chunk_plan::indexing::selection::DatasetSelection;
 use crate::chunk_plan::prelude::*;
 use crate::meta::ZarrMeta;
-
-/// Statistics about the planning process.
-pub(crate) struct PlannerStats {
-    /// Number of coordinate array reads performed.
-    pub(crate) coord_reads: u64,
-}
 
 pub(crate) fn compute_dims_and_lengths_unified(
     meta: &ZarrMeta,
@@ -133,14 +128,13 @@ pub(crate) fn compile_expr_to_lazy_selection_unified(
     meta: &ZarrMeta,
 ) -> Result<LazyDatasetSelection, CompileError> {
     let legacy_meta = meta.planning_meta();
-    let (dims, dim_lengths) =
+    let (dims, _dim_lengths) =
         compute_dims_and_lengths_unified(meta);
     let vars = legacy_meta.data_vars.clone();
     let mut ctx = LazyCompileCtx::new(
         &legacy_meta,
         Some(meta),
         &dims,
-        &dim_lengths,
         &vars,
     );
     compile_node_lazy(expr, &mut ctx)

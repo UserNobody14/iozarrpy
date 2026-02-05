@@ -60,26 +60,6 @@ impl GroupedChunkPlan {
             .or_insert(chunk_grid);
     }
 
-    /// Get the plan for a specific variable.
-    pub fn get_plan(
-        &self,
-        var: &str,
-    ) -> Option<&ArraySubsetList> {
-        let sig = self
-            .var_to_grid
-            .get(&crate::IntoIStr::istr(var))?;
-        self.by_grid.get(sig)
-    }
-
-    /// Get the grid signature for a variable.
-    pub fn get_signature(
-        &self,
-        var: &str,
-    ) -> Option<&Arc<ChunkGridSignature>> {
-        self.var_to_grid
-            .get(&crate::IntoIStr::istr(var))
-    }
-
     /// Get the chunk grid for a signature.
     pub fn get_chunk_grid(
         &self,
@@ -98,31 +78,6 @@ impl GroupedChunkPlan {
             .filter(|(_, s)| s.as_ref() == sig)
             .map(|(v, _)| v)
             .collect()
-    }
-
-    /// Get the number of unique chunk grids.
-    pub fn num_grids(&self) -> usize {
-        self.by_grid.len()
-    }
-
-    /// Get the number of variables.
-    pub fn num_vars(&self) -> usize {
-        self.var_to_grid.len()
-    }
-
-    /// Check if this plan is empty.
-    pub fn is_empty(&self) -> bool {
-        self.by_grid.is_empty()
-    }
-
-    /// Total number of chunks across all grids.
-    pub fn total_chunks(&self) -> usize {
-        self.by_grid
-            .values()
-            .map(|plan| {
-                plan.clone().num_elements_usize()
-            })
-            .sum()
     }
 
     /// Iterate over (grid_signature, variables, chunk_plan) tuples.
@@ -151,28 +106,6 @@ impl GroupedChunkPlan {
                 )
             },
         )
-    }
-
-    /// Iterate over (grid_signature, chunk_plan) pairs.
-    pub fn iter_plans(
-        &self,
-    ) -> impl Iterator<
-        Item = (
-            &Arc<ChunkGridSignature>,
-            &ArraySubsetList,
-        ),
-    > {
-        self.by_grid.iter()
-    }
-
-    /// Get the internal by_grid map.
-    pub fn by_grid(
-        &self,
-    ) -> &BTreeMap<
-        Arc<ChunkGridSignature>,
-        ArraySubsetList,
-    > {
-        &self.by_grid
     }
 
     /// Get the internal var_to_grid map.

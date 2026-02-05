@@ -1,4 +1,6 @@
-use crate::IStr;
+use crate::shared::traits::HasStats;
+use crate::{IStr, PlannerStats};
+use ambassador::delegatable_trait;
 use std::collections::BTreeMap;
 use std::sync::RwLock;
 use zarrs::array::Array;
@@ -52,6 +54,7 @@ pub struct ZarrBackendSync {
     /// Opened arrays with their shard caches:
     opened_arrays:
         RwLock<BTreeMap<IStr, OpenedArraySync>>,
+    stats: RwLock<PlannerStats>,
 }
 
 impl ZarrBackendSync {
@@ -66,6 +69,9 @@ impl ZarrBackendSync {
             store: Arc::new(opened),
             opened_arrays: RwLock::new(
                 BTreeMap::new(),
+            ),
+            stats: RwLock::new(
+                PlannerStats::default(),
             ),
         })
     }
@@ -176,6 +182,7 @@ pub struct ZarrBackendAsync {
     store: Arc<AsyncOpenedStore>,
     opened_arrays:
         RwLock<BTreeMap<IStr, OpenedArrayAsync>>,
+    stats: RwLock<PlannerStats>,
 }
 
 impl HasAsyncStore for ZarrBackendAsync {
@@ -199,6 +206,9 @@ impl ZarrBackendAsync {
             store: Arc::new(opened),
             opened_arrays: RwLock::new(
                 BTreeMap::new(),
+            ),
+            stats: RwLock::new(
+                PlannerStats::default(),
             ),
         })
     }

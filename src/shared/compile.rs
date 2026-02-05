@@ -10,16 +10,14 @@ use super::traits::{
     HasMetadataBackendSync, HasStore,
 };
 
+use crate::PlannerStats;
 use crate::chunk_plan::GroupedChunkPlan;
+use crate::chunk_plan::compile_expr_to_grouped_chunk_plan_unified;
 use crate::chunk_plan::compile_node_lazy;
 use crate::chunk_plan::selection_to_grouped_chunk_plan_unified_from_meta;
 use crate::chunk_plan::{
     MergedCache, collect_requests_with_meta,
     materialize,
-};
-use crate::chunk_plan::{
-    PlannerStats,
-    compile_expr_to_grouped_chunk_plan_unified,
 };
 use crate::meta::{ZarrDatasetMeta, ZarrMeta};
 use crate::{IStr, chunk_plan::*};
@@ -101,7 +99,6 @@ impl<
             &legacy_meta,
             Some(&meta),
             &dims,
-            &dim_lengths,
             &vars,
         );
         let lazy_selection =

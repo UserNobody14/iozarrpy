@@ -20,6 +20,7 @@ use zarrs::storage::{
 use crate::IStr;
 use crate::chunk_plan::CompileError;
 use crate::reader::ColumnData;
+use crate::shared::PlannerStats;
 
 /// Error type for backend operations.
 #[derive(Debug, Clone)]
@@ -112,6 +113,13 @@ impl From<BackendError> for PyErr {
             ),
         }
     }
+}
+
+#[delegatable_trait]
+pub trait HasStats {
+    /// Designates a backend with statistics tracking about which items it runs.
+    /// Tracks coordinate array reads, var array reads, total reads, etc.
+    fn stats(&self) -> Arc<PlannerStats>;
 }
 
 /// Synchronous chunked data backend trait.
@@ -208,6 +216,11 @@ pub trait HasAsyncStore {
     target = "backend",
     where = "BACKEND: HasStore"
 )]
+#[delegate(
+    HasStats,
+    target = "backend",
+    where = "BACKEND: HasStats"
+)]
 pub struct ChunkedDataCacheSync<
     BACKEND: ChunkedDataBackendSync,
 > {
@@ -215,9 +228,16 @@ pub struct ChunkedDataCacheSync<
     chunk_cache: RwLock<
         BTreeMap<(IStr, Vec<u64>), ColumnData>,
     >,
+    stats: RwLock<PlannerStats>,
 }
 
 /// Async cache for chunked data
+#[derive(Delegate)]
+#[delegate(
+    HasStats,
+    target = "backend",
+    where = "BACKEND: HasStats"
+)]
 pub struct ChunkedDataCacheAsync<
     BACKEND: ChunkedDataBackendAsync,
 > {
@@ -225,6 +245,7 @@ pub struct ChunkedDataCacheAsync<
     chunk_cache: RwLock<
         BTreeMap<(IStr, Vec<u64>), ColumnData>,
     >,
+    stats: RwLock<PlannerStats>,
 }
 
 /// Sync cache for metadata - delegates chunked data and store traits to backend
@@ -269,6 +290,9 @@ impl<BACKEND: ChunkedDataBackendSync>
             chunk_cache: RwLock::new(
                 BTreeMap::new(),
             ),
+            stats: RwLock::new(
+                PlannerStats::default(),
+            ),
         }
     }
 }
@@ -281,6 +305,9 @@ impl<BACKEND: ChunkedDataBackendAsync>
             backend,
             chunk_cache: RwLock::new(
                 BTreeMap::new(),
+            ),
+            stats: RwLock::new(
+                PlannerStats::default(),
             ),
         }
     }

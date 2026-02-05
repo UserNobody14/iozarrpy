@@ -9,6 +9,8 @@ mod scan;
 mod shared;
 mod store;
 
+pub(crate) use shared::PlannerStats;
+
 use polars::prelude::*;
 
 /// Interned string type used throughout the codebase for dimension/variable names.

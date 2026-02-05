@@ -5,7 +5,6 @@
 //! coordinate data.
 
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use super::types::{IndexRange, ValueRange};
 use crate::meta::ZarrDatasetMeta;
@@ -29,39 +28,6 @@ impl ResolutionRequest {
         Self {
             dim: dim.istr(),
             value_range,
-        }
-    }
-
-    /// Create a new resolution request from an already interned dimension name.
-    pub(crate) fn new_interned(
-        dim: IStr,
-        value_range: ValueRange,
-    ) -> Self {
-        Self { dim, value_range }
-    }
-}
-
-/// A request to resolve interpolation bracketing indices for a set of target points.
-#[derive(Debug, Clone)]
-pub(crate) struct InterpolationRequest {
-    /// The dimension name.
-    pub(crate) dim: IStr,
-    /// The target coordinate values that need bracketing indices.
-    pub(crate) points:
-        Arc<Vec<super::types::CoordScalar>>,
-}
-
-impl InterpolationRequest {
-    /// Create a new interpolation request.
-    pub(crate) fn new(
-        dim: &str,
-        points: Arc<
-            Vec<super::types::CoordScalar>,
-        >,
-    ) -> Self {
-        Self {
-            dim: dim.istr(),
-            points,
         }
     }
 }

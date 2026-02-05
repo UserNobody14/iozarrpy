@@ -13,10 +13,6 @@ mod indexing;
 
 pub(crate) use exprs::errors::CompileError;
 
-// Primary entry points (sync)
-pub(crate) use compile_entry::PlannerStats;
-
-// Primary entry points (async)
 
 // GroupedChunkPlan entry points (heterogeneous chunk grids)
 pub(crate) use compile_entry::compute_dims_and_lengths_unified;
