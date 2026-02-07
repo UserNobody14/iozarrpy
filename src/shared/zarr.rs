@@ -57,6 +57,17 @@ pub struct ZarrBackendSync {
     stats: RwLock<PlannerStats>,
 }
 
+// Normalize path: if it doesn't start with '/', add it
+pub(crate) fn normalize_path(
+    path: &IStr,
+) -> IStr {
+    if path.starts_with('/') {
+        path.clone()
+    } else {
+        format!("/{}", path).into()
+    }
+}
+
 impl ZarrBackendSync {
     pub fn new(
         store: StoreInput,
@@ -126,15 +137,22 @@ impl ChunkedDataBackendSync for ZarrBackendSync {
                 chunk_idx,
             )
             .map_err(|e| {
-                BackendError::Other(e.to_string())
+                BackendError::ChunkReadFailed(
+                    e.to_string(),
+                )
             })?;
             return Ok(chunk);
         }
 
         // Open array and create cache
-        let array = Array::open(strtraits, var)
-            .map_err(|e| {
-            BackendError::Other(e.to_string())
+        let array = Array::open(
+            strtraits,
+            &normalize_path(var),
+        )
+        .map_err(|e| {
+            BackendError::ArrayOpenFailed(
+                e.to_string(),
+            )
         })?;
         let array_arc = Arc::new(array);
         let cache = ShardedCacheSync::new(
@@ -147,7 +165,9 @@ impl ChunkedDataBackendSync for ZarrBackendSync {
             chunk_idx,
         )
         .map_err(|e| {
-            BackendError::Other(e.to_string())
+            BackendError::ChunkReadFailed(
+                e.to_string(),
+            )
         })?;
 
         self.opened_arrays
@@ -250,7 +270,7 @@ impl ChunkedDataBackendAsync
             .opened_arrays
             .read()
             .unwrap()
-            .get(var)
+            .get(&var)
             .map(|opened| {
                 (
                     opened.array.clone(),
@@ -264,20 +284,24 @@ impl ChunkedDataBackendAsync
             )
             .await
             .map_err(|e| {
-                BackendError::Other(e.to_string())
+                BackendError::ChunkReadFailed(
+                    e.to_string(),
+                )
             })?;
             return Ok(chunk);
         }
 
         // Open array and create cache
-        let array =
-            Array::async_open(strtraits, var)
-                .await
-                .map_err(|e| {
-                    BackendError::Other(
-                        e.to_string(),
-                    )
-                })?;
+        let array = Array::async_open(
+            strtraits,
+            &normalize_path(var),
+        )
+        .await
+        .map_err(|e| {
+            BackendError::ArrayOpenFailed(
+                e.to_string(),
+            )
+        })?;
         let array_arc = Arc::new(array);
         let cache =
             Arc::new(ShardedCacheAsync::new(
@@ -291,7 +315,9 @@ impl ChunkedDataBackendAsync
         )
         .await
         .map_err(|e| {
-            BackendError::Other(e.to_string())
+            BackendError::ChunkReadFailed(
+                e.to_string(),
+            )
         })?;
 
         self.opened_arrays

@@ -3,7 +3,8 @@ use std::fmt::Display;
 use std::sync::Arc;
 
 use polars::prelude::{
-    DataType as PlDataType, Field, Schema,
+    DataType as PlDataType, Field, NamedFrom,
+    Schema, Series, TimeUnit,
 };
 use smallvec::SmallVec;
 
@@ -599,11 +600,46 @@ impl TimeEncoding {
     #[inline]
     pub fn decode(&self, raw: i64) -> i64 {
         if self.is_duration {
-            raw * self.unit_ns
+            raw.saturating_mul(self.unit_ns)
         } else {
-            self.epoch_ns + raw * self.unit_ns
+            raw.saturating_mul(self.unit_ns)
+                .saturating_add(self.epoch_ns)
         }
     }
+
+    pub fn to_polars_dtype(&self) -> PlDataType {
+        if self.is_duration {
+            PlDataType::Duration(
+                TimeUnit::Nanoseconds,
+            )
+        } else {
+            PlDataType::Datetime(
+                TimeUnit::Nanoseconds,
+                None,
+            )
+        }
+    }
+
+    // pub fn cast_to_series(
+    //     &self,
+    //     data: &[i64],
+    //     name: &str,
+    // ) -> Series {
+    //     if self.is_duration {
+    //         Series::new(name.into(), data).cast(
+    //             &PlDataType::Duration(
+    //                 TimeUnit::Nanoseconds,
+    //             ),
+    //         )
+    //     } else {
+    //         Series::new(name.into(), data).cast(
+    //             &PlDataType::Datetime(
+    //                 TimeUnit::Nanoseconds,
+    //                 None,
+    //             ),
+    //         )
+    //     }
+    // }
 }
 
 #[derive(Debug, Clone)]

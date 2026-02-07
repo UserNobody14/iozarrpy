@@ -284,9 +284,11 @@ impl<
             .metadata()
             .await
             .ok()
-            .and_then(|meta| meta.clone().array_by_path(dim.as_ref()).cloned())
-            // .and_then(|m| m.)
-        {
+            .and_then(|meta| {
+                meta.clone()
+                    .array_by_path(dim.as_ref())
+                    .cloned()
+            }) {
             Some(m) => m,
             None => {
                 return reqs

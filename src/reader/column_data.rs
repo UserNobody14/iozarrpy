@@ -261,6 +261,103 @@ impl ColumnData {
         }
     }
 
+    pub(crate) fn map_i64(
+        &self,
+        f: impl Fn(i64) -> i64,
+    ) -> ColumnData {
+        match self {
+            ColumnData::I64(v) => {
+                ColumnData::I64(
+                    v.iter()
+                        .map(|&x| f(x))
+                        .collect(),
+                )
+            }
+            ColumnData::I32(v) => {
+                ColumnData::I32(
+                    v.iter()
+                        .map(|&x| {
+                            f(x as i64) as i32
+                        })
+                        .collect(),
+                )
+            }
+            ColumnData::I16(v) => {
+                ColumnData::I16(
+                    v.iter()
+                        .map(|&x| {
+                            f(x as i64) as i16
+                        })
+                        .collect(),
+                )
+            }
+            ColumnData::I8(v) => ColumnData::I8(
+                v.iter()
+                    .map(|&x| f(x as i64) as i8)
+                    .collect(),
+            ),
+            ColumnData::U64(v) => {
+                ColumnData::U64(
+                    v.iter()
+                        .map(|&x| {
+                            f(x as i64) as u64
+                        })
+                        .collect(),
+                )
+            }
+            ColumnData::U32(v) => {
+                ColumnData::U32(
+                    v.iter()
+                        .map(|&x| {
+                            f(x as i64) as u32
+                        })
+                        .collect(),
+                )
+            }
+            ColumnData::U16(v) => {
+                ColumnData::U16(
+                    v.iter()
+                        .map(|&x| {
+                            f(x as i64) as u16
+                        })
+                        .collect(),
+                )
+            }
+            ColumnData::U8(v) => ColumnData::U8(
+                v.iter()
+                    .map(|&x| f(x as i64) as u8)
+                    .collect(),
+            ),
+            ColumnData::Bool(v) => {
+                ColumnData::Bool(
+                    v.iter()
+                        .map(|&x| {
+                            f(x as i64) != 0
+                        })
+                        .collect(),
+                )
+            }
+            ColumnData::F32(v) => {
+                ColumnData::F32(
+                    v.iter()
+                        .map(|&x| {
+                            f(x as i64) as f32
+                        })
+                        .collect(),
+                )
+            }
+            ColumnData::F64(v) => {
+                ColumnData::F64(
+                    v.iter()
+                        .map(|&x| {
+                            f(x as i64) as f64
+                        })
+                        .collect(),
+                )
+            }
+        }
+    }
+
     pub(crate) fn is_float(&self) -> bool {
         matches!(
             self,
