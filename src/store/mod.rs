@@ -5,9 +5,13 @@ use pyo3_object_store::AnyObjectStore;
 use zarrs_object_store::object_store::ObjectStore;
 
 mod adapters;
+mod array;
 mod open_async;
 mod open_sync;
 
+pub use array::{
+    OpenedArrayAsync, OpenedArraySync,
+};
 pub use open_async::{
     AsyncOpenedStore, open_store_async,
     open_store_from_object_store_async,

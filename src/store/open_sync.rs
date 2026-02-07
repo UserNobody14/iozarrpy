@@ -8,16 +8,48 @@ use zarrs::storage::{
     AsyncReadableWritableListableStorage,
     ReadableWritableListableStorage,
 };
+use zarrs::array::Array;
 use zarrs_object_store::AsyncObjectStore;
 use zarrs_object_store::object_store;
 use zarrs_object_store::object_store::ObjectStore;
 
+use crate::IStr;
+use crate::reader::ShardedCacheSync;
+use crate::shared::BackendError;
+use crate::shared::normalize_path;
+
 use crate::store::adapters::TokioBlockOn;
+use crate::store::array::OpenedArraySync;
 
 pub struct OpenedStore {
     pub store: ReadableWritableListableStorage,
     /// Root node path to pass to zarrs open functions (always starts with `/`).
     pub root: String,
+}
+
+impl OpenedStore {
+    pub fn open_array_and_cache(
+        &self,
+        var: &IStr,
+    ) -> Result<OpenedArraySync, BackendError>
+    {
+        let strtraits = self.store.clone();
+
+        let array = Array::open(
+            strtraits,
+            &normalize_path(var),
+        )
+        .map_err(|e| {
+            BackendError::ArrayOpenFailed(
+                e.to_string(),
+            )
+        })?;
+        let array_arc = Arc::new(array);
+        let cache = ShardedCacheSync::new(
+            array_arc.as_ref(),
+        );
+        Ok(OpenedArraySync::new(array_arc, cache))
+    }
 }
 
 /// Create a sync store from an already-constructed `Arc<dyn ObjectStore>`.

@@ -30,8 +30,8 @@ pub(crate) use compile::{
 pub(crate) use zarr::{
     FullyCachedZarrBackendAsync,
     FullyCachedZarrBackendSync, ZarrBackendAsync,
-    ZarrBackendSync, to_fully_cached_async,
-    to_fully_cached_sync,
+    ZarrBackendSync, normalize_path,
+    to_fully_cached_async, to_fully_cached_sync,
 };
 
 // Re-export structural traits
