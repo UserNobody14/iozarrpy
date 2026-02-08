@@ -40,6 +40,13 @@ def get_inferred_vars(zarr_url: str, expr: pl.Expr) -> set[str]:
     # Combine all the variables from the grids
     return set(chain.from_iterable(list_of_vars))
 
+def get_inferred_dims(zarr_url: str, expr: pl.Expr) -> set[str]:
+    """Get the set of dimensions inferred from an expression."""
+    inferred = ZarrBackend.from_url(zarr_url).selected_chunks_debug(expr)
+    list_of_dims: list[list[str]] = [grid["dims"] for grid in inferred["grids"]]
+    # Combine all the dimensions from the grids
+    return set(chain.from_iterable(list_of_dims))
+
 
 def get_per_var_chunks(zarr_url: str, expr: pl.Expr) -> dict[str, int]:
     """Get per-variable chunk counts from an expression."""
@@ -253,7 +260,7 @@ class TestVariableInference:
 
     def test_infer_vars_from_comparison(self, multi_var_dataset: MultiVarDatasetInfo):
         """Comparison should infer the referenced variable."""
-        expr = pl.col("wind_u") > 20
+        expr = pl.all().filter(pl.col("wind_u") > 20)
         inferred = get_inferred_vars(multi_var_dataset.path, expr)
         assert inferred == {"wind_u"}
 
@@ -263,18 +270,21 @@ class TestVariableInference:
         inferred = get_inferred_vars(multi_var_dataset.path, expr)
         assert inferred == {"temp", "precip", "pressure"}
 
-    @needs_var_inference
     def test_infer_coords_from_filter(self, multi_var_dataset: MultiVarDatasetInfo):
         """Filter on coord should infer the coord variable."""
         expr = pl.col("temp").filter(pl.col("a") > 30)
         inferred = get_inferred_vars(multi_var_dataset.path, expr)
-        assert inferred == {"temp", "a"}
+        inferred_dims = get_inferred_dims(multi_var_dataset.path, expr)
+        assert inferred == {"temp"}
+        assert inferred_dims == {"a", "b", "c"}
 
     def test_infer_2d_coord_from_filter(self, multi_var_dataset: MultiVarDatasetInfo):
         """Filter on 2D coord should infer that coord."""
-        expr = pl.col("temp").filter(pl.col("lat") > 33.0)
+        expr = pl.col("temp").filter((pl.col("a") > 33.0) & (pl.col("b") > 33.0))
         inferred = get_inferred_vars(multi_var_dataset.path, expr)
-        assert inferred == {"temp", "lat"}
+        inferred_dims = get_inferred_dims(multi_var_dataset.path, expr)
+        assert inferred == {"temp"}
+        assert inferred_dims == {"a", "b", "c"}
 
     def test_alias_preserves_inference(self, multi_var_dataset: MultiVarDatasetInfo):
         """alias() should not affect variable inference."""
