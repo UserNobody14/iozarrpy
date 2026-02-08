@@ -11,10 +11,6 @@ pub mod selection;
 pub mod selection_to_chunks;
 pub mod types;
 
-// Sync monotonic coordinate resolver
-pub mod monotonic_scalar;
-pub(crate) use monotonic_scalar::MonotonicCoordResolver;
-
 // Generic grouped selection types
 pub mod grouped_selection;
 

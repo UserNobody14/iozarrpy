@@ -13,7 +13,6 @@ use crate::PlannerStats;
 use crate::chunk_plan::exprs::CompileError;
 use crate::chunk_plan::exprs::LazyCompileCtx;
 use crate::chunk_plan::exprs::compile_node_lazy;
-use crate::chunk_plan::indexing::MonotonicCoordResolver;
 use crate::chunk_plan::indexing::SyncCoordResolver;
 use crate::chunk_plan::indexing::lazy_materialize::{
     MergedCache, collect_requests_with_meta, materialize,
@@ -38,84 +37,6 @@ pub(crate) fn compute_dims_and_lengths_unified(
         })
         .collect();
     (dims, dim_lengths)
-}
-
-// ============================================================================
-// Asynchronous resolution
-// ============================================================================
-
-/// Resolve a lazy selection using synchronous I/O and unified metadata.
-pub(crate) fn resolve_lazy_selection_sync_unified(
-    lazy_selection: &LazyDatasetSelection,
-    meta: &ZarrMeta,
-    store: zarrs::storage::ReadableWritableListableStorage,
-) -> Result<
-    (DatasetSelection, PlannerStats),
-    CompileError,
-> {
-    let legacy_meta = meta.planning_meta();
-    let (dims, dim_lengths) =
-        compute_dims_and_lengths_unified(meta);
-
-    let (requests, immediate_cache) =
-        collect_requests_with_meta(
-            lazy_selection,
-            &legacy_meta,
-            &dim_lengths,
-            &dims,
-        );
-
-    let mut resolver =
-        MonotonicCoordResolver::new(
-            &legacy_meta,
-            store,
-        );
-    let resolved_cache = resolver
-        .resolve_batch(&requests, &legacy_meta);
-
-    let merged = MergedCache::new(
-        &*resolved_cache,
-        &immediate_cache,
-    );
-    let selection = materialize(
-        lazy_selection,
-        &legacy_meta,
-        &merged,
-    )
-    .map_err(|e| {
-        CompileError::Unsupported(format!(
-            "materialization failed: {}",
-            e
-        ))
-    })?;
-
-    drop(resolved_cache);
-
-    let stats = PlannerStats {
-        coord_reads: resolver.coord_read_count(),
-    };
-
-    Ok((selection, stats))
-}
-
-/// Compile an expression to a dataset selection (sync, unified ZarrMeta).
-pub(crate) fn compile_expr_to_dataset_selection_unified(
-    expr: &Expr,
-    meta: &ZarrMeta,
-    store: zarrs::storage::ReadableWritableListableStorage,
-) -> Result<
-    (DatasetSelection, PlannerStats),
-    CompileError,
-> {
-    let lazy_selection =
-        compile_expr_to_lazy_selection_unified(
-            expr, meta,
-        )?;
-    resolve_lazy_selection_sync_unified(
-        &lazy_selection,
-        meta,
-        store,
-    )
 }
 
 // ============================================================================
@@ -148,25 +69,3 @@ use crate::chunk_plan::indexing::GroupedChunkPlan;
 use crate::chunk_plan::indexing::selection_to_chunks::{
     selection_to_grouped_chunk_plan_unified
 };
-
-/// Compile an expression to a grouped chunk plan (sync, unified ZarrMeta).
-pub(crate) fn compile_expr_to_grouped_chunk_plan_unified(
-    expr: &Expr,
-    meta: &ZarrMeta,
-    store: zarrs::storage::ReadableWritableListableStorage,
-) -> Result<
-    (GroupedChunkPlan, PlannerStats),
-    CompileError,
-> {
-    let (selection, stats) =
-        compile_expr_to_dataset_selection_unified(
-            expr,
-            meta,
-            store.clone(),
-        )?;
-    let grouped_plan =
-        selection_to_grouped_chunk_plan_unified(
-            &selection, meta, store,
-        )?;
-    Ok((grouped_plan, stats))
-}

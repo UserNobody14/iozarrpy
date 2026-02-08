@@ -13,14 +13,11 @@ mod indexing;
 
 pub(crate) use exprs::errors::CompileError;
 
-
 // GroupedChunkPlan entry points (heterogeneous chunk grids)
 pub(crate) use compile_entry::compute_dims_and_lengths_unified;
-pub(crate) use compile_entry::{
-    compile_expr_to_grouped_chunk_plan_unified    
-};
 pub(crate) use exprs::LazyCompileCtx;
 pub(crate) use exprs::compile_node_lazy;
+pub(crate) use indexing::SyncCoordResolver;
 pub(crate) use indexing::AsyncCoordResolver;
 pub(crate) use indexing::GroupedChunkPlan;
 pub(crate) use chunk_plan::indexing::resolver_traits::HashMapCache;

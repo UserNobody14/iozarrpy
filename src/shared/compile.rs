@@ -12,7 +12,7 @@ use super::traits::{
 
 use crate::PlannerStats;
 use crate::chunk_plan::GroupedChunkPlan;
-use crate::chunk_plan::compile_expr_to_grouped_chunk_plan_unified;
+use crate::chunk_plan::SyncCoordResolver;
 use crate::chunk_plan::compile_node_lazy;
 use crate::chunk_plan::selection_to_grouped_chunk_plan_unified_from_meta;
 use crate::chunk_plan::{
@@ -54,7 +54,8 @@ pub trait ChunkedExpressionCompilerAsync:
 impl<
     B: HasMetadataBackendSync<ZarrMeta>
         + ChunkedDataBackendSync
-        + HasStore,
+        + HasStore
+        + SyncCoordResolver,
 > ChunkedExpressionCompilerSync for B
 {
     fn compile_expression_sync(
@@ -64,12 +65,62 @@ impl<
         (GroupedChunkPlan, PlannerStats),
         BackendError,
     > {
+        // Compile to lazy selection
         let meta = self.metadata()?;
-        Ok(compile_expr_to_grouped_chunk_plan_unified(
-            expr,
-            &meta,
-            self.store().clone(),
-        )?)
+        let legacy_meta = meta.planning_meta();
+        let (dims, dim_lengths) =
+            compute_dims_and_lengths_unified(
+                &meta,
+            );
+        let vars = legacy_meta.data_vars.clone();
+        let mut ctx = LazyCompileCtx::new(
+            &legacy_meta,
+            Some(&meta),
+            &dims,
+            &vars,
+        );
+        let lazy_selection =
+            compile_node_lazy(expr, &mut ctx)?;
+
+        let (requests, immediate_cache) =
+            collect_requests_with_meta(
+                &lazy_selection,
+                &legacy_meta,
+                &dim_lengths,
+                &dims,
+            );
+
+        let resolved_cache = self.resolve_batch(
+            requests,
+            &legacy_meta,
+        );
+
+        let merged = MergedCache::new(
+            &*resolved_cache,
+            &immediate_cache,
+        );
+        let selection = materialize(
+            &lazy_selection,
+            &legacy_meta,
+            &merged,
+        )
+        .map_err(|e| {
+            CompileError::Unsupported(format!(
+                "materialization failed: {}",
+                e
+            ))
+        })?;
+
+        let stats =
+            PlannerStats { coord_reads: 0 };
+
+        // Convert selection to grouped chunk plan
+        let grouped_plan =
+            selection_to_grouped_chunk_plan_unified_from_meta(
+                &selection, &meta,
+            )?;
+
+        Ok((grouped_plan, stats))
     }
 }
 
@@ -189,6 +240,50 @@ impl<
     }
 }
 
+impl<
+    B: HasMetadataBackendSync<ZarrMeta>
+        + ChunkedDataBackendSync
+        + HasStore,
+> SyncCoordResolver for B
+{
+    fn resolve_batch(
+        &self,
+        requests: Vec<ResolutionRequest>,
+        legacy_meta: &ZarrDatasetMeta,
+    ) -> Box<dyn ResolutionCache + Send + Sync>
+    {
+        let mut cache = HashMapCache::new();
+
+        // Group requests by dimension
+        let mut by_dim: BTreeMap<
+            IStr,
+            Vec<(ResolutionRequest, ValueRange)>,
+        > = BTreeMap::new();
+        for req in requests {
+            by_dim
+                .entry(req.dim.clone())
+                .or_default()
+                .push((
+                    req.clone(),
+                    req.value_range.clone(),
+                ));
+        }
+
+        // Resolve each dimension
+        for (dim, reqs) in by_dim {
+            let results = self
+                .resolve_dimension_sync(
+                    &dim, reqs,
+                );
+            for (req, result) in results {
+                cache.insert(req, result);
+            }
+        }
+
+        Box::new(cache)
+    }
+}
+
 trait ResolveDimension {
     async fn resolve_dimension(
         &self,
@@ -250,6 +345,73 @@ trait ResolveDimension {
     ) -> Option<u64>;
 
     async fn resolve_range(
+        &self,
+        dim: &IStr,
+        vr: &ValueRange,
+        dir: Ord,
+        n: u64,
+        chunk_size: u64,
+        time_enc: Option<
+            &crate::meta::TimeEncoding,
+        >,
+    ) -> Option<IndexRange>;
+}
+
+trait ResolveDimensionSync {
+    fn resolve_dimension_sync(
+        &self,
+        dim: &IStr,
+        reqs: Vec<(
+            ResolutionRequest,
+            ValueRange,
+        )>,
+    ) -> Vec<(
+        ResolutionRequest,
+        Option<IndexRange>,
+    )>;
+
+    fn scalar_at_sync(
+        &self,
+        dim: &IStr,
+        idx: u64,
+        n: u64,
+        chunk_size: u64,
+        time_enc: Option<
+            &crate::meta::TimeEncoding,
+        >,
+    ) -> Option<CoordScalar>;
+
+    fn check_monotonic_sync(
+        &self,
+        dim: &IStr,
+        n: u64,
+        chunk_size: u64,
+        time_enc: Option<
+            &crate::meta::TimeEncoding,
+        >,
+    ) -> Option<Ord>;
+
+    fn lower_bound_sync(
+        &self,
+        dim: &IStr,
+        target: &CoordScalar,
+        strict: bool,
+        dir: Ord,
+        n: u64,
+        chunk_size: u64,
+    ) -> Option<u64>;
+
+    fn upper_bound_sync(
+        &self,
+        dim: &IStr,
+        target: &CoordScalar,
+        strict: bool,
+        dir: Ord,
+        n: u64,
+        chunk_size: u64,
+    ) -> Option<u64>;
+
+    fn resolve_range_sync(
         &self,
         dim: &IStr,
         vr: &ValueRange,
@@ -685,6 +847,229 @@ impl<
                     chunk_size, time_enc,
                 )
                 .await?
+            } else {
+                n
+            };
+
+        Some(IndexRange {
+            start,
+            end_exclusive,
+        })
+    }
+}
+
+impl<
+    B: HasMetadataBackendSync<ZarrMeta>
+        + ChunkedDataBackendSync
+        + HasStore,
+> ResolveDimensionSync for B
+{
+    fn resolve_dimension_sync(
+        &self,
+        dim: &IStr,
+        reqs: Vec<(
+            ResolutionRequest,
+            ValueRange,
+        )>,
+    ) -> Vec<(
+        ResolutionRequest,
+        Option<IndexRange>,
+    )> {
+        // Get coordinate array metadata
+        let coord_meta = match self
+            .metadata()
+            .ok()
+            .and_then(|meta| {
+                meta.clone()
+                    .array_by_path(dim.as_ref())
+                    .cloned()
+            }) {
+            Some(m) => m,
+            None => {
+                return reqs
+                    .into_iter()
+                    .map(|(req, _)| (req, None))
+                    .collect();
+            }
+        };
+
+        if coord_meta.shape.len() != 1 {
+            return reqs
+                .into_iter()
+                .map(|(req, _)| (req, None))
+                .collect();
+        }
+
+        let n = coord_meta.shape[0];
+        if n == 0 {
+            return reqs
+                .into_iter()
+                .map(|(req, _)| {
+                    (
+                        req,
+                        Some(IndexRange {
+                            start: 0,
+                            end_exclusive: 0,
+                        }),
+                    )
+                })
+                .collect();
+        }
+
+        let chunk_size = coord_meta
+            .chunk_shape
+            .first()
+            .copied()
+            .unwrap_or(n);
+        let time_enc =
+            coord_meta.time_encoding.clone();
+
+        // Use the full array path from metadata for I/O operations.
+        // The dim name alone (e.g. "y") is insufficient when the zarr store
+        // root is not "/" — we need the full path (e.g. "/forecasts/ds.zarr/y")
+        // so that Array::async_open can locate the array in the store.
+        let array_path = coord_meta.path.clone();
+
+        // Check monotonicity
+        let Some(dir) = self
+            .check_monotonic_sync(
+                &array_path,
+                n,
+                chunk_size,
+                time_enc.as_ref(),
+            )
+        else {
+            return reqs
+                .into_iter()
+                .map(|(req, _)| (req, None))
+                .collect();
+        };
+
+        reqs.into_iter()
+            .map(|(req, vr)| {
+                let resolved = self
+                    .resolve_range_sync(
+                        &array_path,
+                        &vr,
+                        dir,
+                        n,
+                        chunk_size,
+                        time_enc.as_ref(),
+                    );
+                (req, resolved)
+            })
+            .collect()
+    }
+
+    fn scalar_at_sync(
+        &self,
+        _dim: &IStr,
+        _idx: u64,
+        _n: u64,
+        _chunk_size: u64,
+        _time_enc: Option<
+            &crate::meta::TimeEncoding,
+        >,
+    ) -> Option<CoordScalar> {
+        // Not yet implemented
+        None
+    }
+
+    fn check_monotonic_sync(
+        &self,
+        _dim: &IStr,
+        _n: u64,
+        _chunk_size: u64,
+        _time_enc: Option<
+            &crate::meta::TimeEncoding,
+        >,
+    ) -> Option<std::cmp::Ordering> {
+        // Not yet implemented, default to ascending
+        Some(std::cmp::Ordering::Less)
+    }
+
+    fn lower_bound_sync(
+        &self,
+        _dim: &IStr,
+        _target: &CoordScalar,
+        _strict: bool,
+        _dir: std::cmp::Ordering,
+        _n: u64,
+        _chunk_size: u64,
+    ) -> Option<u64> {
+        // Not yet implemented
+        None
+    }
+
+    fn upper_bound_sync(
+        &self,
+        _dim: &IStr,
+        _target: &CoordScalar,
+        _strict: bool,
+        _dir: std::cmp::Ordering,
+        _n: u64,
+        _chunk_size: u64,
+    ) -> Option<u64> {
+        // Not yet implemented
+        None
+    }
+
+    fn resolve_range_sync(
+        &self,
+        dim: &IStr,
+        vr: &ValueRange,
+        dir: std::cmp::Ordering,
+        n: u64,
+        chunk_size: u64,
+        time_enc: Option<
+            &crate::meta::TimeEncoding,
+        >,
+    ) -> Option<IndexRange> {
+        use crate::chunk_plan::BoundKind;
+
+        if vr.empty {
+            return Some(IndexRange {
+                start: 0,
+                end_exclusive: 0,
+            });
+        }
+
+        // Equality case
+        if let Some(eq) = &vr.eq {
+            let start = self.lower_bound_sync(
+                dim, eq, false, dir, n,
+                chunk_size,
+            )?;
+            let end = self.upper_bound_sync(
+                dim, eq, false, dir, n,
+                chunk_size,
+            )?;
+            return Some(IndexRange {
+                start,
+                end_exclusive: end,
+            });
+        }
+
+        let start = if let Some((v, bk)) = &vr.min
+        {
+            let strict =
+                *bk == BoundKind::Exclusive;
+            self.lower_bound_sync(
+                dim, v, strict, dir, n,
+                chunk_size,
+            )?
+        } else {
+            0
+        };
+
+        let end_exclusive =
+            if let Some((v, bk)) = &vr.max {
+                let strict =
+                    *bk == BoundKind::Exclusive;
+                self.upper_bound_sync(
+                    dim, v, strict, dir, n,
+                    chunk_size,
+                )?
             } else {
                 n
             };

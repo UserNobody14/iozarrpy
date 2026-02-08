@@ -101,11 +101,11 @@ pub(crate) trait SyncCoordResolver {
     ///
     /// Returns a cache containing the results. Requests that couldn't be resolved
     /// (e.g., non-monotonic coordinates) should have `None` as their result.
-    fn resolve_batch<'a>(
-        &'a mut self,
-        requests: &[ResolutionRequest],
+    fn resolve_batch(
+        &self,
+        requests: Vec<ResolutionRequest>,
         meta: &ZarrDatasetMeta,
-    ) -> Box<dyn ResolutionCache + 'a>;
+    ) -> Box<dyn ResolutionCache + Send + Sync>;
 }
 
 /// Asynchronous batch coordinator resolver.
