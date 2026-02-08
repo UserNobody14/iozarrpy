@@ -225,11 +225,15 @@ pub type FullyCachedIcechunkBackendAsync =
 /// Convert an `IcechunkBackendAsync` to a fully cached version.
 pub fn to_fully_cached_icechunk_async(
     backend: IcechunkBackendAsync,
+    max_entries: u64,
 ) -> Result<
     FullyCachedIcechunkBackendAsync,
     BackendError,
 > {
     Ok(HasMetadataBackendCacheAsync::new(
-        ChunkedDataCacheAsync::new(backend),
+        ChunkedDataCacheAsync::new(
+            backend,
+            max_entries,
+        ),
     ))
 }

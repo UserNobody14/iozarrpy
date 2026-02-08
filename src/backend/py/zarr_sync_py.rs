@@ -41,17 +41,19 @@ impl PyZarrBackendSync {
     /// * `url` - URL to the zarr store (e.g., "s3://bucket/path.zarr")
     /// * `max_cache_entries` - Maximum cached coord chunks (0 = unlimited)
     #[staticmethod]
-    #[pyo3(signature = (url, max_cache_entries=0))]
+    #[pyo3(signature = (url, max_cache_entries=5))]
     fn from_url(
         url: String,
-        max_cache_entries: usize,
+        max_cache_entries: u64,
     ) -> PyResult<Self> {
         let backend = ZarrBackendSync::new(
             StoreInput::Url(url),
         )?;
 
-        let backend =
-            to_fully_cached_sync(backend)?;
+        let backend = to_fully_cached_sync(
+            backend,
+            max_cache_entries,
+        )?;
         Ok(Self {
             inner: Arc::new(backend),
         })
@@ -64,18 +66,20 @@ impl PyZarrBackendSync {
     /// * `prefix` - Optional path prefix within the store
     /// * `max_cache_entries` - Maximum cached coord chunks (0 = unlimited)
     #[staticmethod]
-    #[pyo3(signature = (store, prefix=None, max_cache_entries=0))]
+    #[pyo3(signature = (store, prefix=None, max_cache_entries=5))]
     fn from_store(
         store: &Bound<'_, PyAny>,
         prefix: Option<String>,
-        max_cache_entries: usize,
+        max_cache_entries: u64,
     ) -> PyResult<Self> {
         let store_input =
             StoreInput::from_py(store, prefix)?;
         let backend =
             ZarrBackendSync::new(store_input)?;
-        let backend =
-            to_fully_cached_sync(backend)?;
+        let backend = to_fully_cached_sync(
+            backend,
+            max_cache_entries,
+        )?;
         Ok(Self {
             inner: Arc::new(backend),
         })
@@ -207,7 +211,7 @@ impl PyZarrBackendSync {
     ) -> PyResult<Bound<'py, PyAny>> {
         let backend = self.inner.clone();
         future_into_py(py, async move {
-            backend.clear();
+            backend.clear_all_caches();
             Ok(())
         })
     }
@@ -220,6 +224,8 @@ impl PyZarrBackendSync {
         let backend = self.inner.clone();
         future_into_py(py, async move {
             let stats = backend.cache_stats();
+            let has_metadata =
+                backend.has_metadata_cached();
             Python::attach(|py| {
                 let dict =
                     pyo3::types::PyDict::new(py);
@@ -229,7 +235,7 @@ impl PyZarrBackendSync {
                 )?;
                 dict.set_item(
                     "has_metadata",
-                    stats.chunk_entries > 0,
+                    has_metadata,
                 )?;
                 Ok(dict.into_any().unbind())
             })

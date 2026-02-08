@@ -302,22 +302,30 @@ pub type FullyCachedZarrBackendAsync =
 
 pub fn to_fully_cached_sync(
     backend: ZarrBackendSync,
+    max_entries: u64,
 ) -> Result<
     FullyCachedZarrBackendSync,
     BackendError,
 > {
     Ok(HasMetadataBackendCacheSync::new(
-        ChunkedDataCacheSync::new(backend),
+        ChunkedDataCacheSync::new(
+            backend,
+            max_entries,
+        ),
     ))
 }
 
 pub fn to_fully_cached_async(
     backend: ZarrBackendAsync,
+    max_entries: u64,
 ) -> Result<
     FullyCachedZarrBackendAsync,
     BackendError,
 > {
     Ok(HasMetadataBackendCacheAsync::new(
-        ChunkedDataCacheAsync::new(backend),
+        ChunkedDataCacheAsync::new(
+            backend,
+            max_entries,
+        ),
     ))
 }

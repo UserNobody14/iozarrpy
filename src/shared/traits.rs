@@ -9,7 +9,7 @@ use moka::future::Cache as MokaFutureCache;
 use moka::sync::Cache as MokaCache;
 use std::collections::BTreeMap;
 use std::fmt::Display;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock as StdRwLock};
 
 use ambassador::{Delegate, delegatable_trait};
 use pyo3::PyErr;
@@ -267,7 +267,7 @@ pub struct HasMetadataBackendCacheSync<
     BACKEND: HasMetadataBackendSync<METADATA>,
 > {
     backend: BACKEND,
-    metadata: Option<Arc<METADATA>>,
+    metadata: StdRwLock<Option<Arc<METADATA>>>,
 }
 
 /// Async cache for metadata
@@ -286,10 +286,15 @@ pub struct HasMetadataBackendCacheAsync<
 impl<BACKEND: ChunkedDataBackendSync>
     ChunkedDataCacheSync<BACKEND>
 {
-    pub fn new(backend: BACKEND) -> Self {
+    pub fn new(
+        backend: BACKEND,
+        max_entries: u64,
+    ) -> Self {
         Self {
             backend,
-            chunk_cache: MokaCache::new(1000),
+            chunk_cache: MokaCache::new(
+                max_entries,
+            ),
             stats: RwLock::new(
                 PlannerStats::default(),
             ),
@@ -300,11 +305,14 @@ impl<BACKEND: ChunkedDataBackendSync>
 impl<BACKEND: ChunkedDataBackendAsync>
     ChunkedDataCacheAsync<BACKEND>
 {
-    pub fn new(backend: BACKEND) -> Self {
+    pub fn new(
+        backend: BACKEND,
+        max_entries: u64,
+    ) -> Self {
         Self {
             backend,
             chunk_cache: MokaFutureCache::new(
-                1000,
+                max_entries,
             ),
             stats: RwLock::new(
                 PlannerStats::default(),
@@ -321,7 +329,26 @@ impl<
     pub fn new(backend: BACKEND) -> Self {
         Self {
             backend,
-            metadata: None,
+            metadata: StdRwLock::new(None),
+        }
+    }
+
+    /// Whether metadata has already been loaded and cached.
+    pub fn has_metadata_cached(&self) -> bool {
+        self.metadata
+            .read()
+            .ok()
+            .is_some_and(|g| g.is_some())
+    }
+
+    /// Clear both metadata and coordinate chunk caches (where supported).
+    pub fn clear_all_caches(&self)
+    where
+        BACKEND: EvictableChunkCacheSync,
+    {
+        self.backend.clear();
+        if let Ok(mut g) = self.metadata.write() {
+            *g = None;
         }
     }
 }
@@ -340,6 +367,22 @@ impl<
             backend,
             metadata: RwLock::new(None),
         }
+    }
+
+    /// Whether metadata has already been loaded and cached.
+    pub async fn has_metadata_cached(
+        &self,
+    ) -> bool {
+        self.metadata.read().await.is_some()
+    }
+
+    /// Clear both metadata and coordinate chunk caches (where supported).
+    pub async fn clear_all_caches(&self)
+    where
+        BACKEND: EvictableChunkCacheAsync,
+    {
+        self.backend.clear().await;
+        *self.metadata.write().await = None;
     }
 }
 
@@ -412,12 +455,16 @@ impl<
     fn metadata(
         &self,
     ) -> Result<Arc<METADATA>, BackendError> {
-        if let Some(metadata) =
-            self.metadata.clone()
-        {
-            return Ok(metadata.clone());
+        if let Ok(g) = self.metadata.read() {
+            if let Some(m) = g.as_ref() {
+                return Ok(m.clone());
+            }
         }
+
         let metadata = self.backend.metadata()?;
+        if let Ok(mut g) = self.metadata.write() {
+            *g = Some(metadata.clone());
+        }
         Ok(metadata)
     }
 }

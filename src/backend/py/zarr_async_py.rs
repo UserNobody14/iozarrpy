@@ -2,20 +2,21 @@
 //!
 //! Exposes the caching backend to Python with scan methods.
 
-use std::fmt::Pointer;
 use std::sync::Arc;
 
 use pyo3::prelude::*;
 use pyo3::types::PyAny;
 use pyo3_async_runtimes::tokio::future_into_py;
 use pyo3_polars::PySchema;
+use std::collections::BTreeSet;
+use zarrs::array::Array;
 
 use crate::py::expr_extract::extract_expr;
 use crate::scan::chunk_to_df::chunk_to_df_from_grid_with_backend;
 use crate::shared::ChunkedExpressionCompilerAsync;
 use crate::shared::{
     EvictableChunkCacheAsync,
-    FullyCachedZarrBackendAsync,
+    FullyCachedZarrBackendAsync, HasAsyncStore,
     HasMetadataBackendAsync, ZarrBackendAsync,
     to_fully_cached_async,
 };
@@ -44,17 +45,19 @@ impl PyZarrBackend {
     /// * `url` - URL to the zarr store (e.g., "s3://bucket/path.zarr")
     /// * `max_cache_entries` - Maximum cached coord chunks (0 = unlimited)
     #[staticmethod]
-    #[pyo3(signature = (url, max_cache_entries=0))]
+    #[pyo3(signature = (url, max_cache_entries=5))]
     fn from_url(
         url: String,
-        max_cache_entries: usize,
+        max_cache_entries: u64,
     ) -> PyResult<Self> {
         let backend = ZarrBackendAsync::new(
             StoreInput::Url(url),
         )?;
 
-        let backend =
-            to_fully_cached_async(backend)?;
+        let backend = to_fully_cached_async(
+            backend,
+            max_cache_entries,
+        )?;
         Ok(Self {
             inner: Arc::new(backend),
         })
@@ -67,18 +70,20 @@ impl PyZarrBackend {
     /// * `prefix` - Optional path prefix within the store
     /// * `max_cache_entries` - Maximum cached coord chunks (0 = unlimited)
     #[staticmethod]
-    #[pyo3(signature = (store, prefix=None, max_cache_entries=0))]
+    #[pyo3(signature = (store, prefix=None, max_cache_entries=5))]
     fn from_store(
         store: &Bound<'_, PyAny>,
         prefix: Option<String>,
-        max_cache_entries: usize,
+        max_cache_entries: u64,
     ) -> PyResult<Self> {
         let store_input =
             StoreInput::from_py(store, prefix)?;
         let backend =
             ZarrBackendAsync::new(store_input)?;
-        let backend =
-            to_fully_cached_async(backend)?;
+        let backend = to_fully_cached_async(
+            backend,
+            max_cache_entries,
+        )?;
         Ok(Self {
             inner: Arc::new(backend),
         })
@@ -272,8 +277,44 @@ impl PyZarrBackend {
                         .map(|v| v.to_string())
                         .collect();
 
-                    let mut chunks: Vec<ChunkInfo> =
-                        Vec::new();
+                    // For sharded arrays, the planner produces *inner* chunk indices
+                    // but remote access happens at the shard-file level (one remote file
+                    // can contain many inner chunks). For debug output we want to reflect
+                    // which remote shard files are touched.
+                    let inner_chunk_shape: Vec<u64> =
+                        sig.chunk_shape().to_vec();
+
+                    // Try to open one representative array to detect sharding and obtain
+                    // the shard (outer chunk) shape and array shape.
+                    let store = backend.async_store().clone();
+                    let mut outer_chunk_shape: Option<Vec<u64>> = None;
+                    let mut array_shape: Option<Vec<u64>> = None;
+                    if let Some(var) = vars.first() {
+                        let path =
+                            crate::shared::normalize_path(*var);
+                        if let Ok(arr) = Array::async_open(
+                            store.clone(),
+                            &path,
+                        )
+                        .await
+                        {
+                            let zero =
+                                vec![0u64; arr.dimensionality()];
+                            outer_chunk_shape = arr
+                                .chunk_grid()
+                                .chunk_shape_u64(&zero)
+                                .ok()
+                                .flatten();
+                            array_shape = Some(arr.shape().to_vec());
+                        }
+                    }
+
+                    let is_sharded = outer_chunk_shape
+                        .as_ref()
+                        .is_some_and(|outer| outer != &inner_chunk_shape);
+
+                    let mut chunks: Vec<ChunkInfo> = Vec::new();
+                    let mut seen_outer: BTreeSet<Vec<u64>> = BTreeSet::new();
 
                     for subset in subsets.subsets_iter()
                     {
@@ -293,33 +334,88 @@ impl PyZarrBackend {
                         {
                             for idx in indices.indices()
                             {
-                                let chunk_shape =
-                                    sig.chunk_shape();
-                                let origin = chunkgrid
-                                    .chunk_origin(&idx)
-                                    .map_err(|e| {
-                                        PyErr::new::<
-                                        pyo3::exceptions::PyValueError,
-                                        _,
-                                    >(e.to_string())
-                                    })?
-                                    .unwrap_or_else(
-                                        || {
-                                            vec![
-                                            0;
-                                            chunk_shape
-                                                .len()
-                                        ]
-                                        },
-                                    );
+                                let inner_idx = idx.to_vec();
 
-                                chunks.push(ChunkInfo {
-                                    indices: idx
-                                        .to_vec(),
-                                    origin,
-                                    shape: chunk_shape
-                                        .to_vec(),
-                                });
+                                if is_sharded {
+                                    let Some(outer_shape) =
+                                        outer_chunk_shape.as_ref()
+                                    else {
+                                        continue;
+                                    };
+                                    // Map inner chunk index -> shard index
+                                    let outer_idx: Vec<u64> =
+                                        inner_idx
+                                            .iter()
+                                            .zip(
+                                                inner_chunk_shape.iter(),
+                                            )
+                                            .zip(outer_shape.iter())
+                                            .map(
+                                                |((&i, &inner_sz), &outer_sz)| {
+                                                    if outer_sz == 0 {
+                                                        0
+                                                    } else {
+                                                        i.saturating_mul(inner_sz)
+                                                            / outer_sz
+                                                    }
+                                                },
+                                            )
+                                            .collect();
+
+                                    if !seen_outer.insert(outer_idx.clone()) {
+                                        continue;
+                                    }
+
+                                    let origin: Vec<u64> = outer_idx
+                                        .iter()
+                                        .zip(outer_shape.iter())
+                                        .map(|(&i, &sz)| i.saturating_mul(sz))
+                                        .collect();
+
+                                    // Compute actual shard shape at boundaries
+                                    let shape: Vec<u64> = match array_shape.as_ref() {
+                                        Some(a_shape) if a_shape.len() == outer_shape.len() => {
+                                            origin
+                                                .iter()
+                                                .zip(a_shape.iter())
+                                                .zip(outer_shape.iter())
+                                                .map(|((&o, &a), &s)| {
+                                                    if o >= a {
+                                                        0
+                                                    } else {
+                                                        (a - o).min(s)
+                                                    }
+                                                })
+                                                .collect()
+                                        }
+                                        _ => outer_shape.clone(),
+                                    };
+
+                                    chunks.push(ChunkInfo {
+                                        indices: outer_idx,
+                                        origin,
+                                        shape,
+                                    });
+                                } else {
+                                    let chunk_shape = sig.chunk_shape();
+                                    let origin = chunkgrid
+                                        .chunk_origin(&idx)
+                                        .map_err(|e| {
+                                            PyErr::new::<
+                                                pyo3::exceptions::PyValueError,
+                                                _,
+                                            >(e.to_string())
+                                        })?
+                                        .unwrap_or_else(|| {
+                                            vec![0; chunk_shape.len()]
+                                        });
+
+                                    chunks.push(ChunkInfo {
+                                        indices: inner_idx,
+                                        origin,
+                                        shape: chunk_shape.to_vec(),
+                                    });
+                                }
                             }
                         }
                     }
@@ -412,7 +508,7 @@ impl PyZarrBackend {
     ) -> PyResult<Bound<'py, PyAny>> {
         let backend = self.inner.clone();
         future_into_py(py, async move {
-            backend.clear().await;
+            backend.clear_all_caches().await;
             Ok(())
         })
     }
@@ -426,6 +522,8 @@ impl PyZarrBackend {
         future_into_py(py, async move {
             let stats =
                 backend.cache_stats().await;
+            let has_metadata =
+                backend.has_metadata_cached().await;
             Python::attach(|py| {
                 let dict =
                     pyo3::types::PyDict::new(py);
@@ -435,7 +533,7 @@ impl PyZarrBackend {
                 )?;
                 dict.set_item(
                     "has_metadata",
-                    stats.chunk_entries > 0,
+                    has_metadata,
                 )?;
                 Ok(dict.into_any().unbind())
             })
