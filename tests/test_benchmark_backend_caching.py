@@ -122,7 +122,7 @@ def impl_scan_zarr_async(path: str) -> pl.DataFrame:
             max_concurrency=8,
             with_columns=["y", "x", "geopotential_height"],
         )
-        return df.filter(pred).select(["y", "x", "geopotential_height"])
+        return df
 
     return asyncio.run(_run())
 
@@ -138,7 +138,7 @@ def impl_backend_cached(backend: rainbear.ZarrBackend) -> pl.DataFrame:
             max_concurrency=8,
             with_columns=["y", "x", "geopotential_height"],
         )
-        return df.filter(pred).select(["y", "x", "geopotential_height"])
+        return df
 
     return asyncio.run(_run())
 

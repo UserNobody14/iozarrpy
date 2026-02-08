@@ -31,7 +31,6 @@ import random
 from datetime import datetime, timedelta
 from typing import NamedTuple
 
-import numpy as np
 import polars as pl
 import pytest
 import xarray as xr
@@ -182,15 +181,16 @@ def impl_xarray_fresh(path: str, q: QueryBounds, base_time: datetime) -> int:
 
     ds = xr.open_zarr(path, chunks=None)
     try:
-        result = ds.sel(
+        result_fresh = ds.sel(
             time=target_time,
             lead_time=target_lead,
             y=slice(q.y_min, q.y_max),
             x=slice(q.x_min, q.x_max),
-        )["temperature"].values
+        )["temperature"]
+        result = result_fresh.to_dataframe().reset_index()
     finally:
         ds.close()
-    return int(np.prod(result.shape))
+    return len(result)
 
 
 def impl_xarray_reused(ds: xr.Dataset, q: QueryBounds, base_time: datetime) -> int:
@@ -203,8 +203,9 @@ def impl_xarray_reused(ds: xr.Dataset, q: QueryBounds, base_time: datetime) -> i
         lead_time=target_lead,
         y=slice(q.y_min, q.y_max),
         x=slice(q.x_min, q.x_max),
-    )["temperature"].values
-    return int(np.prod(result.shape))
+    )["temperature"]
+    result = result.to_dataframe().reset_index()
+    return len(result)
 
 
 def impl_scan_zarr(path: str, q: QueryBounds, base_time: datetime) -> int:
@@ -570,8 +571,9 @@ def remote_xarray(remote_dataset_path: str | None):
     """Open remote xarray dataset once."""
     if not remote_dataset_path:
         pytest.skip("Set RAINBEAR_REMOTE_4D for remote benchmarks")
-    ds = xr.open_zarr(remote_dataset_path, chunks=None)
-    yield ds
+    ds = xr.open_zarr(remote_dataset_path, chunks=None).load()
+    df = ds.to_dataframe().reset_index()
+    yield df
     ds.close()
 
 

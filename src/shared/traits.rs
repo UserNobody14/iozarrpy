@@ -4,7 +4,9 @@
 //! - Persistent caching of coordinate array chunks across scans
 //! - Thread-safe access to cached metadata
 //! - Extensibility for alternative backends (icechunk, gribberish, etc.)
-
+// Use the synchronous cache.
+use moka::future::Cache as MokaFutureCache;
+use moka::sync::Cache as MokaCache;
 use std::collections::BTreeMap;
 use std::fmt::Display;
 use std::sync::Arc;
@@ -225,9 +227,8 @@ pub struct ChunkedDataCacheSync<
     BACKEND: ChunkedDataBackendSync,
 > {
     backend: BACKEND,
-    chunk_cache: RwLock<
-        BTreeMap<(IStr, Vec<u64>), ColumnData>,
-    >,
+    chunk_cache:
+        MokaCache<(IStr, Vec<u64>), ColumnData>,
     stats: RwLock<PlannerStats>,
 }
 
@@ -242,8 +243,9 @@ pub struct ChunkedDataCacheAsync<
     BACKEND: ChunkedDataBackendAsync,
 > {
     backend: BACKEND,
-    chunk_cache: RwLock<
-        BTreeMap<(IStr, Vec<u64>), ColumnData>,
+    chunk_cache: MokaFutureCache<
+        (IStr, Vec<u64>),
+        ColumnData,
     >,
     stats: RwLock<PlannerStats>,
 }
@@ -287,9 +289,7 @@ impl<BACKEND: ChunkedDataBackendSync>
     pub fn new(backend: BACKEND) -> Self {
         Self {
             backend,
-            chunk_cache: RwLock::new(
-                BTreeMap::new(),
-            ),
+            chunk_cache: MokaCache::new(1000),
             stats: RwLock::new(
                 PlannerStats::default(),
             ),
@@ -303,8 +303,8 @@ impl<BACKEND: ChunkedDataBackendAsync>
     pub fn new(backend: BACKEND) -> Self {
         Self {
             backend,
-            chunk_cache: RwLock::new(
-                BTreeMap::new(),
+            chunk_cache: MokaFutureCache::new(
+                1000,
             ),
             stats: RwLock::new(
                 PlannerStats::default(),
@@ -358,17 +358,15 @@ impl<BACKEND: ChunkedDataBackendSync>
     ) -> Result<ColumnData, BackendError> {
         let key =
             (var.clone(), chunk_idx.to_vec());
-        let cache =
-            self.chunk_cache.blocking_read();
-        if let Some(data) = cache.get(&key) {
-            return Ok(data.clone());
+        let cache = self.chunk_cache.get(&key);
+        if let Some(data) = cache {
+            return Ok(data);
         }
         drop(cache);
         let data = self
             .backend
             .read_chunk_sync(var, chunk_idx)?;
         self.chunk_cache
-            .blocking_write()
             .insert(key, data.clone());
         Ok(data)
     }
@@ -386,19 +384,18 @@ impl<BACKEND: ChunkedDataBackendAsync>
     ) -> Result<ColumnData, BackendError> {
         let key =
             (var.clone(), chunk_idx.to_vec());
-        let cache = self.chunk_cache.read().await;
-        if let Some(data) = cache.get(&key) {
-            return Ok(data.clone());
+        let cache =
+            self.chunk_cache.get(&key).await;
+        if let Some(data) = cache {
+            return Ok(data);
         }
-        drop(cache);
         let data = self
             .backend
             .read_chunk_async(var, chunk_idx)
             .await?;
         self.chunk_cache
-            .write()
-            .await
-            .insert(key, data.clone());
+            .insert(key, data.clone())
+            .await;
         Ok(data)
     }
 }
@@ -696,12 +693,12 @@ impl<BACKEND: ChunkedDataBackendSync>
         CacheStats {
             chunk_entries: self
                 .chunk_cache
-                .blocking_read()
-                .len(),
+                .entry_count()
+                as usize,
         }
     }
     fn clear(&self) {
-        self.chunk_cache.blocking_write().clear();
+        self.chunk_cache.invalidate_all();
     }
 }
 
@@ -714,13 +711,12 @@ impl<BACKEND: ChunkedDataBackendAsync>
         CacheStats {
             chunk_entries: self
                 .chunk_cache
-                .read()
-                .await
-                .len(),
+                .entry_count()
+                as usize,
         }
     }
     async fn clear(&self) {
-        self.chunk_cache.write().await.clear();
+        self.chunk_cache.invalidate_all();
     }
 }
 
