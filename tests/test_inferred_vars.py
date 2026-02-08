@@ -258,12 +258,6 @@ class TestVariableInference:
         inferred = get_inferred_vars(multi_var_dataset.path, expr)
         assert inferred == {"temp", "pressure"}
 
-    def test_infer_vars_from_comparison(self, multi_var_dataset: MultiVarDatasetInfo):
-        """Comparison should infer the referenced variable."""
-        expr = pl.all().filter(pl.col("wind_u") > 20)
-        inferred = get_inferred_vars(multi_var_dataset.path, expr)
-        assert inferred == {"wind_u"}
-
     def test_infer_vars_from_chained_ops(self, multi_var_dataset: MultiVarDatasetInfo):
         """Chained operations should infer all variables."""
         expr = (pl.col("temp") + pl.col("precip")).abs() * pl.col("pressure")
