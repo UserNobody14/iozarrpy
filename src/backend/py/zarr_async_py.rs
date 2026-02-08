@@ -12,7 +12,7 @@ use std::collections::BTreeSet;
 use zarrs::array::Array;
 
 use crate::py::expr_extract::extract_expr;
-use crate::scan::chunk_to_df::chunk_to_df_from_grid_with_backend;
+use crate::scan::async_scan::chunk_to_df_from_grid_with_backend;
 use crate::shared::ChunkedExpressionCompilerAsync;
 use crate::shared::{
     EvictableChunkCacheAsync,

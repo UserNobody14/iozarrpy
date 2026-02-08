@@ -27,7 +27,7 @@ fn to_py_err<E: std::fmt::Display>(
     )
 }
 
-use crate::scan::columns::{
+use crate::scan::shared::{
     build_coord_column, build_var_column,
     compute_actual_chunk_shape,
     compute_in_bounds_mask,

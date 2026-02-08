@@ -6,7 +6,7 @@ use std::sync::Arc;
 use polars::prelude::*;
 use pyo3::PyErr;
 
-use crate::scan::sync_chunk_to_df::chunk_to_df_from_grid_with_backend;
+use crate::scan::sync_scan::chunk_to_df_from_grid_with_backend;
 use crate::shared::ChunkedExpressionCompilerSync;
 use crate::shared::FullyCachedZarrBackendSync;
 use crate::shared::{
