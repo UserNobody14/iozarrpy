@@ -59,6 +59,7 @@ def zarr_backend(bench_dataset_path: str) -> rainbear.ZarrBackend:
 # Query predicates
 # ---------------------------------------------------------------------------
 
+_columns = ["y", "x", "geopotential_height"]
 
 def _pred_subset() -> pl.Expr:
     """A restrictive predicate that selects a small subset."""
@@ -96,7 +97,7 @@ def impl_xarray_fresh(path: str) -> pl.DataFrame:
     finally:
         ds.close()
     df = pl.from_pandas(pdf)
-    return df.filter(_pred_subset()).select(["y", "x", "geopotential_height"])
+    return df.filter(_pred_subset()).select(_columns)
 
 
 def impl_scan_zarr(path: str) -> pl.DataFrame:
@@ -105,7 +106,7 @@ def impl_scan_zarr(path: str) -> pl.DataFrame:
     return (
         rainbear.scan_zarr(path)
         .filter(pred)
-        .select(["y", "x", "geopotential_height"])
+        .select(_columns)
         .collect()
     )
 
@@ -117,10 +118,8 @@ def impl_scan_zarr_async(path: str) -> pl.DataFrame:
     async def _run() -> pl.DataFrame:
         df = await rainbear.scan_zarr_async(
             path,
-            pred,
-            variables=["geopotential_height"],
+            pl.col(_columns).filter(pred),
             max_concurrency=8,
-            with_columns=["y", "x", "geopotential_height"],
         )
         return df
 
@@ -133,10 +132,8 @@ def impl_backend_cached(backend: rainbear.ZarrBackend) -> pl.DataFrame:
 
     async def _run() -> pl.DataFrame:
         df = await backend.scan_zarr_async(
-            pred,
-            variables=["geopotential_height"],
+            pl.col(_columns).filter(pred),
             max_concurrency=8,
-            with_columns=["y", "x", "geopotential_height"],
         )
         return df
 
@@ -260,12 +257,10 @@ def _concurrent_queries_backend(backend: rainbear.ZarrBackend, n: int = 5) -> li
     async def _run() -> list[pl.DataFrame]:
         async def single_query() -> pl.DataFrame:
             df = await backend.scan_zarr_async(
-                pred,
-                variables=["geopotential_height"],
+                pl.col(_columns).filter(pred),
                 max_concurrency=4,
-                with_columns=["y", "x", "geopotential_height"],
             )
-            return df.filter(pred).select(["y", "x", "geopotential_height"])
+            return df
 
         tasks = [single_query() for _ in range(n)]
         return await asyncio.gather(*tasks)
@@ -311,6 +306,9 @@ def remote_xarray_dataset(remote_dataset_path: str | None):
     ds.close()
 
 
+_remote_columns = ["time", "lead_time", "y", "x", "80m_wind_speed"]
+
+
 def _remote_pred() -> pl.Expr:
     """Predicate for remote dataset (single point in space-time)."""
     return (
@@ -354,7 +352,7 @@ def impl_remote_scan_zarr(path: str) -> pl.DataFrame:
     return (
         rainbear.scan_zarr(path)
         .filter(pred)
-        .select(["time", "lead_time", "y", "x", "80m_wind_speed"])
+        .select(_remote_columns)
         .collect()
     )
 
@@ -366,9 +364,8 @@ def impl_remote_scan_zarr_async(path: str) -> pl.DataFrame:
     async def _run() -> pl.DataFrame:
         df = await rainbear.scan_zarr_async(
             path,
-            pred,
-            variables=["80m_wind_speed"],
-            with_columns=["time", "lead_time", "x", "y", "80m_wind_speed"],
+            pl.col(_remote_columns).filter(pred),
+            max_chunks_to_read=5
         )
         return df
 
@@ -381,9 +378,8 @@ def impl_remote_backend_cached(backend: rainbear.ZarrBackend) -> pl.DataFrame:
 
     async def _run() -> pl.DataFrame:
         df = await backend.scan_zarr_async(
-            pred,
-            variables=["80m_wind_speed"],
-            with_columns=["time", "lead_time", "x", "y", "80m_wind_speed"],
+            pl.col(_remote_columns).filter(pred),
+            max_chunks_to_read=5
         )
         return df
 

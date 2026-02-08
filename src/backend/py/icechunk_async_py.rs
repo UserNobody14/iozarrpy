@@ -260,18 +260,14 @@ impl PyIcechunkBackend {
     ///
     /// # Arguments
     /// * `predicate` - Polars expression for filtering
-    /// * `variables` - Optional list of variable names to read
     /// * `max_concurrency` - Maximum concurrent chunk reads
-    /// * `with_columns` - Optional list of columns to include
     /// * `max_chunks_to_read` - Maximum number of chunks to read (safety limit)
-    #[pyo3(signature = (predicate, variables=None, max_concurrency=None, with_columns=None, max_chunks_to_read=None))]
+    #[pyo3(signature = (predicate, max_concurrency=None, max_chunks_to_read=None))]
     fn scan_zarr_async<'py>(
         &self,
         py: Python<'py>,
         predicate: &Bound<'_, PyAny>,
-        variables: Option<Vec<String>>,
         max_concurrency: Option<usize>,
-        with_columns: Option<Vec<String>>,
         max_chunks_to_read: Option<usize>,
     ) -> PyResult<Bound<'py, PyAny>> {
         use polars::prelude::IntoLazy;
@@ -280,33 +276,6 @@ impl PyIcechunkBackend {
         let expr = extract_expr(predicate)?;
         let expr2 = expr.clone();
 
-        // Combine with_columns and variables into a single projection set
-        let with_columns_set: Option<
-            BTreeSet<IStr>,
-        > = match (with_columns, variables) {
-            (Some(cols), Some(vars)) => {
-                let mut set: BTreeSet<IStr> =
-                    cols.into_iter()
-                        .map(|s| s.istr())
-                        .collect();
-                for v in vars {
-                    set.insert(v.istr());
-                }
-                Some(set)
-            }
-            (Some(cols), None) => Some(
-                cols.into_iter()
-                    .map(|s| s.istr())
-                    .collect(),
-            ),
-            (None, Some(vars)) => Some(
-                vars.into_iter()
-                    .map(|s| s.istr())
-                    .collect(),
-            ),
-            (None, None) => None,
-        };
-
         let backend = self.inner.clone();
 
         future_into_py(py, async move {
@@ -314,20 +283,22 @@ impl PyIcechunkBackend {
                 backend,
                 expr,
                 max_concurrency,
-                with_columns_set,
                 max_chunks_to_read,
             )
             .await?;
 
-            let filtered = df
-                .lazy()
-                .filter(expr2)
-                .collect()
-                .map_err(|e| {
-                    PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
-                        e.to_string(),
-                    )
-                })?;
+            // `predicate` is used for chunk planning but may also include projection,
+            // e.g. `pl.col(["y","x","var"]).filter(pred)`.
+            let lf = df.lazy();
+            let filtered =                         lf
+                            .select([expr2])
+                            .collect()
+                            .map_err(|e| {
+                                PyErr::new::<
+                                    pyo3::exceptions::PyRuntimeError,
+                                    _,
+                                >(e.to_string())
+                            })?;
 
             Python::attach(|py| {
                 Ok(PyDataFrame(filtered)
@@ -675,7 +646,6 @@ async fn scan_with_backend_async<B>(
     backend: Arc<B>,
     expr: polars::prelude::Expr,
     max_concurrency: Option<usize>,
-    with_columns: Option<BTreeSet<IStr>>,
     max_chunks_to_read: Option<usize>,
 ) -> Result<polars::prelude::DataFrame, PyErr>
 where
@@ -689,6 +659,7 @@ where
     use futures::stream::{
         FuturesUnordered, StreamExt,
     };
+    use std::collections::BTreeSet;
     use std::sync::Arc as StdArc;
 
     const DEFAULT_MAX_CONCURRENCY: usize = 32;
@@ -697,13 +668,13 @@ where
     let planning_meta =
         StdArc::new(meta.planning_meta());
 
-    // Expand struct column names to flat paths for chunk reading
-    let expanded_with_columns =
-        with_columns.as_ref().map(|cols| {
-            expand_projection_to_flat_paths(
-                cols, &meta,
-            )
-        });
+    // // Expand struct column names to flat paths for chunk reading
+    // let expanded_with_columns =
+    //     with_columns.as_ref().map(|cols| {
+    //         expand_projection_to_flat_paths(
+    //             cols, &meta,
+    //         )
+    //     });
 
     // Compile grouped chunk plan using backend-based resolver
     let (grouped_plan, _stats) = backend
@@ -717,6 +688,9 @@ where
         for (_sig, _vars, subsets, chunkgrid) in
             grouped_plan.iter_grids()
         {
+            // Deduplicate chunk indices across potentially overlapping subsets.
+            let mut uniq: BTreeSet<Vec<u64>> =
+                BTreeSet::new();
             for subset in subsets.subsets_iter() {
                 if let Ok(Some(indices)) =
                     chunkgrid
@@ -724,10 +698,12 @@ where
                             subset,
                         )
                 {
-                    total_chunks += indices
-                        .num_elements_usize();
+                    for idx in indices.indices() {
+                        uniq.insert(idx.to_vec());
+                    }
                 }
             }
+            total_chunks += uniq.len();
         }
         if total_chunks > max_chunks {
             return Err(PyErr::new::<
@@ -747,10 +723,6 @@ where
         tokio::sync::Semaphore::new(max_conc),
     );
 
-    // Wrap in Arc for sharing across tasks
-    let expanded_with_columns =
-        expanded_with_columns.map(StdArc::new);
-
     let mut futs = FuturesUnordered::new();
     for (sig, vars, subsets, chunkgrid) in
         grouped_plan.iter_grids()
@@ -762,6 +734,8 @@ where
         let array_shape =
             chunkgrid.array_shape().to_vec();
 
+        let mut uniq: BTreeSet<Vec<u64>> =
+            BTreeSet::new();
         for subset in subsets.subsets_iter() {
             let chunk_indices = chunkgrid
                 .chunks_in_array_subset(subset)
@@ -775,33 +749,34 @@ where
                         "no chunks found",
                     )
                 })?;
-
             for idx in chunk_indices.indices() {
-                let sem = semaphore.clone();
-                let backend = backend.clone();
-                let sig = sig.clone();
-                let array_shape =
-                    array_shape.clone();
-                let vars = vars.clone();
-                let expanded_cols =
-                    expanded_with_columns.clone();
-
-                futs.push(async move {
-                    let _permit = sem
-                        .acquire_owned()
-                        .await
-                        .expect("semaphore closed");
-                    chunk_to_df_from_grid_with_backend(
-                        backend.as_ref(),
-                        idx.into(),
-                        &sig,
-                        &array_shape,
-                        &vars,
-                        expanded_cols.as_ref().map(|a| a.as_ref()),
-                    )
-                    .await
-                });
+                uniq.insert(idx.to_vec());
             }
+        }
+
+        for idx in uniq {
+            let sem = semaphore.clone();
+            let backend = backend.clone();
+            let sig = sig.clone();
+            let array_shape = array_shape.clone();
+            let vars = vars.clone();
+
+            futs.push(async move {
+                let _permit = sem
+                    .acquire_owned()
+                    .await
+                    .expect("semaphore closed");
+                chunk_to_df_from_grid_with_backend(
+                    backend.as_ref(),
+                    idx.into(),
+                    &sig,
+                    &array_shape,
+                    &vars,
+                    None,
+                    // expanded_cols.as_ref().map(|a| a.as_ref()),
+                )
+                .await
+            });
         }
     }
 

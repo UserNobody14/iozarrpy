@@ -236,6 +236,13 @@ async fn read_var_chunks<
     let mut var_reads = FuturesUnordered::new();
 
     for name in vars.iter() {
+        // Dimension columns are always produced via `build_coord_column`.
+        // If a dataset also has 1D coord arrays named the same as dims (e.g. "x", "y", "a"),
+        // they can appear in `vars` (e.g. from `pl.col(["x","y",...])`). Reading them as
+        // "variables" would create duplicate DataFrame columns (two "x" columns, etc.).
+        if dims.iter().any(|d| d == name) {
+            continue;
+        }
         if !should_include_column(
             name,
             with_columns,

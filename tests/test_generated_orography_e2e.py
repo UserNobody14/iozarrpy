@@ -47,8 +47,7 @@ def test_generated_orography_multi_var(dataset_path) -> None:
 
     lf = rainbear.scan_zarr(
         path,
-        variables=["geopotential_height", "latitude", "longitude"],
-    )
+    ).select(["y", "x", "geopotential_height", "latitude", "longitude"])
     df = lf.collect()
     assert df.columns == ["y", "x", "geopotential_height", "latitude", "longitude"]
     assert df.height == 12 * 9

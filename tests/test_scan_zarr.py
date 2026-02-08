@@ -40,8 +40,12 @@ def test_max_chunks_to_read(baseline_datasets: dict[str, str]) -> None:
     zarr_url = baseline_datasets["orography_chunked_10x10"]
 
     lf = rainbear.scan_zarr(
-        zarr_url, variables=["geopotential_height"], max_chunks_to_read=1
-    )
-
+        zarr_url, max_chunks_to_read=1
+    ).select(["y", "x", "geopotential_height"])
     with pytest.raises(pl.exceptions.ComputeError, match="max_chunks_to_read"):
         lf.collect()
+
+    df = rainbear.scan_zarr(
+        zarr_url, max_chunks_to_read=4
+    ).filter(pl.col("y") >= 3).select(["y", "x", "geopotential_height"]).collect()
+    assert df.height == 260

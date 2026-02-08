@@ -31,6 +31,7 @@ def _bench_enable_pushdown(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("RAINBEAR_PREDICATE_PUSHDOWN", "1")
 
 
+_columns = ["y", "x", "geopotential_height"]
 def _pred_orog_subset() -> pl.Expr:
     return (
         (pl.col("y") >= 3)
@@ -51,17 +52,12 @@ def _bench_xarray_to_polars(path: str) -> pl.DataFrame:
     finally:
         ds.close()
     df = pl.from_pandas(pdf)
-    return df.filter(_pred_orog_subset()).select(["y", "x", "geopotential_height"])
+    return df.filter(_pred_orog_subset()).select(_columns)
 
 
 def _bench_rainbear_scan_zarr(path: str) -> pl.DataFrame:
     pred = _pred_orog_subset()
-    return (
-        rainbear.scan_zarr(path)
-        .filter(pred)
-        .select(["y", "x", "geopotential_height"])
-        .collect()
-    )
+    return rainbear.scan_zarr(path).filter(pred).select(_columns).collect()
 
 
 def _bench_rainbear_scan_zarr_async(path: str) -> pl.DataFrame:
@@ -70,13 +66,10 @@ def _bench_rainbear_scan_zarr_async(path: str) -> pl.DataFrame:
     async def _run() -> pl.DataFrame:
         df = await rainbear.scan_zarr_async(
             path,
-            pred,
-            variables=["geopotential_height"],
-            max_concurrency=8,
-            with_columns=["y", "x", "geopotential_height"],
+            pl.col(_columns).filter(pred),
+            max_concurrency=8
         )
-        # scan_zarr_async uses the predicate for planning, but row filtering is done here.
-        return df.filter(pred).select(["y", "x", "geopotential_height"])
+        return df
 
     return asyncio.run(_run())
 

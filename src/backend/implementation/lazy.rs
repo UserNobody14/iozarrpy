@@ -26,6 +26,7 @@ pub fn scan_zarr_with_backend_sync(
     with_columns: Option<BTreeSet<IStr>>,
     max_chunks_to_read: Option<usize>,
 ) -> Result<polars::prelude::DataFrame, PyErr> {
+    use std::collections::BTreeSet as StdBTreeSet;
     use std::sync::Arc as StdArc;
 
     // Get metadata from backend
@@ -52,6 +53,9 @@ pub fn scan_zarr_with_backend_sync(
         for (_sig, _vars, subsets, chunkgrid) in
             grouped_plan.iter_grids()
         {
+            // Deduplicate chunk indices across potentially overlapping subsets.
+            let mut uniq: StdBTreeSet<Vec<u64>> =
+                StdBTreeSet::new();
             for subset in subsets.subsets_iter() {
                 if let Ok(Some(indices)) =
                     chunkgrid
@@ -59,10 +63,12 @@ pub fn scan_zarr_with_backend_sync(
                             subset,
                         )
                 {
-                    total_chunks += indices
-                        .num_elements_usize();
+                    for idx in indices.indices() {
+                        uniq.insert(idx.to_vec());
+                    }
                 }
             }
+            total_chunks += uniq.len();
         }
         if total_chunks > max_chunks {
             return Err(PyErr::new::<
@@ -86,6 +92,8 @@ pub fn scan_zarr_with_backend_sync(
         let array_shape =
             chunkgrid.array_shape().to_vec();
 
+        let mut uniq: StdBTreeSet<Vec<u64>> =
+            StdBTreeSet::new();
         for subset in subsets.subsets_iter() {
             let chunk_indices = chunkgrid
                 .chunks_in_array_subset(subset)
@@ -99,19 +107,22 @@ pub fn scan_zarr_with_backend_sync(
                     pyo3::exceptions::PyValueError,
                     _,
                 >("no chunks found"))?;
-
             for idx in chunk_indices.indices() {
-                let df =
-                    chunk_to_df_from_grid_with_backend(
-                        backend,
-                        idx.into(),
-                        sig,
-                        &array_shape,
-                        &vars,
-                        expanded_with_columns.as_ref(),
-                    )?;
-                dfs.push(df);
+                uniq.insert(idx.to_vec());
             }
+        }
+
+        for idx in uniq {
+            let df =
+                chunk_to_df_from_grid_with_backend(
+                    backend,
+                    idx.into(),
+                    sig,
+                    &array_shape,
+                    &vars,
+                    expanded_with_columns.as_ref(),
+                )?;
+            dfs.push(df);
         }
     }
 

@@ -169,6 +169,9 @@ def query_set_medium() -> list[QueryBounds]:
     return generate_random_queries(50, seed=54321)
 
 
+_columns = ["y", "x", "time", "lead_time", "temperature"]
+
+
 # ---------------------------------------------------------------------------
 # Implementation functions
 # ---------------------------------------------------------------------------
@@ -212,9 +215,9 @@ def impl_scan_zarr(path: str, q: QueryBounds, base_time: datetime) -> int:
     """Query using rainbear.scan_zarr (sync LazyFrame)."""
     pred = query_to_polars_pred(q, base_time)
     df = (
-        rainbear.scan_zarr(path, variables=["temperature"])
+        rainbear.scan_zarr(path)
         .filter(pred)
-        .select(["time", "lead_time", "y", "x", "temperature"])
+        .select(_columns)
         .collect()
     )
     return len(df)
@@ -227,10 +230,8 @@ def impl_scan_zarr_async(path: str, q: QueryBounds, base_time: datetime) -> int:
     async def _run() -> pl.DataFrame:
         return await rainbear.scan_zarr_async(
             path,
-            pred,
-            variables=["temperature"],
-            max_concurrency=8,
-            with_columns=["time", "lead_time", "y", "x", "temperature"],
+            pl.col(_columns).filter(pred),
+            max_concurrency=8
         )
 
     df = asyncio.run(_run())
@@ -245,10 +246,8 @@ def impl_backend_async(
 
     async def _run() -> pl.DataFrame:
         return await backend.scan_zarr_async(
-            pred,
-            variables=["temperature"],
-            max_concurrency=8,
-            with_columns=["time", "lead_time", "y", "x", "temperature"],
+            pl.col(_columns).filter(pred),
+            max_concurrency=8
         )
 
     df = asyncio.run(_run())
@@ -262,8 +261,7 @@ def impl_backend_sync(
     pred = query_to_polars_pred(q, base_time)
     df = backend.scan_zarr_sync(
         predicate=pred,
-        variables=["temperature"],
-        with_columns=["time", "lead_time", "y", "x", "temperature"],
+        with_columns=_columns
     )
     return len(df)
 
@@ -524,10 +522,8 @@ def run_concurrent_queries_backend(
         async def single_query(q: QueryBounds) -> int:
             pred = query_to_polars_pred(q, base_time)
             df = await backend.scan_zarr_async(
-                pred,
-                variables=["temperature"],
-                max_concurrency=4,
-                with_columns=["time", "lead_time", "y", "x", "temperature"],
+                pl.col(_columns).filter(pred),
+                max_concurrency=4
             )
             return len(df)
 

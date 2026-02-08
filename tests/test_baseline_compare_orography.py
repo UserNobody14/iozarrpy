@@ -175,13 +175,9 @@ def test_filter_on_both_dimensions(orography_path: str) -> None:
 def test_filter_on_latitude(orography_path: str) -> None:
     """Test filtering on latitude (2D float coordinate)."""
     columns = ["y", "x", "geopotential_height", "latitude"]
-    filter_expr = (pl.col("latitude") >= 20.05) & (pl.col("latitude") <= 20.15)
+    filter_expr = ((pl.col("latitude") >= 20.05) & (pl.col("latitude") <= 20.15))
     
-    out = (
-        rainbear.scan_zarr(orography_path, variables=["geopotential_height", "latitude"])
-        .filter(filter_expr)
-        .collect()
-    )
+    out = rainbear.scan_zarr(orography_path).filter(filter_expr).select(columns).collect()
     baseline = (
         scan_via_xarray(orography_path, columns=columns)
         .filter(filter_expr)
@@ -201,11 +197,12 @@ def test_filter_on_time_equality(path: str) -> None:
     
     columns = ["time", "lead_time", "y", "x", "temperature"]
     target_time = datetime(2024, 1, 1, 0, 0, 0)
-    filter_expr = pl.col("time") == target_time
+    filter_expr = (pl.col("time") == target_time)
     
     out = (
         rainbear.scan_zarr(path)
         .filter(filter_expr)
+        .select(columns)
         .collect()
     )
     baseline = (
@@ -221,11 +218,12 @@ def test_filter_on_lead_time(path: str) -> None:
     """Test filtering on lead_time (duration) dimension."""
     columns = ["time", "lead_time", "y", "x", "temperature"]
     # Filter for lead_time between 1 and 2 hours
-    filter_expr = (pl.col("lead_time") >= timedelta(hours=1)) & (pl.col("lead_time") <= timedelta(hours=2))
+    filter_expr = ((pl.col("lead_time") >= timedelta(hours=1)) & (pl.col("lead_time") <= timedelta(hours=2)))
     
     out = (
         rainbear.scan_zarr(path)
         .filter(filter_expr)
+        .select(columns)
         .collect()
     )
     baseline = (
@@ -253,6 +251,7 @@ def test_combined_time_and_spatial_filter(path: str) -> None:
     out = (
         rainbear.scan_zarr(path)
         .filter(filter_expr)
+        .select(columns)
         .collect()
     )
     baseline = (

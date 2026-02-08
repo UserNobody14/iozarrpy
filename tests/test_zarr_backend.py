@@ -47,12 +47,6 @@ class TestZarrBackendSchema:
         # Should have dimensions and data variables
         assert len(schema) > 0
 
-    def test_schema_specific_variables(self, baseline_datasets: dict[str, str]):
-        """Test getting schema for specific variables."""
-        zarr_url = baseline_datasets["orography_chunked_10x10"]
-        backend = rainbear.ZarrBackend.from_url(zarr_url)
-        schema = backend.schema(variables=["geopotential_height"])
-        assert schema is not None
 
 
 class TestZarrBackendAsyncScan:
@@ -110,21 +104,6 @@ class TestZarrBackendAsyncScan:
         assert stats1["has_metadata"] == True
         assert stats2["has_metadata"] == True
 
-    @pytest.mark.asyncio
-    async def test_scan_with_variables(self, baseline_datasets: dict[str, str]):
-        """Test async scan with specific variables."""
-        zarr_url = baseline_datasets["orography_chunked_10x10"]
-        backend = rainbear.ZarrBackend.from_url(zarr_url)
-
-        # Scan with specific variable
-        df = await backend.scan_zarr_async(
-            pl.lit(True),
-            variables=["geopotential_height"],
-        )
-
-        assert isinstance(df, pl.DataFrame)
-        # Should have geopotential_height column
-        assert "geopotential_height" in df.columns
 
 
 class TestZarrBackendCacheManagement:

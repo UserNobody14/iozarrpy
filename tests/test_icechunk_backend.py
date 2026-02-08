@@ -79,25 +79,6 @@ class TestIcechunkBackendBasic:
         for var in info.data_vars:
             assert var in schema, f"Missing variable: {var}"
 
-    async def test_schema_with_variable_filter(
-        self,
-        icechunk_datasets: dict[str, IcechunkDatasetInfo],
-    ) -> None:
-        """Test schema retrieval with variable filter."""
-        info = icechunk_datasets["icechunk_multi_var"]
-        backend = await rainbear.IcechunkBackend.from_filesystem(info.path)
-
-        # Request only specific variables
-        schema = backend.schema(variables=["temp", "precip"])
-        assert schema is not None
-
-        # Should have filtered variables
-        assert "temp" in schema
-        assert "precip" in schema
-
-        # Dimensions should still be present
-        for dim in info.dims:
-            assert dim in schema
 
 
 class TestIcechunkBackendScan:
@@ -112,7 +93,7 @@ class TestIcechunkBackendScan:
         backend = await rainbear.IcechunkBackend.from_filesystem(info.path)
 
         # Scan with true predicate (no filtering)
-        df = await backend.scan_zarr_async(pl.lit(True))
+        df = await backend.scan_zarr_async(pl.all().filter(pl.lit(True)))
 
         # Should have data
         assert df.height > 0
@@ -133,7 +114,7 @@ class TestIcechunkBackendScan:
 
         # Filter to a subset
         pred = (pl.col("y") >= 3) & (pl.col("y") <= 10)
-        df = await backend.scan_zarr_async(pred)
+        df = await backend.scan_zarr_async(pl.all().filter(pred))
 
         # Apply filter manually to verify
         df_filtered = df.filter(pred)
@@ -141,40 +122,6 @@ class TestIcechunkBackendScan:
         assert df_filtered["y"].min() >= 3
         assert df_filtered["y"].max() <= 10
 
-    async def test_scan_with_variables(
-        self,
-        icechunk_datasets: dict[str, IcechunkDatasetInfo],
-    ) -> None:
-        """Test scan with specific variables."""
-        info = icechunk_datasets["icechunk_multi_var"]
-        backend = await rainbear.IcechunkBackend.from_filesystem(info.path)
-
-        # Request specific variables
-        df = await backend.scan_zarr_async(
-            pl.lit(True),
-            variables=["temp", "precip"],
-        )
-
-        assert "temp" in df.columns
-        assert "precip" in df.columns
-
-    async def test_scan_with_columns(
-        self,
-        icechunk_datasets: dict[str, IcechunkDatasetInfo],
-    ) -> None:
-        """Test scan with with_columns parameter."""
-        info = icechunk_datasets["icechunk_comprehensive_3d"]
-        backend = await rainbear.IcechunkBackend.from_filesystem(info.path)
-
-        # Request specific columns
-        cols = ["a", "b", "data"]
-        df = await backend.scan_zarr_async(
-            pl.lit(True),
-            with_columns=cols,
-        )
-
-        for col in cols:
-            assert col in df.columns
 
 
 # ---------------------------------------------------------------------------
@@ -196,9 +143,7 @@ class TestIcechunkPredicatePushdown:
         # Filter a < 20 should hit chunks a=0,1 only (2 out of 7)
         pred = pl.col("a") < 20
         df = await backend.scan_zarr_async(
-            pred,
-            variables=["data"],
-            with_columns=["a", "b", "c", "data"],
+            pl.col(["a", "b", "c", "data"]).filter(pred),
         )
 
         # Apply filter and verify
@@ -217,9 +162,7 @@ class TestIcechunkPredicatePushdown:
         # Filter (a < 20) & (b < 20) should hit 2*2*3 = 12 chunks
         pred = (pl.col("a") < 20) & (pl.col("b") < 20)
         df = await backend.scan_zarr_async(
-            pred,
-            variables=["data"],
-            with_columns=["a", "b", "c", "data"],
+            pl.col(["a", "b", "c", "data"]).filter(pred),
         )
 
         df_filtered = df.filter(pred)
@@ -238,9 +181,8 @@ class TestIcechunkPredicatePushdown:
         # Filter 10 <= a < 30 should hit chunks a=1,2 only
         pred = (pl.col("a") >= 10) & (pl.col("a") < 30)
         df = await backend.scan_zarr_async(
-            pred,
-            variables=["data"],
-            with_columns=["a", "b", "c", "data"],
+            
+            pl.col(["a", "b", "c", "data"]).filter(pred),
         )
 
         df_filtered = df.filter(pred)
@@ -356,10 +298,10 @@ class TestIcechunkCaching:
         pred = (pl.col("y") >= 5) & (pl.col("x") >= 5)
 
         # First query
-        df1 = await backend.scan_zarr_async(pred)
+        df1 = await backend.scan_zarr_async(pl.all().filter(pred))
 
         # Second query (should use cache)
-        df2 = await backend.scan_zarr_async(pred)
+        df2 = await backend.scan_zarr_async(pl.all().filter(pred))
 
         # Results should match
         assert _normalize(df1.filter(pred)) == _normalize(df2.filter(pred))
@@ -537,8 +479,8 @@ class TestSessionSerialization:
         pred = (pl.col("a") < 30) & (pl.col("b") < 25)
         cols_to_read = ["a", "b", "c", "temp", "precip"]
 
-        df_fs = await backend_fs.scan_zarr_async(pred, with_columns=cols_to_read)
-        df_session = await backend_session.scan_zarr_async(pred, with_columns=cols_to_read)
+        df_fs = await backend_fs.scan_zarr_async(pl.col(cols_to_read).filter(pred))
+        df_session = await backend_session.scan_zarr_async(pl.col(cols_to_read).filter(pred))
 
         # Filter and compare
         df_fs_filtered = df_fs.filter(pred)
@@ -602,17 +544,13 @@ class TestIcechunkZarrEquivalence:
 
         # Query icechunk
         df_icechunk = await icechunk_backend.scan_zarr_async(
-            pred,
-            variables=["geopotential_height"],
-            with_columns=cols,
+            pl.col(cols).filter(pred)
         )
         df_icechunk = df_icechunk.filter(pred).select(cols)
 
         # Query zarr (async)
         df_zarr = await zarr_backend.scan_zarr_async(
-            pred,
-            variables=["geopotential_height"],
-            with_columns=cols,
+            pl.col(cols).filter(pred)
         )
         df_zarr = df_zarr.filter(pred).select(cols)
 

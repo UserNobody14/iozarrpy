@@ -43,9 +43,7 @@ async def test_scan_zarr_async_matches_sync_orography_chunked_subset(
         (
             await rainbear.scan_zarr_async(
                 zarr_url,
-                pred,
-                variables=["geopotential_height"],
-                with_columns=cols,
+                pl.col(cols).filter(pred),
                 max_concurrency=8,
             )
         ).filter(pred)
@@ -75,9 +73,7 @@ async def test_scan_zarr_async_matches_sync_orography_sharded_subset(
         (
             await rainbear.scan_zarr_async(
                 zarr_url,
-                pred,
-                variables=["geopotential_height"],
-                with_columns=cols,
+                pl.col(cols).filter(pred),
                 max_concurrency=8,
             )
         ).filter(pred)

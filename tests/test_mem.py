@@ -97,12 +97,12 @@ async def test_remote_mem4() -> None:
         )
     df = await rainbear.scan_zarr_async(
         remote_ds,
-        (pl.col("time") == datetime(2025, 12, 30, 0, 0, 0))
+        pl.col([
+            "time", "lead_time", "y", "x", "80m_wind_speed"
+        ]).filter(pl.col("time") == datetime(2025, 12, 30, 0, 0, 0))
         & (pl.col("lead_time") == timedelta(hours=1))
         & (pl.col("y") == 13)
         & (pl.col("x") == 13),
-        variables=["80m_wind_speed"],
-        with_columns=["time", "lead_time", "x", "y", "80m_wind_speed"]
     )
     # Column order depends on dataset dimension order (y comes before x in this dataset)
     assert df.columns == ["time", "lead_time", "y", "x", "80m_wind_speed"]

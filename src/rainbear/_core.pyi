@@ -162,9 +162,8 @@ class ZarrBackend:
     def scan_zarr_async(
         self,
         predicate: pl.Expr,
-        variables: list[str] | None = None,
         max_concurrency: int | None = None,
-        with_columns: list[str] | None = None,
+        max_chunks_to_read: int | None = None,
     ) -> Any:
         """Async scan the zarr store and return a DataFrame.
         
@@ -172,9 +171,8 @@ class ZarrBackend:
         
         Args:
             predicate: Polars expression for filtering
-            variables: Optional list of variable names to read
             max_concurrency: Maximum concurrent chunk reads
-            with_columns: Optional list of columns to include
+            max_chunks_to_read: Maximum number of chunks to read (safety limit)
         
         Returns:
             An awaitable that resolves to a pl.DataFrame
@@ -186,11 +184,8 @@ class ZarrBackend:
         predicate: pl.Expr
     ) -> SelectedChunksDebugReturn: ...
     
-    def schema(self, variables: list[str] | None = None) -> Any:
+    def schema(self) -> Any:
         """Get the schema for the zarr dataset.
-        
-        Args:
-            variables: Optional list of variable names to include
         """
         ...
     
@@ -264,10 +259,10 @@ class ZarrBackendSync:
     def scan_zarr_sync(
         self,
         predicate: pl.Expr | None = None,
-        variables: list[str] | None = None,
-        max_concurrency: int | None = None,
-        with_columns: list[str] | None = None,
         max_chunks_to_read: int | None = None,
+        with_columns: list[str] | None = None,
+        n_rows: int | None = None,
+        batch_size: int | None = None,
     ) -> pl.DataFrame:
         """Async scan the zarr store and return a DataFrame.
         
@@ -275,9 +270,10 @@ class ZarrBackendSync:
         
         Args:
             predicate: Polars expression for filtering
-            variables: Optional list of variable names to read
-            max_concurrency: Maximum concurrent chunk reads
+            max_chunks_to_read: Maximum number of chunks to read (safety limit)
             with_columns: Optional list of columns to include
+            n_rows: Number of rows to read
+            batch_size: Batch size for reading
         
         Returns:
             An awaitable that resolves to a pl.DataFrame
@@ -289,11 +285,8 @@ class ZarrBackendSync:
         predicate: pl.Expr
     ) -> SelectedChunksDebugReturn: ...
     
-    def schema(self, variables: list[str] | None = None) -> Any:
+    def schema(self) -> Any:
         """Get the schema for the zarr dataset.
-        
-        Args:
-            variables: Optional list of variable names to include
         """
         ...
     
@@ -394,9 +387,7 @@ class IcechunkBackend:
     def scan_zarr_async(
         self,
         predicate: pl.Expr,
-        variables: list[str] | None = None,
         max_concurrency: int | None = None,
-        with_columns: list[str] | None = None,
         max_chunks_to_read: int | None = None,
     ) -> Any:
         """Async scan the Icechunk store and return a DataFrame.
@@ -405,9 +396,7 @@ class IcechunkBackend:
         
         Args:
             predicate: Polars expression for filtering
-            variables: Optional list of variable names to read
             max_concurrency: Maximum concurrent chunk reads
-            with_columns: Optional list of columns to include
             max_chunks_to_read: Maximum number of chunks to read (safety limit)
         
         Returns:
@@ -420,11 +409,8 @@ class IcechunkBackend:
         predicate: pl.Expr
     ) -> SelectedChunksDebugReturn: ...
     
-    def schema(self, variables: list[str] | None = None) -> Any:
+    def schema(self) -> Any:
         """Get the schema for the zarr dataset.
-        
-        Args:
-            variables: Optional list of variable names to include
         """
         ...
     

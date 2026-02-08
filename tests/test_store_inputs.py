@@ -80,7 +80,8 @@ class TestLocalStoreInput:
         local_store = rainbear.store.LocalStore()
         abs_path = os.path.abspath(baseline_datasets["orography_chunked_10x10"])
 
-        lf = rainbear.scan_zarr(local_store, prefix=abs_path, variables=["geopotential_height"])
+        lf = rainbear.scan_zarr(local_store, prefix=abs_path)
+        lf = lf.select(["y", "x", "geopotential_height"])
         df = lf.collect()
 
         assert df.height == 16 * 20
@@ -94,8 +95,7 @@ class TestLocalStoreInput:
         lf = rainbear.scan_zarr(
             local_store,
             prefix=abs_path,
-            variables=["geopotential_height", "latitude", "longitude"],
-        )
+        ).select(["y", "x", "geopotential_height", "latitude", "longitude"])
         df = lf.collect()
 
         assert df.height == 16 * 20
@@ -106,7 +106,8 @@ class TestLocalStoreInput:
         local_store = rainbear.store.LocalStore()
         abs_path = os.path.abspath(baseline_datasets["orography_chunked_10x10"])
 
-        lf = rainbear.scan_zarr(local_store, prefix=abs_path, variables=["geopotential_height"])
+        lf = rainbear.scan_zarr(local_store, prefix=abs_path)
+        lf = lf.select(["y", "x", "geopotential_height"])
         lf = lf.filter((pl.col("y") >= 3) & (pl.col("y") <= 10))
         df = lf.collect()
 
@@ -123,13 +124,13 @@ class TestStoreInputEquivalence:
         abs_path = os.path.abspath(zarr_path)
 
         # Using URL string
-        df_url = rainbear.scan_zarr(zarr_path).collect()
+        df_url = rainbear.scan_zarr(zarr_path).select(["y", "x", "geopotential_height"]).collect()
 
         # Using LocalStore
         local_store = rainbear.store.LocalStore()
         df_store = rainbear.scan_zarr(
-            local_store, prefix=abs_path, variables=["geopotential_height"]
-        ).collect()
+            local_store, prefix=abs_path
+        ).select(["y", "x", "geopotential_height"]).collect()
 
         # Results should be identical
         assert df_url.height == df_store.height
@@ -151,6 +152,7 @@ class TestStoreInputEquivalence:
         # Using URL string
         df_url = (
             rainbear.scan_zarr(zarr_path)
+            .select(["y", "x", "geopotential_height"])
             .filter(filter_expr)
             .collect()
         )
@@ -158,7 +160,8 @@ class TestStoreInputEquivalence:
         # Using LocalStore
         local_store = rainbear.store.LocalStore()
         df_store = (
-            rainbear.scan_zarr(local_store, prefix=abs_path, variables=["geopotential_height"])
+            rainbear.scan_zarr(local_store, prefix=abs_path)
+            .select(["y", "x", "geopotential_height"])
             .filter(filter_expr)
             .collect()
         )
@@ -181,7 +184,9 @@ class TestZarrSourceDirectUsage:
             url=zarr_path
         )
         df = src.scan_zarr_sync(    
-            variables=["geopotential_height"])
+            pl.lit(True),
+            with_columns=["y", "x", "geopotential_height"]
+        )
 
         assert df.height == 16 * 20
         assert "geopotential_height" in df.columns
@@ -196,7 +201,8 @@ class TestZarrSourceDirectUsage:
             prefix=abs_path,
         )
         df = src.scan_zarr_sync(
-            variables=["geopotential_height"],
+            pl.lit(True),
+            with_columns=["y", "x", "geopotential_height"]
         )
 
         assert df.height == 16 * 20
@@ -232,7 +238,7 @@ class TestExternalObstoreCompatibility:
         external_store = obstore.store.LocalStore()
 
         lf = rainbear.scan_zarr(
-            external_store, prefix=abs_path, variables=["geopotential_height"]
+            external_store, prefix=abs_path
         )
         df = lf.collect()
 
@@ -251,7 +257,7 @@ class TestStoreInputEdgeCases:
         prefixed_path = "/" + abs_path.lstrip("/")
 
         lf = rainbear.scan_zarr(
-            local_store, prefix=prefixed_path, variables=["geopotential_height"]
+            local_store, prefix=prefixed_path
         )
         df = lf.collect()
 
@@ -265,7 +271,7 @@ class TestStoreInputEdgeCases:
         prefixed_path = abs_path.lstrip("/")
 
         lf = rainbear.scan_zarr(
-            local_store, prefix=prefixed_path, variables=["geopotential_height"]
+            local_store, prefix=prefixed_path
         )
         df = lf.collect()
 
@@ -275,7 +281,7 @@ class TestStoreInputEdgeCases:
         """Verify None prefix with URL string works (prefix ignored for URLs)."""
         zarr_path = baseline_datasets["orography_chunked_10x10"]
 
-        lf = rainbear.scan_zarr(zarr_path, prefix=None, variables=["geopotential_height"])
+        lf = rainbear.scan_zarr(zarr_path, prefix=None)
         df = lf.collect()
 
         assert df.height == 16 * 20
@@ -288,7 +294,6 @@ class TestStoreInputEdgeCases:
         lf = rainbear.scan_zarr(
             local_store,
             prefix=abs_path,
-            variables=["geopotential_height"],
             max_chunks_to_read=1,
         )
 
