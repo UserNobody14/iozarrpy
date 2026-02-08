@@ -659,7 +659,6 @@ where
     use futures::stream::{
         FuturesUnordered, StreamExt,
     };
-    use std::collections::BTreeSet;
     use std::sync::Arc as StdArc;
 
     const DEFAULT_MAX_CONCURRENCY: usize = 32;
@@ -682,29 +681,16 @@ where
         .compile_expression_async(&expr)
         .await?;
 
-    // Count total chunks to read if max_chunks_to_read is set
+    // Check max_chunks_to_read limit before doing any I/O
     if let Some(max_chunks) = max_chunks_to_read {
-        let mut total_chunks = 0usize;
-        for (_sig, _vars, subsets, chunkgrid) in
-            grouped_plan.iter_grids()
-        {
-            // Deduplicate chunk indices across potentially overlapping subsets.
-            let mut uniq: BTreeSet<Vec<u64>> =
-                BTreeSet::new();
-            for subset in subsets.subsets_iter() {
-                if let Ok(Some(indices)) =
-                    chunkgrid
-                        .chunks_in_array_subset(
-                            subset,
-                        )
-                {
-                    for idx in indices.indices() {
-                        uniq.insert(idx.to_vec());
-                    }
-                }
-            }
-            total_chunks += uniq.len();
-        }
+        let total_chunks = grouped_plan
+            .total_unique_chunks()
+            .map_err(|e| {
+                PyErr::new::<
+                    pyo3::exceptions::PyValueError,
+                    _,
+                >(e)
+            })?;
         if total_chunks > max_chunks {
             return Err(PyErr::new::<
                 pyo3::exceptions::PyRuntimeError,
@@ -723,42 +709,29 @@ where
         tokio::sync::Semaphore::new(max_conc),
     );
 
+    // Read chunks using consolidated (deduplicated) iteration
     let mut futs = FuturesUnordered::new();
-    for (sig, vars, subsets, chunkgrid) in
-        grouped_plan.iter_grids()
+    for group in
+        grouped_plan.iter_consolidated_chunks()
     {
-        let vars: Vec<IStr> = vars
-            .into_iter()
+        let group = group.map_err(|e| {
+            PyErr::new::<
+                pyo3::exceptions::PyValueError,
+                _,
+            >(e)
+        })?;
+        let vars: Vec<IStr> = group
+            .vars
+            .iter()
             .map(|v| v.istr())
             .collect();
-        let array_shape =
-            chunkgrid.array_shape().to_vec();
 
-        let mut uniq: BTreeSet<Vec<u64>> =
-            BTreeSet::new();
-        for subset in subsets.subsets_iter() {
-            let chunk_indices = chunkgrid
-                .chunks_in_array_subset(subset)
-                .map_err(|e| {
-                    PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                        e.to_string(),
-                    )
-                })?
-                .ok_or_else(|| {
-                    PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                        "no chunks found",
-                    )
-                })?;
-            for idx in chunk_indices.indices() {
-                uniq.insert(idx.to_vec());
-            }
-        }
-
-        for idx in uniq {
+        for idx in group.chunk_indices {
             let sem = semaphore.clone();
             let backend = backend.clone();
-            let sig = sig.clone();
-            let array_shape = array_shape.clone();
+            let sig = group.sig.clone();
+            let array_shape =
+                group.array_shape.clone();
             let vars = vars.clone();
 
             futs.push(async move {
@@ -773,7 +746,6 @@ where
                     &array_shape,
                     &vars,
                     None,
-                    // expanded_cols.as_ref().map(|a| a.as_ref()),
                 )
                 .await
             });

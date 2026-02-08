@@ -1,5 +1,69 @@
 use polars::prelude::{NamedFrom, Series};
 
+/// Build a Vec by repeating each element of `src` `inner_repeat`
+/// times, then tiling the resulting pattern `tile_count` times.
+///
+/// Total output length = `src.len() * inner_repeat * tile_count`.
+///
+/// Semantically equivalent to:
+/// ```ignore
+/// (0..total).map(|i| src[(i / inner_repeat) % src.len()]).collect()
+/// ```
+/// but uses only O(log n) memcpy operations instead of per-element
+/// integer division, giving a large speedup on the hot path.
+fn repeat_tile_slice<T: Copy>(
+    src: &[T],
+    inner_repeat: usize,
+    tile_count: usize,
+) -> Vec<T> {
+    if src.is_empty()
+        || inner_repeat == 0
+        || tile_count == 0
+    {
+        return Vec::new();
+    }
+
+    let tile_len = src.len() * inner_repeat;
+    let total = tile_len * tile_count;
+    let mut output = Vec::with_capacity(total);
+
+    if inner_repeat == 1 {
+        // No inner repeat — just copy source
+        // values as the first tile.
+        output.extend_from_slice(src);
+    } else {
+        // Build one tile: for each value, fill
+        // via doubling memcpy (O(log inner_repeat)
+        // copies per value instead of inner_repeat
+        // scalar writes).
+        for &val in src {
+            let start = output.len();
+            output.push(val);
+            while output.len() - start
+                < inner_repeat
+            {
+                let filled = output.len() - start;
+                let to_copy = (inner_repeat
+                    - filled)
+                    .min(filled);
+                output.extend_from_within(
+                    start..start + to_copy,
+                );
+            }
+        }
+    }
+
+    // Tile to full output via memcpy
+    if tile_count > 1 {
+        for _ in 1..tile_count {
+            output
+                .extend_from_within(0..tile_len);
+        }
+    }
+
+    output
+}
+
 #[derive(Debug, Clone)]
 pub(crate) enum ColumnData {
     Bool(Vec<bool>),
@@ -353,6 +417,323 @@ impl ColumnData {
                             f(x as i64) as f64
                         })
                         .collect(),
+                )
+            }
+        }
+    }
+
+    /// Fused take-by-index + map-through-i64 in a single pass.
+    /// Gathers values at `indices` and applies `f` to each (as i64),
+    /// storing back in the original type. Avoids the intermediate
+    /// allocation that separate `take_indices` + `map_i64` would incur.
+    pub(crate) fn take_and_map_i64(
+        &self,
+        indices: &[usize],
+        f: impl Fn(i64) -> i64,
+    ) -> ColumnData {
+        match self {
+            ColumnData::I64(v) => {
+                ColumnData::I64(
+                    indices
+                        .iter()
+                        .map(|&i| f(v[i]))
+                        .collect(),
+                )
+            }
+            ColumnData::I32(v) => {
+                ColumnData::I32(
+                    indices
+                        .iter()
+                        .map(|&i| {
+                            f(v[i] as i64) as i32
+                        })
+                        .collect(),
+                )
+            }
+            ColumnData::I16(v) => {
+                ColumnData::I16(
+                    indices
+                        .iter()
+                        .map(|&i| {
+                            f(v[i] as i64) as i16
+                        })
+                        .collect(),
+                )
+            }
+            ColumnData::I8(v) => ColumnData::I8(
+                indices
+                    .iter()
+                    .map(|&i| {
+                        f(v[i] as i64) as i8
+                    })
+                    .collect(),
+            ),
+            ColumnData::U64(v) => {
+                ColumnData::U64(
+                    indices
+                        .iter()
+                        .map(|&i| {
+                            f(v[i] as i64) as u64
+                        })
+                        .collect(),
+                )
+            }
+            ColumnData::U32(v) => {
+                ColumnData::U32(
+                    indices
+                        .iter()
+                        .map(|&i| {
+                            f(v[i] as i64) as u32
+                        })
+                        .collect(),
+                )
+            }
+            ColumnData::U16(v) => {
+                ColumnData::U16(
+                    indices
+                        .iter()
+                        .map(|&i| {
+                            f(v[i] as i64) as u16
+                        })
+                        .collect(),
+                )
+            }
+            ColumnData::U8(v) => ColumnData::U8(
+                indices
+                    .iter()
+                    .map(|&i| {
+                        f(v[i] as i64) as u8
+                    })
+                    .collect(),
+            ),
+            ColumnData::Bool(v) => {
+                ColumnData::Bool(
+                    indices
+                        .iter()
+                        .map(|&i| {
+                            f(v[i] as i64) != 0
+                        })
+                        .collect(),
+                )
+            }
+            ColumnData::F32(v) => {
+                ColumnData::F32(
+                    indices
+                        .iter()
+                        .map(|&i| {
+                            f(v[i] as i64) as f32
+                        })
+                        .collect(),
+                )
+            }
+            ColumnData::F64(v) => {
+                ColumnData::F64(
+                    indices
+                        .iter()
+                        .map(|&i| {
+                            f(v[i] as i64) as f64
+                        })
+                        .collect(),
+                )
+            }
+        }
+    }
+
+    /// Gather elements by computing indices on-the-fly from a closure.
+    /// Avoids allocating a separate index vector before gathering.
+    pub(crate) fn gather_by(
+        &self,
+        len: usize,
+        index_fn: impl Fn(usize) -> usize,
+    ) -> ColumnData {
+        match self {
+            ColumnData::Bool(v) => {
+                ColumnData::Bool(
+                    (0..len)
+                        .map(|i| v[index_fn(i)])
+                        .collect(),
+                )
+            }
+            ColumnData::I8(v) => ColumnData::I8(
+                (0..len)
+                    .map(|i| v[index_fn(i)])
+                    .collect(),
+            ),
+            ColumnData::I16(v) => {
+                ColumnData::I16(
+                    (0..len)
+                        .map(|i| v[index_fn(i)])
+                        .collect(),
+                )
+            }
+            ColumnData::I32(v) => {
+                ColumnData::I32(
+                    (0..len)
+                        .map(|i| v[index_fn(i)])
+                        .collect(),
+                )
+            }
+            ColumnData::I64(v) => {
+                ColumnData::I64(
+                    (0..len)
+                        .map(|i| v[index_fn(i)])
+                        .collect(),
+                )
+            }
+            ColumnData::U8(v) => ColumnData::U8(
+                (0..len)
+                    .map(|i| v[index_fn(i)])
+                    .collect(),
+            ),
+            ColumnData::U16(v) => {
+                ColumnData::U16(
+                    (0..len)
+                        .map(|i| v[index_fn(i)])
+                        .collect(),
+                )
+            }
+            ColumnData::U32(v) => {
+                ColumnData::U32(
+                    (0..len)
+                        .map(|i| v[index_fn(i)])
+                        .collect(),
+                )
+            }
+            ColumnData::U64(v) => {
+                ColumnData::U64(
+                    (0..len)
+                        .map(|i| v[index_fn(i)])
+                        .collect(),
+                )
+            }
+            ColumnData::F32(v) => {
+                ColumnData::F32(
+                    (0..len)
+                        .map(|i| v[index_fn(i)])
+                        .collect(),
+                )
+            }
+            ColumnData::F64(v) => {
+                ColumnData::F64(
+                    (0..len)
+                        .map(|i| v[index_fn(i)])
+                        .collect(),
+                )
+            }
+        }
+    }
+
+    /// Produce a column by repeating each element
+    /// `inner_repeat` times, then tiling the pattern
+    /// `tile_count` times. Uses only memcpy operations.
+    ///
+    /// Equivalent to:
+    /// ```ignore
+    /// self.gather_by(
+    ///   self.len() * inner_repeat * tile_count,
+    ///   |i| (i / inner_repeat) % self.len(),
+    /// )
+    /// ```
+    /// but avoids all per-element integer division.
+    pub(crate) fn repeat_tile(
+        &self,
+        inner_repeat: usize,
+        tile_count: usize,
+    ) -> ColumnData {
+        match self {
+            ColumnData::Bool(v) => {
+                ColumnData::Bool(
+                    repeat_tile_slice(
+                        v,
+                        inner_repeat,
+                        tile_count,
+                    ),
+                )
+            }
+            ColumnData::I8(v) => {
+                ColumnData::I8(repeat_tile_slice(
+                    v,
+                    inner_repeat,
+                    tile_count,
+                ))
+            }
+            ColumnData::I16(v) => {
+                ColumnData::I16(
+                    repeat_tile_slice(
+                        v,
+                        inner_repeat,
+                        tile_count,
+                    ),
+                )
+            }
+            ColumnData::I32(v) => {
+                ColumnData::I32(
+                    repeat_tile_slice(
+                        v,
+                        inner_repeat,
+                        tile_count,
+                    ),
+                )
+            }
+            ColumnData::I64(v) => {
+                ColumnData::I64(
+                    repeat_tile_slice(
+                        v,
+                        inner_repeat,
+                        tile_count,
+                    ),
+                )
+            }
+            ColumnData::U8(v) => {
+                ColumnData::U8(repeat_tile_slice(
+                    v,
+                    inner_repeat,
+                    tile_count,
+                ))
+            }
+            ColumnData::U16(v) => {
+                ColumnData::U16(
+                    repeat_tile_slice(
+                        v,
+                        inner_repeat,
+                        tile_count,
+                    ),
+                )
+            }
+            ColumnData::U32(v) => {
+                ColumnData::U32(
+                    repeat_tile_slice(
+                        v,
+                        inner_repeat,
+                        tile_count,
+                    ),
+                )
+            }
+            ColumnData::U64(v) => {
+                ColumnData::U64(
+                    repeat_tile_slice(
+                        v,
+                        inner_repeat,
+                        tile_count,
+                    ),
+                )
+            }
+            ColumnData::F32(v) => {
+                ColumnData::F32(
+                    repeat_tile_slice(
+                        v,
+                        inner_repeat,
+                        tile_count,
+                    ),
+                )
+            }
+            ColumnData::F64(v) => {
+                ColumnData::F64(
+                    repeat_tile_slice(
+                        v,
+                        inner_repeat,
+                        tile_count,
+                    ),
                 )
             }
         }

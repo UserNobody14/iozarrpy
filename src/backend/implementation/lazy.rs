@@ -26,7 +26,6 @@ pub fn scan_zarr_with_backend_sync(
     with_columns: Option<BTreeSet<IStr>>,
     max_chunks_to_read: Option<usize>,
 ) -> Result<polars::prelude::DataFrame, PyErr> {
-    use std::collections::BTreeSet as StdBTreeSet;
     use std::sync::Arc as StdArc;
 
     // Get metadata from backend
@@ -47,29 +46,16 @@ pub fn scan_zarr_with_backend_sync(
     let (grouped_plan, _stats) =
         backend.compile_expression_sync(&expr)?;
 
-    // Count total chunks to read if max_chunks_to_read is set
+    // Check max_chunks_to_read limit before doing any I/O
     if let Some(max_chunks) = max_chunks_to_read {
-        let mut total_chunks = 0usize;
-        for (_sig, _vars, subsets, chunkgrid) in
-            grouped_plan.iter_grids()
-        {
-            // Deduplicate chunk indices across potentially overlapping subsets.
-            let mut uniq: StdBTreeSet<Vec<u64>> =
-                StdBTreeSet::new();
-            for subset in subsets.subsets_iter() {
-                if let Ok(Some(indices)) =
-                    chunkgrid
-                        .chunks_in_array_subset(
-                            subset,
-                        )
-                {
-                    for idx in indices.indices() {
-                        uniq.insert(idx.to_vec());
-                    }
-                }
-            }
-            total_chunks += uniq.len();
-        }
+        let total_chunks = grouped_plan
+            .total_unique_chunks()
+            .map_err(|e| {
+                PyErr::new::<
+                    pyo3::exceptions::PyValueError,
+                    _,
+                >(e)
+            })?;
         if total_chunks > max_chunks {
             return Err(PyErr::new::<
                 pyo3::exceptions::PyRuntimeError,
@@ -81,44 +67,30 @@ pub fn scan_zarr_with_backend_sync(
         }
     }
 
+    // Read chunks using consolidated (deduplicated) iteration
     let mut dfs = Vec::new();
-    for (sig, vars, subsets, chunkgrid) in
-        grouped_plan.iter_grids()
+    for group in
+        grouped_plan.iter_consolidated_chunks()
     {
-        let vars: Vec<IStr> = vars
-            .into_iter()
+        let group = group.map_err(|e| {
+            PyErr::new::<
+                pyo3::exceptions::PyValueError,
+                _,
+            >(e)
+        })?;
+        let vars: Vec<IStr> = group
+            .vars
+            .iter()
             .map(|v| v.istr())
             .collect();
-        let array_shape =
-            chunkgrid.array_shape().to_vec();
 
-        let mut uniq: StdBTreeSet<Vec<u64>> =
-            StdBTreeSet::new();
-        for subset in subsets.subsets_iter() {
-            let chunk_indices = chunkgrid
-                .chunks_in_array_subset(subset)
-                .map_err(|e| {
-                    PyErr::new::<
-                        pyo3::exceptions::PyValueError,
-                        _,
-                    >(e.to_string())
-                })?
-                .ok_or(PyErr::new::<
-                    pyo3::exceptions::PyValueError,
-                    _,
-                >("no chunks found"))?;
-            for idx in chunk_indices.indices() {
-                uniq.insert(idx.to_vec());
-            }
-        }
-
-        for idx in uniq {
+        for idx in group.chunk_indices {
             let df =
                 chunk_to_df_from_grid_with_backend(
                     backend,
                     idx.into(),
-                    sig,
-                    &array_shape,
+                    group.sig,
+                    &group.array_shape,
                     &vars,
                     expanded_with_columns.as_ref(),
                 )?;

@@ -118,8 +118,7 @@ def impl_scan_zarr_async(path: str) -> pl.DataFrame:
     async def _run() -> pl.DataFrame:
         df = await rainbear.scan_zarr_async(
             path,
-            pl.col(_columns).filter(pred),
-            max_concurrency=8,
+            pl.col(_columns).filter(pred)
         )
         return df
 
@@ -132,8 +131,7 @@ def impl_backend_cached(backend: rainbear.ZarrBackend) -> pl.DataFrame:
 
     async def _run() -> pl.DataFrame:
         df = await backend.scan_zarr_async(
-            pl.col(_columns).filter(pred),
-            max_concurrency=8,
+            pl.col(_columns).filter(pred)
         )
         return df
 
@@ -257,8 +255,7 @@ def _concurrent_queries_backend(backend: rainbear.ZarrBackend, n: int = 5) -> li
     async def _run() -> list[pl.DataFrame]:
         async def single_query() -> pl.DataFrame:
             df = await backend.scan_zarr_async(
-                pl.col(_columns).filter(pred),
-                max_concurrency=4,
+                pl.col(_columns).filter(pred)
             )
             return df
 

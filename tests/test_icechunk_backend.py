@@ -539,20 +539,15 @@ class TestIcechunkZarrEquivalence:
         zarr_backend = rainbear.ZarrBackend.from_url(zarr_path)
 
         # Same predicate for both
-        pred = (pl.col("y") >= 3) & (pl.col("y") <= 10)
+        pred = (pl.col("y") >= 3) & (pl.col("y") <= 10) & (pl.col("x") >= 4) & (pl.col("x") <= 12)
         cols = ["y", "x", "geopotential_height"]
 
-        # Query icechunk
-        df_icechunk = await icechunk_backend.scan_zarr_async(
-            pl.col(cols).filter(pred)
+        # Query both backends in parallel
+        import asyncio
+        df_icechunk, df_zarr = await asyncio.gather(
+            icechunk_backend.scan_zarr_async(pl.col(cols).filter(pred)),
+            zarr_backend.scan_zarr_async(pl.col(cols).filter(pred)),
         )
-        df_icechunk = df_icechunk.filter(pred).select(cols)
-
-        # Query zarr (async)
-        df_zarr = await zarr_backend.scan_zarr_async(
-            pl.col(cols).filter(pred)
-        )
-        df_zarr = df_zarr.filter(pred).select(cols)
 
         # Both should have data - structure should be the same
         # (values may differ since they're separate datasets)

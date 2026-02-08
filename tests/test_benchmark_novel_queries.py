@@ -230,8 +230,7 @@ def impl_scan_zarr_async(path: str, q: QueryBounds, base_time: datetime) -> int:
     async def _run() -> pl.DataFrame:
         return await rainbear.scan_zarr_async(
             path,
-            pl.col(_columns).filter(pred),
-            max_concurrency=8
+            pl.col(_columns).filter(pred)
         )
 
     df = asyncio.run(_run())
@@ -246,8 +245,7 @@ def impl_backend_async(
 
     async def _run() -> pl.DataFrame:
         return await backend.scan_zarr_async(
-            pl.col(_columns).filter(pred),
-            max_concurrency=8
+            pl.col(_columns).filter(pred)
         )
 
     df = asyncio.run(_run())
@@ -522,8 +520,7 @@ def run_concurrent_queries_backend(
         async def single_query(q: QueryBounds) -> int:
             pred = query_to_polars_pred(q, base_time)
             df = await backend.scan_zarr_async(
-                pl.col(_columns).filter(pred),
-                max_concurrency=4
+                pl.col(_columns).filter(pred)
             )
             return len(df)
 

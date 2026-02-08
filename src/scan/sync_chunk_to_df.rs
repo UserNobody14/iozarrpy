@@ -313,8 +313,10 @@ pub fn chunk_to_df_from_grid_with_backend<
         checked_chunk_len(chunk_shape)?;
     let strides = compute_strides(chunk_shape);
 
-    // In-bounds mask (handles edge chunks)
-    let keep: Vec<usize> = compute_in_bounds_mask(
+    // In-bounds mask (handles edge chunks).
+    // Returns KeepMask::All for interior chunks
+    // (O(ndim) check), avoiding O(chunk_len) work.
+    let keep = compute_in_bounds_mask(
         chunk_len,
         chunk_shape,
         &origin,
@@ -387,7 +389,7 @@ pub fn chunk_to_df_from_grid_with_backend<
     {
         let col = build_var_column(
             &name,
-            &data,
+            data,
             &var_dims,
             &var_chunk_shape,
             &var_offsets,
