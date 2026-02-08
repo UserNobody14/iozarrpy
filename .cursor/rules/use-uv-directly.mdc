@@ -1,0 +1,6 @@
+---
+globs: **/*.py
+alwaysApply: false
+---
+
+Use `uv run <blank>` commands directly, instead of running `uv run maturin develop`. uv will automatically build the rust library.

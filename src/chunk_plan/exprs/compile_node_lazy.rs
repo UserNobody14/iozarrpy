@@ -104,7 +104,10 @@ pub(crate) fn compile_node_lazy(
             }
             let input_sel =
                 compile_node_lazy(input.as_ref(), ctx)?;
-            Ok(input_sel.union(&filter_sel))
+            // Use intersect so the filter predicate constrains which chunks to read.
+            // Union would take the less-restrictive "all" from the input projection,
+            // completely ignoring the filter predicate.
+            Ok(input_sel.intersect(&filter_sel))
         }
 
         Expr::BinaryExpr { left, op, right } => {
@@ -1311,33 +1314,6 @@ fn interpolate_selection_nd_lazy(
         ctx.meta,
         sel,
     ))
-}
-
-/// Find min and max scalar values from a slice using partial comparison.
-fn min_max_scalar(
-    values: &[crate::chunk_plan::indexing::types::CoordScalar],
-) -> (
-    Option<crate::chunk_plan::indexing::types::CoordScalar>,
-    Option<crate::chunk_plan::indexing::types::CoordScalar>,
-){
-    if values.is_empty() {
-        return (None, None);
-    }
-    let mut min = values[0].clone();
-    let mut max = values[0].clone();
-    for v in values.iter().skip(1) {
-        if let Some(std::cmp::Ordering::Less) =
-            v.partial_cmp(&min)
-        {
-            min = v.clone();
-        }
-        if let Some(std::cmp::Ordering::Greater) =
-            v.partial_cmp(&max)
-        {
-            max = v.clone();
-        }
-    }
-    (Some(min), Some(max))
 }
 
 /// Extract column names from an expression (for lazy interpolation).

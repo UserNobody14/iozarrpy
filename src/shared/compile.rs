@@ -328,10 +328,17 @@ impl<
             .unwrap_or(n);
         let time_enc =
             coord_meta.time_encoding.clone();
+
+        // Use the full array path from metadata for I/O operations.
+        // The dim name alone (e.g. "y") is insufficient when the zarr store
+        // root is not "/" — we need the full path (e.g. "/forecasts/ds.zarr/y")
+        // so that Array::async_open can locate the array in the store.
+        let array_path = coord_meta.path.clone();
+
         // Check monotonicity
         let Some(dir) = self
             .check_monotonic(
-                dim,
+                &array_path,
                 n,
                 chunk_size,
                 time_enc.as_ref(),
@@ -352,10 +359,12 @@ impl<
             reqs.into_iter().map(|(req, vr)| {
                 let this = self;
                 let time_enc3 = time_enc2.clone();
+                let array_path2 =
+                    array_path.clone();
                 async move {
                     let result = this
                         .resolve_range(
-                            &req.dim,
+                            &array_path2,
                             &vr,
                             dir,
                             n,
