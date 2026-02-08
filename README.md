@@ -42,6 +42,141 @@ df = lf.collect()
 print(df)
 ```
 
+## Caching Backends
+
+Rainbear provides three backend classes that own the store connection and cache metadata and coordinate chunks across multiple scans. This dramatically improves performance for repeated queries on the same dataset.
+
+### `ZarrBackend` (Async)
+
+The **async caching backend** for standard Zarr stores. Best for cloud storage (S3, GCS, Azure) where async I/O provides significant performance benefits.
+
+**Features:**
+- Persistent caching of coordinate array chunks and metadata across scans
+- Async I/O with configurable concurrency for parallel chunk reads
+- Compatible with any ObjectStore (S3, GCS, Azure, HTTP, local filesystem)
+- Cache statistics and management (clear cache, view stats)
+
+**When to use:**
+- Cloud-based Zarr stores where network latency dominates
+- Applications already using async/await patterns
+- High-concurrency workloads with many simultaneous chunk reads
+
+```python
+import polars as pl
+from datetime import datetime
+import rainbear
+
+# Create backend from URL
+backend = rainbear.ZarrBackend.from_url("s3://bucket/dataset.zarr")
+
+# First scan - reads and caches coordinates
+df1 = await backend.scan_zarr_async(pl.col("time") > datetime(2024, 1, 1))
+
+# Second scan - reuses cached coordinates (much faster!)
+df2 = await backend.scan_zarr_async(pl.col("time") > datetime(2024, 6, 1))
+
+# Check what's cached
+stats = await backend.cache_stats()
+print(f"Cached {stats['coord_entries']} coordinate chunks")
+
+# Clear cache if needed
+await backend.clear_coord_cache()
+```
+
+### `ZarrBackendSync` (Sync)
+
+The **synchronous caching backend** for standard Zarr stores. Best for local filesystem access or simpler synchronous codebases.
+
+**Features:**
+- Same persistent caching as `ZarrBackend` (coordinates and metadata)
+- Synchronous API - no async/await required
+- Blocking I/O suitable for local or low-latency stores
+- Additional options: column selection, row limits, batch size control
+
+**When to use:**
+- Local filesystem Zarr stores
+- Synchronous applications or scripts
+- Interactive data exploration (notebooks, REPL)
+- When you don't need async concurrency
+
+```python
+import polars as pl
+from datetime import datetime
+import rainbear
+
+# Create backend from URL
+backend = rainbear.ZarrBackendSync.from_url("/path/to/local/dataset.zarr")
+
+# Scan with column selection and row limit
+df1 = backend.scan_zarr_sync(
+    predicate=pl.col("time") > datetime(2024, 1, 1),
+    with_columns=["temp", "pressure"],
+    n_rows=1000
+)
+
+# Second scan reuses cached coordinates
+df2 = backend.scan_zarr_sync(pl.col("time") > datetime(2024, 6, 1))
+
+# No await needed for cache operations in sync backend
+stats = backend.cache_stats()
+backend.clear_coord_cache()
+```
+
+### `IcechunkBackend` (Async, Version Control)
+
+The **async-only caching backend** for [Icechunk](https://icechunk.io/)-backed Zarr stores. Icechunk adds Git-like version control to Zarr datasets, enabling branches, commits, and time-travel queries.
+
+**Features:**
+- Same persistent caching as `ZarrBackend` (coordinates and metadata)
+- Access to versioned Zarr data with branch/snapshot support
+- Direct integration with icechunk-python Session objects
+- Async-only (Icechunk operations are inherently async)
+
+**When to use:**
+- Working with version-controlled Zarr datasets
+- Need to query specific branches or historical snapshots
+- Collaborative workflows with multiple dataset versions
+- Reproducible analysis requiring exact dataset versions
+
+```python
+import polars as pl
+from datetime import datetime
+import rainbear
+
+# Create backend from Icechunk filesystem repository
+backend = await rainbear.IcechunkBackend.from_filesystem(
+    path="/path/to/icechunk/repo",
+    branch="main"  # or specific branch name
+)
+
+# Scan like normal - caching works the same
+df1 = await backend.scan_zarr_async(pl.col("time") > datetime(2024, 1, 1))
+df2 = await backend.scan_zarr_async(pl.col("time") > datetime(2024, 6, 1))
+
+# Or use existing Icechunk session directly
+from icechunk import Repository, local_filesystem_storage
+
+storage = local_filesystem_storage("/path/to/repo")
+repo = Repository.open(storage)
+session = repo.readonly_session("experimental-branch")
+
+# No manual serialization needed!
+backend = await rainbear.IcechunkBackend.from_session(session)
+df = await backend.scan_zarr_async(pl.col("lat") < 45.0)
+```
+
+### Backend Comparison
+
+| Feature | ZarrBackend | ZarrBackendSync | IcechunkBackend |
+|---------|-------------|-----------------|-----------------|
+| **API Style** | Async | Sync | Async |
+| **Caching** | ✓ Coordinates & metadata | ✓ Coordinates & metadata | ✓ Coordinates & metadata |
+| **Best For** | Cloud storage (S3, GCS, Azure) | Local filesystem | Version-controlled datasets |
+| **Concurrency** | High (configurable) | Single-threaded | High (configurable) |
+| **Version Control** | ✗ | ✗ | ✓ (branches, snapshots) |
+| **Column Selection** | ✗ | ✓ | ✗ |
+| **Row Limits** | ✗ | ✓ | ✗ |
+
 ## Running the smoke tests
 
 The Python tests create some local Zarr stores and then scan them.
@@ -51,6 +186,24 @@ From the workspace root:
 cd rainbear-tests
 uv run pytest
 ```
+
+# Development
+
+To run the Rust tests:
+```bash
+cargo test
+```
+
+To run the Python tests:
+```bash
+uv run pytest
+```
+
+Profiling:
+```bash
+samply record -- uv run python -m pytest tests/test_benchmark_novel_queries.py -m 'benchmark' --no-header -rN
+```
+
 
 ## Roadmap
 
