@@ -6,7 +6,8 @@
 
 use std::collections::BTreeMap;
 use std::fmt::Display;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+use tokio::sync::RwLock;
 
 use icechunk::session::Session;
 use zarrs::array::Array;
@@ -17,18 +18,18 @@ use zarrs::storage::{
 use zarrs_icechunk::AsyncIcechunkStore;
 
 use crate::IStr;
-use crate::shared::{
-    BackendError, ChunkedDataBackendAsync,
-    ChunkedDataCacheAsync, HasAsyncStore,
-    HasMetadataBackendAsync,
-    HasMetadataBackendCacheAsync,
-};
 use crate::meta::{
     ZarrMeta, load_zarr_meta_from_store_async,
 };
 use crate::reader::{
     ColumnData, ShardedCacheAsync,
     retrieve_chunk_async,
+};
+use crate::shared::{
+    BackendError, ChunkedDataBackendAsync,
+    ChunkedDataCacheAsync, HasAsyncStore,
+    HasMetadataBackendAsync,
+    HasMetadataBackendCacheAsync,
 };
 
 /// An opened array with its sharded cache for async access.
@@ -143,7 +144,7 @@ impl ChunkedDataBackendAsync
         let existing = self
             .opened_arrays
             .read()
-            .unwrap()
+            .await
             .get(var)
             .map(|opened| {
                 (
@@ -185,16 +186,13 @@ impl ChunkedDataBackendAsync
             BackendError::Other(e.to_string())
         })?;
 
-        self.opened_arrays
-            .write()
-            .unwrap()
-            .insert(
-                var.clone(),
-                OpenedArrayAsync {
-                    array: array_arc,
-                    cache,
-                },
-            );
+        self.opened_arrays.write().await.insert(
+            var.clone(),
+            OpenedArrayAsync {
+                array: array_arc,
+                cache,
+            },
+        );
 
         Ok(chunk)
     }

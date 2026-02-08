@@ -2,13 +2,11 @@ use crate::shared::traits::HasStats;
 use crate::{IStr, PlannerStats};
 use ambassador::delegatable_trait;
 use std::collections::BTreeMap;
-use std::sync::RwLock;
+use tokio::sync::RwLock;
 use zarrs::array::Array;
 use zarrs::storage::{
     AsyncReadableWritableListableStorage,
-    AsyncReadableWritableListableStorageTraits,
     ReadableWritableListableStorage,
-    ReadableWritableListableStorageTraits,
 };
 
 /// Backend handler for (non-icechunk) zarr datasets
@@ -116,19 +114,28 @@ impl ChunkedDataBackendSync for ZarrBackendSync {
         // Try to get existing array and cache
         let array_opt = self
             .opened_arrays
-            .read()
-            .ok()
-            .and_then(|guard| {
-                guard.get(var).cloned()
-            });
+            .blocking_read()
+            .get(var)
+            .cloned();
 
         // Open array and create cache
         let opened = match array_opt {
             Some(opened) => opened,
-            None => Arc::new(
-                self.store
-                    .open_array_and_cache(var)?,
-            ),
+            None => {
+                let opened_inner = Arc::new(
+                    self.store
+                        .open_array_and_cache(
+                            var,
+                        )?,
+                );
+                self.opened_arrays
+                    .blocking_write()
+                    .insert(
+                        var.clone(),
+                        opened_inner.clone(),
+                    );
+                opened_inner
+            }
         };
 
         let chunk = retrieve_chunk(
@@ -141,11 +148,6 @@ impl ChunkedDataBackendSync for ZarrBackendSync {
                 e.to_string(),
             )
         })?;
-
-        self.opened_arrays
-            .write()
-            .unwrap()
-            .insert(var.clone(), opened);
 
         Ok(chunk)
     }
@@ -233,19 +235,30 @@ impl ChunkedDataBackendAsync
         let existing = self
             .opened_arrays
             .read()
-            .ok()
-            .and_then(|guard| {
-                guard.get(&var).cloned()
-            });
+            .await
+            .get(var)
+            .cloned();
 
         let opened: Arc<OpenedArrayAsync> =
             match existing {
                 Some(opened) => opened.clone(),
-                None => Arc::new(
-                    self.store
-                        .open_array_and_cache(var)
-                        .await?,
-                ),
+                None => {
+                    let opened_inner = Arc::new(
+                        self.store
+                            .open_array_and_cache(
+                                var,
+                            )
+                            .await?,
+                    );
+                    self.opened_arrays
+                        .write()
+                        .await
+                        .insert(
+                            var.clone(),
+                            opened_inner.clone(),
+                        );
+                    opened_inner
+                }
             };
         let chunk = retrieve_chunk_async(
             opened.array.as_ref(),
@@ -258,11 +271,6 @@ impl ChunkedDataBackendAsync
                 e.to_string(),
             )
         })?;
-
-        self.opened_arrays
-            .write()
-            .unwrap()
-            .insert(var.clone(), opened);
 
         Ok(chunk)
     }

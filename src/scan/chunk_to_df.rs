@@ -360,28 +360,26 @@ pub async fn chunk_to_df_from_grid_with_backend<
         &strides,
     );
 
-    // Read coordinate chunks in parallel
-    let coord_slices = read_coord_chunks(
-        backend,
-        &meta,
-        dims,
-        &origin,
-        chunk_shape,
-        with_columns,
-    )
-    .await?;
-
-    // Read variable chunks in parallel
-    let var_chunks = read_var_chunks(
-        backend,
-        &planning_meta,
-        &idx,
-        chunk_shape,
-        dims,
-        vars,
-        with_columns,
-    )
-    .await?;
+    // Perform both reads concurrently
+    let (coord_slices, var_chunks) = futures::try_join!(
+        read_coord_chunks(
+            backend,
+            &meta,
+            dims,
+            &origin,
+            chunk_shape,
+            with_columns,
+        ),
+        read_var_chunks(
+            backend,
+            &planning_meta,
+            &idx,
+            chunk_shape,
+            dims,
+            vars,
+            with_columns,
+        )
+    )?;
 
     // Build DataFrame columns
     let mut cols: Vec<Column> = Vec::new();
