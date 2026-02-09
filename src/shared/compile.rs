@@ -238,7 +238,8 @@ impl<
 impl<
     B: HasMetadataBackendSync<ZarrMeta>
         + ChunkedDataBackendSync
-        + HasStore,
+        + HasStore
+        + Sync,
 > SyncCoordResolver for B
 {
     fn resolve_batch(
@@ -246,6 +247,8 @@ impl<
         requests: Vec<ResolutionRequest>,
     ) -> Box<dyn ResolutionCache + Send + Sync>
     {
+        use rayon::prelude::*;
+
         let mut cache = HashMapCache::new();
 
         // Group requests by dimension
@@ -263,15 +266,18 @@ impl<
                 ));
         }
 
-        // Resolve each dimension
-        for (dim, reqs) in by_dim {
-            let results = self
-                .resolve_dimension_sync(
+        // Resolve all dimensions in parallel
+        let results: Vec<_> = by_dim
+            .into_par_iter()
+            .flat_map_iter(|(dim, reqs)| {
+                self.resolve_dimension_sync(
                     &dim, reqs,
-                );
-            for (req, result) in results {
-                cache.insert(req, result);
-            }
+                )
+            })
+            .collect();
+
+        for (req, result) in results {
+            cache.insert(req, result);
         }
 
         Box::new(cache)
@@ -861,7 +867,8 @@ impl<
 impl<
     B: HasMetadataBackendSync<ZarrMeta>
         + ChunkedDataBackendSync
-        + HasStore,
+        + HasStore
+        + Sync,
 > ResolveDimensionSync for B
 {
     fn resolve_dimension_sync(
@@ -875,6 +882,8 @@ impl<
         ResolutionRequest,
         Option<IndexRange>,
     )> {
+        use rayon::prelude::*;
+
         // Get coordinate array metadata
         let coord_meta = match self
             .metadata()
@@ -945,7 +954,7 @@ impl<
                 .collect();
         };
 
-        reqs.into_iter()
+        reqs.into_par_iter()
             .map(|(req, vr)| {
                 let resolved = self
                     .resolve_range_sync(
@@ -1000,14 +1009,20 @@ impl<
         >,
     ) -> Option<std::cmp::Ordering> {
         if n < 2 {
-            return Some(std::cmp::Ordering::Less);
+            return Some(
+                std::cmp::Ordering::Less,
+            );
         }
 
         let first = self.scalar_at_sync(
             dim, 0, n, chunk_size, time_enc,
         )?;
         let last = self.scalar_at_sync(
-            dim, n - 1, n, chunk_size, time_enc,
+            dim,
+            n - 1,
+            n,
+            chunk_size,
+            time_enc,
         )?;
 
         let dir = match first.partial_cmp(&last) {
