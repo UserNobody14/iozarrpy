@@ -1,5 +1,4 @@
 use std::collections::BTreeMap;
-use std::sync::Arc;
 
 use polars::prelude::Expr;
 
@@ -19,7 +18,7 @@ use crate::chunk_plan::{
     MergedCache, collect_requests_with_meta,
     materialize,
 };
-use crate::meta::{ZarrDatasetMeta, ZarrMeta};
+use crate::meta::ZarrMeta;
 use crate::{IStr, chunk_plan::*};
 use std::cmp::Ordering as Ord;
 
@@ -90,10 +89,8 @@ impl<
                 &dims,
             );
 
-        let resolved_cache = self.resolve_batch(
-            requests,
-            &legacy_meta,
-        );
+        let resolved_cache =
+            self.resolve_batch(requests);
 
         let merged = MergedCache::new(
             &*resolved_cache,
@@ -163,9 +160,8 @@ impl<
                 &dims,
             );
 
-        let resolved_cache = self
-            .resolve_batch(requests, &legacy_meta)
-            .await;
+        let resolved_cache =
+            self.resolve_batch(requests).await;
 
         let merged = MergedCache::new(
             &*resolved_cache,
@@ -206,7 +202,6 @@ impl<
     async fn resolve_batch(
         &self,
         requests: Vec<ResolutionRequest>,
-        legacy_meta: &ZarrDatasetMeta,
     ) -> Box<dyn ResolutionCache + Send + Sync>
     {
         let mut cache = HashMapCache::new();
@@ -249,7 +244,6 @@ impl<
     fn resolve_batch(
         &self,
         requests: Vec<ResolutionRequest>,
-        legacy_meta: &ZarrDatasetMeta,
     ) -> Box<dyn ResolutionCache + Send + Sync>
     {
         let mut cache = HashMapCache::new();

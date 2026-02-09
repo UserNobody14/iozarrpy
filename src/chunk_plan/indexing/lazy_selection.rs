@@ -12,7 +12,7 @@ use smallvec::SmallVec;
 use super::grouped_selection::ArraySelectionType;
 use super::selection::Emptyable;
 use super::types::ValueRange;
-use crate::{IStr, IntoIStr};
+use crate::IStr;
 use std::ops::Range;
 
 /// A per-dimension constraint in value-space (deferred resolution).
@@ -92,14 +92,6 @@ impl LazyHyperRectangle {
         !self.empty && self.dims.is_empty()
     }
 
-    /// Get constraint for a specific dimension.
-    pub(crate) fn get_dim(
-        &self,
-        dim: &str,
-    ) -> Option<&LazyDimConstraint> {
-        self.dims.get(&dim.istr())
-    }
-
     /// Iterate over all dimension constraints.
     pub(crate) fn dims(
         &self,
@@ -129,15 +121,6 @@ impl LazyHyperRectangle {
             self.dims.insert(dim, constraint);
         }
         self
-    }
-
-    /// Add a constraint from a string dimension name.
-    pub(crate) fn with_dim_str(
-        self,
-        dim: &str,
-        constraint: LazyDimConstraint,
-    ) -> Self {
-        self.with_dim(dim.istr(), constraint)
     }
 
     /// Create a rectangle from a map of constraints.

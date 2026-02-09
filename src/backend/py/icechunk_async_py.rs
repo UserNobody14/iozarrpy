@@ -35,7 +35,6 @@ use crate::{IStr, IntoIStr};
 
 use crate::shared::{
     combine_chunk_dataframes,
-    expand_projection_to_flat_paths,
     restructure_to_structs,
 };
 

@@ -80,12 +80,6 @@ pub(crate) struct DataArraySelection {
 }
 
 impl DataArraySelection {
-    pub(crate) fn subsets_iter(
-        &self,
-    ) -> impl Iterator<Item = &ArraySubset> {
-        self.subsets.0.iter()
-    }
-
     pub(crate) fn from_subsets(
         dims: &[IStr],
         subsets: ArraySubsetList,
@@ -263,24 +257,10 @@ impl ArraySubsetList {
     ) {
         self.0.push(subset);
     }
-    pub(crate) fn extend(
-        &mut self,
-        other: &ArraySubsetList,
-    ) {
-        self.0.extend(other.0.iter().cloned());
-    }
     pub(crate) fn subsets_iter(
         &self,
     ) -> impl Iterator<Item = &ArraySubset> {
         self.0.iter()
-    }
-    pub(crate) fn num_elements_usize(
-        &self,
-    ) -> usize {
-        self.0
-            .iter()
-            .map(|s| s.num_elements_usize())
-            .sum()
     }
 }
 

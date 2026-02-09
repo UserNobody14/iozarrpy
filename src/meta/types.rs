@@ -2,11 +2,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Display;
 use std::sync::Arc;
 
+use crate::reader::compute_strides;
 use polars::prelude::{
     DataType as PlDataType, Field, NamedFrom,
-    Schema, Series, TimeUnit,
+    Schema, TimeUnit,
 };
 use smallvec::SmallVec;
+use zarrs::array::ChunkGrid;
 
 use crate::{IStr, IntoIStr};
 
@@ -250,26 +252,6 @@ impl DimensionAnalysis {
 
         source_idx
     }
-}
-
-/// Compute strides for row-major indexing of an N-dimensional array.
-///
-/// For shape [a, b, c], strides are [b*c, c, 1].
-#[inline]
-pub fn compute_strides(
-    shape: &[u64],
-) -> Vec<u64> {
-    if shape.is_empty() {
-        return vec![];
-    }
-    let mut strides = vec![1u64; shape.len()];
-    for i in
-        (0..shape.len().saturating_sub(1)).rev()
-    {
-        strides[i] =
-            strides[i + 1] * shape[i + 1];
-    }
-    strides
 }
 
 impl ZarrMeta {
@@ -619,27 +601,6 @@ impl TimeEncoding {
             )
         }
     }
-
-    // pub fn cast_to_series(
-    //     &self,
-    //     data: &[i64],
-    //     name: &str,
-    // ) -> Series {
-    //     if self.is_duration {
-    //         Series::new(name.into(), data).cast(
-    //             &PlDataType::Duration(
-    //                 TimeUnit::Nanoseconds,
-    //             ),
-    //         )
-    //     } else {
-    //         Series::new(name.into(), data).cast(
-    //             &PlDataType::Datetime(
-    //                 TimeUnit::Nanoseconds,
-    //                 None,
-    //             ),
-    //         )
-    //     }
-    // }
 }
 
 #[derive(Debug, Clone)]
@@ -649,6 +610,7 @@ pub struct ZarrArrayMeta {
     pub shape: Arc<[u64]>,
     /// Regular chunk shape (edge chunks may be smaller).
     pub chunk_shape: Arc<[u64]>,
+    pub chunk_grid: Arc<ChunkGrid>,
     pub dims: SmallVec<[IStr; 4]>,
     pub polars_dtype: PlDataType,
     pub time_encoding: Option<TimeEncoding>,

@@ -123,6 +123,9 @@ pub fn load_zarr_meta_from_opened(
             path: path_str.istr(),
             shape,
             chunk_shape,
+            chunk_grid: array
+                .inner_chunk_grid()
+                .into(),
             dims,
             polars_dtype,
             time_encoding,

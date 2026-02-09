@@ -105,14 +105,6 @@ impl PyZarrBackendSync {
         n_rows: Option<usize>,
         batch_size: Option<usize>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let args = ScanArgsAnonymous {
-            schema: Some(Arc::new(
-                self.inner
-                    .metadata()?
-                    .tidy_schema(None),
-            )),
-            ..ScanArgsAnonymous::default()
-        };
         let prd =
             if let Some(predicate) = predicate {
                 extract_expr(predicate)?

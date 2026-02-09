@@ -152,7 +152,6 @@ pub fn restructure_to_structs(
     meta: &ZarrMeta,
 ) -> Result<DataFrame, PyErr> {
     use pyo3_polars::error::PyPolarsErr;
-    use std::collections::BTreeMap;
 
     let mut result_columns: Vec<Column> =
         Vec::new();

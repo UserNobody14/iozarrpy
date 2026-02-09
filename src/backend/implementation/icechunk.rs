@@ -73,31 +73,6 @@ impl IcechunkBackendAsync {
             ),
         }
     }
-
-    /// Create a new Icechunk backend from an already-constructed store.
-    ///
-    /// # Arguments
-    /// * `store` - An AsyncIcechunkStore wrapped in Arc
-    /// * `root` - Root path within the store (typically "/")
-    pub fn from_store(
-        store: AsyncReadableWritableListableStorage,
-        root: Option<String>,
-    ) -> Self {
-        let root = root
-            .unwrap_or_else(|| "/".to_string());
-        Self {
-            store,
-            root,
-            opened_arrays: RwLock::new(
-                BTreeMap::new(),
-            ),
-        }
-    }
-
-    /// Get the root path.
-    pub fn root(&self) -> &str {
-        &self.root
-    }
 }
 
 impl HasAsyncStore for IcechunkBackendAsync {

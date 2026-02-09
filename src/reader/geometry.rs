@@ -1,13 +1,19 @@
+/// Compute strides for row-major indexing of an N-dimensional array.
+///
+/// For shape [a, b, c], strides are [b*c, c, 1].
+#[inline]
 pub(crate) fn compute_strides(
-    chunk_shape: &[u64],
+    shape: &[u64],
 ) -> Vec<u64> {
-    let mut strides =
-        vec![1u64; chunk_shape.len()];
-    for i in (0..chunk_shape.len()).rev() {
-        if i + 1 < chunk_shape.len() {
-            strides[i] = strides[i + 1]
-                * chunk_shape[i + 1];
-        }
+    if shape.is_empty() {
+        return vec![];
+    }
+    let mut strides = vec![1u64; shape.len()];
+    for i in
+        (0..shape.len().saturating_sub(1)).rev()
+    {
+        strides[i] =
+            strides[i + 1] * shape[i + 1];
     }
     strides
 }

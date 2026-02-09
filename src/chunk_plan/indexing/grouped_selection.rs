@@ -117,11 +117,6 @@ impl<Sel: ArraySelectionType>
         )
     }
 
-    /// Get the number of variables in this selection.
-    pub fn len(&self) -> usize {
-        self.var_to_sig.len()
-    }
-
     /// Check if there are no variables in this selection.
     pub fn is_empty(&self) -> bool {
         self.var_to_sig.is_empty()

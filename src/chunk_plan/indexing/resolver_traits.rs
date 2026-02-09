@@ -7,7 +7,6 @@
 use std::collections::HashMap;
 
 use super::types::{IndexRange, ValueRange};
-use crate::meta::ZarrDatasetMeta;
 use crate::{IStr, IntoIStr};
 
 /// A request to resolve a value range to an index range for a specific dimension.
@@ -104,7 +103,6 @@ pub(crate) trait SyncCoordResolver {
     fn resolve_batch(
         &self,
         requests: Vec<ResolutionRequest>,
-        meta: &ZarrDatasetMeta,
     ) -> Box<dyn ResolutionCache + Send + Sync>;
 }
 
@@ -123,7 +121,6 @@ pub(crate) trait AsyncCoordResolver:
     async fn resolve_batch(
         &self,
         requests: Vec<ResolutionRequest>,
-        meta: &ZarrDatasetMeta,
     ) -> Box<dyn ResolutionCache + Send + Sync>;
 }
 
