@@ -37,11 +37,18 @@ use std::sync::Arc;
 
 pub struct ZarrBackendSync {
     store: Arc<OpenedStore>,
-    /// Opened arrays with their shard caches:
-    opened_arrays: RwLock<
+    /// Opened arrays with their shard caches.
+    /// Uses parking_lot (not tokio) to avoid deadlocks when
+    /// the underlying store wraps an async runtime via TokioBlockOn.
+    opened_arrays: parking_lot::RwLock<
         BTreeMap<IStr, Arc<OpenedArraySync>>,
     >,
-    stats: RwLock<PlannerStats>,
+    /// Cached ZarrMeta (once loaded)
+    cached_meta: parking_lot::RwLock<
+        Option<Arc<ZarrMeta>>,
+    >,
+    /// Planner stats
+    stats: parking_lot::RwLock<PlannerStats>,
 }
 
 // Normalize path: if it doesn't start with '/', add it
@@ -65,10 +72,14 @@ impl ZarrBackendSync {
             })?;
         Ok(Self {
             store: Arc::new(opened),
-            opened_arrays: RwLock::new(
-                BTreeMap::new(),
+            opened_arrays:
+                parking_lot::RwLock::new(
+                    BTreeMap::new(),
+                ),
+            cached_meta: parking_lot::RwLock::new(
+                None,
             ),
-            stats: RwLock::new(
+            stats: parking_lot::RwLock::new(
                 PlannerStats::default(),
             ),
         })
@@ -89,16 +100,27 @@ impl HasMetadataBackendSync<ZarrMeta>
     fn metadata(
         &self,
     ) -> Result<Arc<ZarrMeta>, BackendError> {
-        // Called underneath the cache, so we don't need to check if the store is loaded
-        // Instead we just load the metadata, caching is handled above
-        // by the cache wrapper
+        // Check if already cached
+        {
+            let cached = self.cached_meta.read();
+            if let Some(meta) = cached.as_ref() {
+                return Ok(meta.clone());
+            }
+        }
+
+        // Load and cache metadata
         let meta = load_zarr_meta_from_opened(
             &self.store,
         )
         .map_err(|e| {
             BackendError::Other(e.to_string())
         })?;
-        Ok(Arc::new(meta))
+        let meta_arc = Arc::new(meta);
+
+        *self.cached_meta.write() =
+            Some(meta_arc.clone());
+
+        Ok(meta_arc)
     }
 }
 
@@ -111,7 +133,7 @@ impl ChunkedDataBackendSync for ZarrBackendSync {
         // Try to get existing array and cache
         let array_opt = self
             .opened_arrays
-            .blocking_read()
+            .read()
             .get(var)
             .cloned();
 
@@ -119,14 +141,30 @@ impl ChunkedDataBackendSync for ZarrBackendSync {
         let opened = match array_opt {
             Some(opened) => opened,
             None => {
+                // Get array metadata from cache if available
+                let array_metadata = {
+                    let cached =
+                        self.cached_meta.read();
+                    cached.as_ref().and_then(|meta| {
+                        meta.path_to_array.get(var).and_then(|arr_meta| {
+                            arr_meta.array_metadata.clone()
+                        })
+                    })
+                };
+
                 let opened_inner = Arc::new(
                     self.store
                         .open_array_and_cache(
                             var,
+                            array_metadata
+                                .as_ref()
+                                .map(|a| {
+                                    a.as_ref()
+                                }),
                         )?,
                 );
                 self.opened_arrays
-                    .blocking_write()
+                    .write()
                     .insert(
                         var.clone(),
                         opened_inner.clone(),
@@ -168,6 +206,8 @@ pub struct ZarrBackendAsync {
     opened_arrays: RwLock<
         BTreeMap<IStr, Arc<OpenedArrayAsync>>,
     >,
+    /// Cached ZarrMeta (once loaded)
+    cached_meta: RwLock<Option<Arc<ZarrMeta>>>,
     stats: RwLock<PlannerStats>,
 }
 
@@ -193,6 +233,7 @@ impl ZarrBackendAsync {
             opened_arrays: RwLock::new(
                 BTreeMap::new(),
             ),
+            cached_meta: RwLock::new(None),
             stats: RwLock::new(
                 PlannerStats::default(),
             ),
@@ -207,6 +248,16 @@ impl HasMetadataBackendAsync<ZarrMeta>
     async fn metadata(
         &self,
     ) -> Result<Arc<ZarrMeta>, BackendError> {
+        // Check if already cached
+        {
+            let cached =
+                self.cached_meta.read().await;
+            if let Some(meta) = cached.as_ref() {
+                return Ok(meta.clone());
+            }
+        }
+
+        // Load and cache metadata
         let meta =
             load_zarr_meta_from_opened_async(
                 &self.store,
@@ -215,7 +266,12 @@ impl HasMetadataBackendAsync<ZarrMeta>
             .map_err(|e| {
                 BackendError::Other(e.to_string())
             })?;
-        Ok(Arc::new(meta))
+        let meta_arc = Arc::new(meta);
+
+        *self.cached_meta.write().await =
+            Some(meta_arc.clone());
+
+        Ok(meta_arc)
     }
 }
 
@@ -240,10 +296,36 @@ impl ChunkedDataBackendAsync
             match existing {
                 Some(opened) => opened.clone(),
                 None => {
+                    // Get array metadata from cache if available
+                    let array_metadata = {
+                        let cached = self
+                            .cached_meta
+                            .read()
+                            .await;
+                        cached.as_ref().and_then(
+                            |meta| {
+                                meta.path_to_array
+                                    .get(var)
+                                    .and_then(
+                                        |arr_meta| {
+                                            arr_meta
+                                            .array_metadata
+                                            .clone()
+                                        },
+                                    )
+                            },
+                        )
+                    };
+
                     let opened_inner = Arc::new(
                         self.store
                             .open_array_and_cache(
                                 var,
+                                array_metadata
+                                    .as_ref()
+                                    .map(|a| {
+                                        a.as_ref()
+                                    }),
                             )
                             .await?,
                     );

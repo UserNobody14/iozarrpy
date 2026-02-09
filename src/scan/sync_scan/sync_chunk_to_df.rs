@@ -160,10 +160,10 @@ fn read_coord_chunks<B: ChunkDataSourceSync>(
             coord_meta.chunk_shape[0];
 
         // Use the full path from metadata for array access
+        // (dim_name alone is insufficient when the store root != "/")
         let data = read_coord_range_chunked(
             backend,
-            dim_name,
-            // &coord_meta.path,
+            &coord_meta.path,
             coord_chunk_shape,
             dim_start,
             dim_len,

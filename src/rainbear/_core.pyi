@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Protocol
+from typing import Any, Iterator, Protocol
 
 import polars as pl
 from typing_extensions import TypedDict
@@ -260,9 +260,7 @@ class ZarrBackendSync:
         self,
         predicate: pl.Expr | None = None,
         max_chunks_to_read: int | None = None,
-        with_columns: list[str] | None = None,
-        n_rows: int | None = None,
-        batch_size: int | None = None,
+        with_columns: list[str] | None = None
     ) -> pl.DataFrame:
         """Async scan the zarr store and return a DataFrame.
         
@@ -272,11 +270,34 @@ class ZarrBackendSync:
             predicate: Polars expression for filtering
             max_chunks_to_read: Maximum number of chunks to read (safety limit)
             with_columns: Optional list of columns to include
-            n_rows: Number of rows to read
-            batch_size: Batch size for reading
         
         Returns:
             An awaitable that resolves to a pl.DataFrame
+        """
+        ...
+
+    def scan_zarr_streaming_sync(
+        self,
+        predicate: pl.Expr | None = None,
+        with_columns: list[str] | None = None,
+        max_chunks_to_read: int | None = None,
+        n_rows: int | None = None,
+        batch_size: int | None = None,
+    ) -> Iterator[pl.DataFrame]:
+        """Streaming scan the zarr store and return an iterator over DataFrames.
+        Mostly for internal use.
+        
+        Uses the backend's cached coordinates for efficient predicate pushdown.
+        
+        Args:
+            predicate: Polars expression for filtering
+            with_columns: Optional list of columns to include
+            max_chunks_to_read: Maximum number of chunks to read (safety limit)
+            n_rows: Number of rows to read total
+            batch_size: Batch size for reading
+        
+        Returns:
+            An iterator over DataFrames
         """
         ...
 

@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 use zarrs::array::Array;
 use zarrs::array::ArrayShardedExt;
@@ -50,9 +51,10 @@ pub fn load_zarr_meta_from_opened(
         BTreeSet::new();
 
     for (path, md) in nodes {
-        if !matches!(md, NodeMetadata::Array(_)) {
+        let NodeMetadata::Array(array_md) = md
+        else {
             continue;
-        }
+        };
 
         let path_str = path.as_str();
         let rel_path = if root_path_str != "/"
@@ -74,9 +76,12 @@ pub fn load_zarr_meta_from_opened(
         let parent_path =
             parent_group_path(rel_path);
 
-        let array =
-            Array::open(store.clone(), path_str)
-                .map_err(to_string_err)?;
+        let array = Array::new_with_metadata(
+            store.clone(),
+            path_str,
+            array_md.clone(),
+        )
+        .map_err(to_string_err)?;
         let shape: std::sync::Arc<[u64]> =
             array.shape().into();
         let dims = dims_for_array(&array)
@@ -129,6 +134,7 @@ pub fn load_zarr_meta_from_opened(
             dims,
             polars_dtype,
             time_encoding,
+            array_metadata: Some(Arc::new(array_md.clone())),
         };
 
         // Store in both flat and grouped maps

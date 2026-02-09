@@ -6,8 +6,8 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use polars::prelude::*;
-use pyo3::prelude::*;
 use pyo3::types::PyAny;
+use pyo3::{IntoPyObjectExt, prelude::*};
 use pyo3_async_runtimes::tokio::future_into_py;
 use pyo3_polars::{PyDataFrame, PySchema};
 
@@ -97,15 +97,13 @@ impl PyZarrBackendSync {
     /// * `max_chunks_to_read` - Maximum number of chunks to read (safety limit)
     /// * `n_rows` - Maximum number of rows to read
     /// * `batch_size` - Batch size for reading
-    #[pyo3(signature = (predicate=None, with_columns=None, max_chunks_to_read=None, n_rows=None, batch_size=None))]
+    #[pyo3(signature = (predicate=None, with_columns=None, max_chunks_to_read=None))]
     fn scan_zarr_sync<'py>(
         &self,
         py: Python<'py>,
         predicate: Option<&Bound<'_, PyAny>>,
         with_columns: Option<Vec<String>>,
         max_chunks_to_read: Option<usize>,
-        n_rows: Option<usize>,
-        batch_size: Option<usize>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let prd =
             if let Some(predicate) = predicate {
@@ -158,6 +156,53 @@ impl PyZarrBackendSync {
         //         })?;
         // }
     }
+
+    /// Streaming scan the zarr store and return an iterator over DataFrames.
+    ///
+    /// Uses the backend's cached coordinates for efficient predicate pushdown.
+    ///
+    /// # Arguments
+    /// * `predicate` - Polars expression for filtering
+    /// * `with_columns` - Optional list of columns to include
+    /// * `max_chunks_to_read` - Maximum number of chunks to read (safety limit)
+    /// * `n_rows` - Number of rows to read total
+    /// * `batch_size` - Batch size for reading
+    #[pyo3(signature = (predicate=None, with_columns=None, max_chunks_to_read=None, n_rows=None, batch_size=None))]
+    fn scan_zarr_streaming_sync<'py>(
+        &self,
+        py: Python<'py>,
+        predicate: Option<&Bound<'_, PyAny>>,
+        with_columns: Option<Vec<String>>,
+        max_chunks_to_read: Option<usize>,
+        n_rows: Option<usize>,
+        batch_size: Option<usize>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let prd =
+            if let Some(predicate) = predicate {
+                extract_expr(predicate)?
+            } else {
+                // Filter that will pass all chunks
+                // Use a filter expression that evaluates to true for all rows.
+                lit(true)
+            };
+        let with_cols_set: Option<
+            BTreeSet<crate::IStr>,
+        > = with_columns.map(|cols| {
+            cols.into_iter()
+                .map(|c| c.istr())
+                .collect()
+        });
+
+        crate::backend::implementation::ZarrIterator::new(
+            self.inner.clone(),
+            prd,
+            with_cols_set,
+            max_chunks_to_read,
+            n_rows,
+            batch_size,
+        ).into_bound_py_any(py)
+    }
+
     /// # Arguments
     /// * `variables` - Optional list of variable names to include
     #[pyo3(signature = (variables=None))]

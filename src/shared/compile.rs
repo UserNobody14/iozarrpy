@@ -393,6 +393,9 @@ trait ResolveDimensionSync {
         dir: Ord,
         n: u64,
         chunk_size: u64,
+        time_enc: Option<
+            &crate::meta::TimeEncoding,
+        >,
     ) -> Option<u64>;
 
     fn upper_bound_sync(
@@ -403,6 +406,9 @@ trait ResolveDimensionSync {
         dir: Ord,
         n: u64,
         chunk_size: u64,
+        time_enc: Option<
+            &crate::meta::TimeEncoding,
+        >,
     ) -> Option<u64>;
 
     fn resolve_range_sync(
@@ -957,55 +963,239 @@ impl<
 
     fn scalar_at_sync(
         &self,
-        _dim: &IStr,
-        _idx: u64,
-        _n: u64,
-        _chunk_size: u64,
-        _time_enc: Option<
+        dim: &IStr,
+        idx: u64,
+        n: u64,
+        chunk_size: u64,
+        time_enc: Option<
             &crate::meta::TimeEncoding,
         >,
     ) -> Option<CoordScalar> {
-        // Not yet implemented
-        None
+        if idx >= n {
+            return None;
+        }
+        let chunk_idx = idx / chunk_size;
+        let offset = (idx % chunk_size) as usize;
+
+        let chunk = self
+            .read_chunk_sync(dim, &[chunk_idx])
+            .ok()?;
+
+        chunk
+            .get_i64(offset)
+            .map(|raw| {
+                crate::chunk_plan::apply_time_encoding(
+                    raw, time_enc,
+                )
+            })
     }
 
     fn check_monotonic_sync(
         &self,
-        _dim: &IStr,
-        _n: u64,
-        _chunk_size: u64,
-        _time_enc: Option<
+        dim: &IStr,
+        n: u64,
+        chunk_size: u64,
+        time_enc: Option<
             &crate::meta::TimeEncoding,
         >,
     ) -> Option<std::cmp::Ordering> {
-        // Not yet implemented, default to ascending
-        Some(std::cmp::Ordering::Less)
+        if n < 2 {
+            return Some(std::cmp::Ordering::Less);
+        }
+
+        let first = self.scalar_at_sync(
+            dim, 0, n, chunk_size, time_enc,
+        )?;
+        let last = self.scalar_at_sync(
+            dim, n - 1, n, chunk_size, time_enc,
+        )?;
+
+        let dir = match first.partial_cmp(&last) {
+            Some(
+                std::cmp::Ordering::Less
+                | std::cmp::Ordering::Equal,
+            ) => std::cmp::Ordering::Less,
+            Some(std::cmp::Ordering::Greater) => {
+                std::cmp::Ordering::Greater
+            }
+            None => return None,
+        };
+
+        // Verify with sample points
+        let mut samples = [
+            0u64,
+            chunk_size
+                .saturating_sub(1)
+                .min(n - 1),
+            chunk_size.min(n - 1),
+            (n / 2).min(n - 1),
+            n - 1,
+        ];
+        samples.sort();
+
+        let mut prev: Option<CoordScalar> = None;
+        for &i in &samples {
+            let v = self.scalar_at_sync(
+                dim, i, n, chunk_size, time_enc,
+            )?;
+            if let Some(p) = &prev {
+                let ord = p.partial_cmp(&v);
+                let ok = match (dir, ord) {
+                    (
+                        std::cmp::Ordering::Less,
+                        Some(
+                            std::cmp::Ordering::Less
+                            | std::cmp::Ordering::Equal,
+                        ),
+                    ) => true,
+                    (
+                        std::cmp::Ordering::Greater,
+                        Some(
+                            std::cmp::Ordering::Greater
+                            | std::cmp::Ordering::Equal,
+                        ),
+                    ) => true,
+                    _ => false,
+                };
+                if !ok {
+                    return None;
+                }
+            }
+            prev = Some(v);
+        }
+
+        Some(dir)
     }
 
     fn lower_bound_sync(
         &self,
-        _dim: &IStr,
-        _target: &CoordScalar,
-        _strict: bool,
-        _dir: std::cmp::Ordering,
-        _n: u64,
-        _chunk_size: u64,
+        dim: &IStr,
+        target: &CoordScalar,
+        strict: bool,
+        dir: std::cmp::Ordering,
+        n: u64,
+        chunk_size: u64,
+        time_enc: Option<
+            &crate::meta::TimeEncoding,
+        >,
     ) -> Option<u64> {
-        // Not yet implemented
-        None
+        let mut lo = 0u64;
+        let mut hi = n;
+
+        while lo < hi {
+            let mid = lo + (hi - lo) / 2;
+            let v = self.scalar_at_sync(
+                dim, mid, n, chunk_size, time_enc,
+            )?;
+            let cmp = v.partial_cmp(target);
+
+            let go_left = match (dir, strict, cmp) {
+                (
+                    std::cmp::Ordering::Less
+                    | std::cmp::Ordering::Equal,
+                    false,
+                    Some(
+                        std::cmp::Ordering::Greater
+                        | std::cmp::Ordering::Equal,
+                    ),
+                ) => true,
+                (
+                    std::cmp::Ordering::Less,
+                    true,
+                    Some(std::cmp::Ordering::Greater),
+                ) => true,
+                (
+                    std::cmp::Ordering::Greater
+                    | std::cmp::Ordering::Equal,
+                    false,
+                    Some(
+                        std::cmp::Ordering::Less
+                        | std::cmp::Ordering::Equal,
+                    ),
+                ) => true,
+                (
+                    std::cmp::Ordering::Greater,
+                    true,
+                    Some(std::cmp::Ordering::Less),
+                ) => true,
+                _ => false,
+            };
+
+            if go_left {
+                hi = mid;
+            } else {
+                lo = mid + 1;
+            }
+        }
+
+        Some(lo)
     }
 
     fn upper_bound_sync(
         &self,
-        _dim: &IStr,
-        _target: &CoordScalar,
-        _strict: bool,
-        _dir: std::cmp::Ordering,
-        _n: u64,
-        _chunk_size: u64,
+        dim: &IStr,
+        target: &CoordScalar,
+        strict: bool,
+        dir: std::cmp::Ordering,
+        n: u64,
+        chunk_size: u64,
+        time_enc: Option<
+            &crate::meta::TimeEncoding,
+        >,
     ) -> Option<u64> {
-        // Not yet implemented
-        None
+        let mut lo = 0u64;
+        let mut hi = n;
+
+        while lo < hi {
+            let mid = lo + (hi - lo) / 2;
+            let v = self.scalar_at_sync(
+                dim, mid, n, chunk_size, time_enc,
+            )?;
+            let cmp = v.partial_cmp(target);
+
+            let go_right = match (dir, strict, cmp)
+            {
+                (
+                    std::cmp::Ordering::Less
+                    | std::cmp::Ordering::Equal,
+                    false,
+                    Some(
+                        std::cmp::Ordering::Less
+                        | std::cmp::Ordering::Equal,
+                    ),
+                ) => true,
+                (
+                    std::cmp::Ordering::Less,
+                    true,
+                    Some(std::cmp::Ordering::Less),
+                ) => true,
+                (
+                    std::cmp::Ordering::Greater
+                    | std::cmp::Ordering::Equal,
+                    false,
+                    Some(
+                        std::cmp::Ordering::Greater
+                        | std::cmp::Ordering::Equal,
+                    ),
+                ) => true,
+                (
+                    std::cmp::Ordering::Greater,
+                    true,
+                    Some(
+                        std::cmp::Ordering::Greater,
+                    ),
+                ) => true,
+                _ => false,
+            };
+
+            if go_right {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+
+        Some(lo)
     }
 
     fn resolve_range_sync(
@@ -1015,7 +1205,7 @@ impl<
         dir: std::cmp::Ordering,
         n: u64,
         chunk_size: u64,
-        _time_enc: Option<
+        time_enc: Option<
             &crate::meta::TimeEncoding,
         >,
     ) -> Option<IndexRange> {
@@ -1032,11 +1222,11 @@ impl<
         if let Some(eq) = &vr.eq {
             let start = self.lower_bound_sync(
                 dim, eq, false, dir, n,
-                chunk_size,
+                chunk_size, time_enc,
             )?;
             let end = self.upper_bound_sync(
                 dim, eq, false, dir, n,
-                chunk_size,
+                chunk_size, time_enc,
             )?;
             return Some(IndexRange {
                 start,
@@ -1050,7 +1240,7 @@ impl<
                 *bk == BoundKind::Exclusive;
             self.lower_bound_sync(
                 dim, v, strict, dir, n,
-                chunk_size,
+                chunk_size, time_enc,
             )?
         } else {
             0
@@ -1062,7 +1252,7 @@ impl<
                     *bk == BoundKind::Exclusive;
                 self.upper_bound_sync(
                     dim, v, strict, dir, n,
-                    chunk_size,
+                    chunk_size, time_enc,
                 )?
             } else {
                 n

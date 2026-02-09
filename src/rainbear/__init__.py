@@ -66,14 +66,13 @@ def scan_zarr(
         n_rows: int | None,
         batch_size: int | None,
     ) -> Iterator[pl.DataFrame]:
-        lf = backend.scan_zarr_sync(
+        yield from backend.scan_zarr_streaming_sync(
             predicate=predicate,
             with_columns=with_columns,
             max_chunks_to_read=max_chunks_to_read,
             n_rows=n_rows,
             batch_size=batch_size,
         )
-        yield lf
     return register_io_source(io_source=source_generator, schema=backend.schema())
 
 

@@ -30,15 +30,26 @@ impl AsyncOpenedStore {
     pub async fn open_array_and_cache(
         &self,
         var: &IStr,
+        array_metadata: Option<
+            &zarrs::array::ArrayMetadata,
+        >,
     ) -> Result<OpenedArrayAsync, BackendError>
     {
         let strtraits = self.store.clone();
+        let norm = normalize_path(var);
 
-        let array = Array::async_open(
-            strtraits,
-            &normalize_path(var),
-        )
-        .await
+        let array = if let Some(metadata) =
+            array_metadata
+        {
+            Array::new_with_metadata(
+                strtraits,
+                &norm,
+                metadata.clone(),
+            )
+        } else {
+            Array::async_open(strtraits, &norm)
+                .await
+        }
         .map_err(|e| {
             BackendError::ArrayOpenFailed(
                 e.to_string(),

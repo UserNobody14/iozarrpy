@@ -4,3 +4,4 @@ pub(crate) mod async_scan;
 pub(crate) mod shared;
 pub(crate) mod sync_scan;
 
+pub(crate) use sync_scan::chunk_to_df_from_grid_with_backend_sync;
