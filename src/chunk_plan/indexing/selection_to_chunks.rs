@@ -7,8 +7,8 @@ use zarrs::array_subset::ArraySubset;
 use super::DatasetSelection;
 use super::plan::GroupedChunkPlan;
 use super::types::ChunkGridSignature;
-use crate::chunk_plan::CompileError;
 use crate::chunk_plan::indexing::selection::ArraySubsetList;
+use crate::errors::BackendError;
 
 use crate::IntoIStr;
 use crate::meta::ZarrMeta;
@@ -34,7 +34,7 @@ fn all_chunks_subset(
 pub(crate) fn selection_to_grouped_chunk_plan_unified_from_meta(
     selection: &DatasetSelection,
     meta: &ZarrMeta,
-) -> Result<GroupedChunkPlan, CompileError> {
+) -> Result<GroupedChunkPlan, BackendError> {
     let mut grouped_plan =
         GroupedChunkPlan::new();
 

@@ -4,20 +4,20 @@ mod structural;
 mod traits;
 mod zarr;
 
+use crate::errors::BackendError;
 pub(crate) use stats::PlannerStats;
 
 // Re-export commonly used traits
 pub(crate) use traits::{
-    BackendError, ChunkDataSourceAsync,
-    ChunkDataSourceSync, ChunkedDataBackendAsync,
+    ChunkDataSourceAsync, ChunkDataSourceSync,
+    ChunkedDataBackendAsync,
     ChunkedDataBackendSync,
-    ChunkedDataCacheAsync, ChunkedDataCacheSync,
+    ChunkedDataCacheAsync,
     EvictableChunkCacheAsync,
     EvictableChunkCacheSync, HasAsyncStore,
     HasMetadataBackendAsync,
     HasMetadataBackendCacheAsync,
-    HasMetadataBackendCacheSync,
-    HasMetadataBackendSync, HasStats,
+    HasMetadataBackendSync,
 };
 
 // Re-export compile traits

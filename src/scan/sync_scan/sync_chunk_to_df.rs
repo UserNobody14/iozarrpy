@@ -5,14 +5,14 @@
 
 use crate::IStr;
 use crate::chunk_plan::ChunkGridSignature;
+use crate::errors::BackendError;
 use crate::meta::{ZarrDatasetMeta, ZarrMeta};
 use crate::reader::{
     ColumnData, checked_chunk_len,
     compute_strides,
 };
 use crate::shared::{
-    BackendError, ChunkDataSourceSync,
-    ChunkedDataBackendSync,
+    ChunkDataSourceSync, ChunkedDataBackendSync,
 };
 use polars::prelude::*;
 use pyo3::prelude::*;

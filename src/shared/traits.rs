@@ -7,7 +7,6 @@
 // Use the synchronous cache.
 use moka::future::Cache as MokaFutureCache;
 use moka::sync::Cache as MokaCache;
-use std::collections::BTreeMap;
 use std::fmt::Display;
 use std::sync::{Arc, RwLock as StdRwLock};
 
@@ -20,102 +19,9 @@ use zarrs::storage::{
 };
 
 use crate::IStr;
-use crate::chunk_plan::CompileError;
+use crate::errors::BackendError;
 use crate::reader::ColumnData;
 use crate::shared::PlannerStats;
-
-/// Error type for backend operations.
-#[derive(Debug, Clone)]
-pub enum BackendError {
-    /// Compile error.
-    CompileError(Box<CompileError>),
-    /// The requested coordinate array was not found.
-    CoordNotFound(String),
-    /// Failed to open the zarr array.
-    ArrayOpenFailed(String),
-    /// Failed to read chunk data.
-    ChunkReadFailed(String),
-    /// Metadata not yet loaded.
-    MetadataNotLoaded,
-    /// Other error.
-    Other(String),
-}
-
-impl From<CompileError> for BackendError {
-    fn from(v: CompileError) -> Self {
-        Self::CompileError(Box::new(v))
-    }
-}
-
-impl Display for BackendError {
-    fn fmt(
-        &self,
-        f: &mut std::fmt::Formatter<'_>,
-    ) -> std::fmt::Result {
-        match self {
-            BackendError::CompileError(err) => {
-                write!(
-                    f,
-                    "compile error: {}",
-                    err
-                )
-            }
-            BackendError::CoordNotFound(dim) => {
-                write!(
-                    f,
-                    "coordinate array not found: {}",
-                    dim
-                )
-            }
-            BackendError::ArrayOpenFailed(
-                msg,
-            ) => {
-                write!(
-                    f,
-                    "failed to open array: {}",
-                    msg
-                )
-            }
-            BackendError::ChunkReadFailed(
-                msg,
-            ) => {
-                write!(
-                    f,
-                    "failed to read chunk: {}",
-                    msg
-                )
-            }
-            BackendError::MetadataNotLoaded => {
-                write!(
-                    f,
-                    "metadata not yet loaded"
-                )
-            }
-            BackendError::Other(msg) => {
-                write!(f, "{}", msg)
-            }
-        }
-    }
-}
-
-impl std::error::Error for BackendError {}
-
-/// To Py Error
-impl From<BackendError> for PyErr {
-    fn from(error: BackendError) -> PyErr {
-        match error {
-            BackendError::CoordNotFound(msg) => {
-                PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                    "coordinate array not found: {}",
-                    msg
-                ))
-            }
-            _ => PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                error.to_string(),
-            ),
-        }
-    }
-}
 
 #[delegatable_trait]
 pub trait HasStats {
@@ -199,7 +105,6 @@ pub trait HasStore {
     ) -> &ReadableWritableListableStorage;
 }
 
-#[delegatable_trait]
 pub trait HasAsyncStore {
     fn async_store(
         &self,
@@ -720,7 +625,6 @@ pub struct CacheStats {
     pub chunk_entries: usize,
 }
 
-#[delegatable_trait]
 pub trait EvictableChunkCacheSync {
     fn cache_stats(&self) -> CacheStats;
     fn clear(&self);
@@ -835,7 +739,7 @@ impl<
 // Combined ChunkDataSource traits for generic chunk processing
 // =============================================================================
 
-use crate::meta::{ZarrDatasetMeta, ZarrMeta};
+use crate::meta::ZarrMeta;
 
 /// Synchronous chunk data source - provides all capabilities needed for chunk processing.
 ///
@@ -847,13 +751,6 @@ pub trait ChunkDataSourceSync:
     + Send
     + Sync
 {
-    /// Get the planning metadata (ZarrDatasetMeta) for schema and dimension info.
-    fn planning_meta(
-        &self,
-    ) -> Result<ZarrDatasetMeta, BackendError>
-    {
-        Ok(self.metadata()?.planning_meta())
-    }
 }
 
 /// Asynchronous chunk data source - provides all capabilities needed for chunk processing.
@@ -867,13 +764,6 @@ pub trait ChunkDataSourceAsync:
     + Send
     + Sync
 {
-    /// Get the planning metadata (ZarrDatasetMeta) for schema and dimension info.
-    async fn planning_meta(
-        &self,
-    ) -> Result<ZarrDatasetMeta, BackendError>
-    {
-        Ok(self.metadata().await?.planning_meta())
-    }
 }
 
 // Blanket implementations for types that implement both traits
@@ -892,15 +782,3 @@ impl<T> ChunkDataSourceAsync for T where
         + Sync
 {
 }
-
-// =============================================================================
-// Type aliases
-// =============================================================================
-
-/// A type-erased async backend that can be shared across threads.
-pub type DynChunkedDataAsyncBackend =
-    Arc<dyn ChunkedDataBackendAsync>;
-
-/// A type-erased sync backend that can be shared across threads.
-pub type DynChunkedDataSyncBackend =
-    Arc<dyn ChunkedDataBackendSync>;

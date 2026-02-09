@@ -7,7 +7,6 @@ use super::compile_ctx::LazyCompileCtx;
 use super::compile_node::{
     collect_column_refs, extract_struct_field_path,
 };
-use super::errors::CompileError;
 use super::literals::{
     col_lit, literal_anyvalue, literal_to_scalar,
     reverse_operator, strip_wrappers,
@@ -24,6 +23,7 @@ use crate::chunk_plan::indexing::types::{
 };
 use crate::chunk_plan::prelude::*;
 use crate::{IStr, IntoIStr};
+use crate::errors::BackendError;
 
 use super::expr_utils::expr_to_col_name;
 use std::sync::Arc;
@@ -36,12 +36,14 @@ use std::sync::Arc;
 pub(crate) fn compile_node_lazy(
     expr: impl std::borrow::Borrow<Expr>,
     ctx: &mut LazyCompileCtx<'_>,
-) -> Result<LazyDatasetSelection, CompileError> {
+) -> Result<LazyDatasetSelection, BackendError> {
     let expr: &Expr =
         std::borrow::Borrow::borrow(&expr);
     match expr {
         Expr::AnonymousAgg { .. } => {
-            panic!("AnonymousAgg is not supported");
+            return Err(BackendError::UnsupportedPolarsExpression(
+                "AnonymousAgg is not supported".to_string(),
+            ));
         }
         Expr::Alias(inner, _) => {
             compile_node_lazy(inner.as_ref(), ctx)
@@ -558,7 +560,7 @@ fn compile_cmp_to_lazy_selection(
     op: Operator,
     lit: &LiteralValue,
     ctx: &LazyCompileCtx<'_>,
-) -> Result<LazyDatasetSelection, CompileError> {
+) -> Result<LazyDatasetSelection, BackendError> {
     let time_encoding = ctx
         .meta
         .arrays
@@ -567,7 +569,7 @@ fn compile_cmp_to_lazy_selection(
     let Some(scalar) =
         literal_to_scalar(lit, time_encoding)
     else {
-        return Err(CompileError::Unsupported(
+        return Err(BackendError::UnsupportedPolarsExpression(
             format!(
                 "unsupported literal: {:?}",
                 lit
@@ -604,7 +606,7 @@ fn compile_cmp_to_lazy_selection(
         }
         _ => {
             return Err(
-                CompileError::Unsupported(
+                BackendError::UnsupportedPolarsExpression(
                     format!(
                         "unsupported operator: {:?}",
                         op
@@ -624,7 +626,7 @@ fn compile_value_range_to_lazy_selection(
     col: &str,
     vr: &ValueRange,
     ctx: &LazyCompileCtx<'_>,
-) -> Result<LazyDatasetSelection, CompileError> {
+) -> Result<LazyDatasetSelection, BackendError> {
     if vr.empty {
         return Ok(LazyDatasetSelection::empty());
     }
@@ -661,7 +663,7 @@ fn compile_struct_field_cmp(
     op: Operator,
     lit: &LiteralValue,
     ctx: &mut LazyCompileCtx<'_>,
-) -> Result<LazyDatasetSelection, CompileError> {
+) -> Result<LazyDatasetSelection, BackendError> {
     // Build the array path (e.g., "model_a/temperature")
     let array_path: IStr =
         format!("{}/{}", struct_col, field_name)
@@ -674,7 +676,7 @@ fn compile_struct_field_cmp(
         let key = unified
             .normalize_array_path(array_path.as_ref())
             .ok_or_else(|| {
-                CompileError::Unsupported(format!(
+                BackendError::UnsupportedPolarsExpression(format!(
                     "struct field path '{}' not found in metadata",
                     array_path
                 ))
@@ -689,7 +691,7 @@ fn compile_struct_field_cmp(
     let Some(scalar) =
         literal_to_scalar(lit, time_encoding)
     else {
-        return Err(CompileError::Unsupported(
+        return Err(BackendError::UnsupportedPolarsExpression(
             format!(
                 "unsupported literal: {:?}",
                 lit
@@ -726,7 +728,7 @@ fn compile_struct_field_cmp(
         }
         _ => {
             return Err(
-                CompileError::Unsupported(
+                BackendError::UnsupportedPolarsExpression(
                     format!(
                         "unsupported op: {:?}",
                         op
@@ -781,12 +783,12 @@ fn compile_boolean_function_lazy(
     bf: &BooleanFunction,
     input: &[Expr],
     ctx: &mut LazyCompileCtx<'_>,
-) -> Result<LazyDatasetSelection, CompileError> {
+) -> Result<LazyDatasetSelection, BackendError> {
     match bf {
         BooleanFunction::Not => {
             let [arg] = input else {
                 return Err(
-                    CompileError::Unsupported(
+                    BackendError::UnsupportedPolarsExpression(
                         format!(
                             "unsupported boolean function: {:?}",
                             bf
@@ -818,7 +820,7 @@ fn compile_boolean_function_lazy(
         | BooleanFunction::IsNotNull => {
             let [arg] = input else {
                 return Err(
-                    CompileError::Unsupported(
+                    BackendError::UnsupportedPolarsExpression(
                         format!(
                             "unsupported boolean function: {:?}",
                             bf
@@ -883,9 +885,9 @@ fn compile_boolean_function_lazy(
 fn compile_is_between_lazy(
     input: &[Expr],
     ctx: &mut LazyCompileCtx<'_>,
-) -> Result<LazyDatasetSelection, CompileError> {
+) -> Result<LazyDatasetSelection, BackendError> {
     if input.len() < 3 {
-        return Err(CompileError::Unsupported(
+        return Err(BackendError::UnsupportedPolarsExpression(
             format!(
                 "unsupported is_between expression: {:?}",
                 input
@@ -941,11 +943,11 @@ fn compile_is_between_lazy(
 fn compile_is_in_lazy(
     input: &[Expr],
     ctx: &mut LazyCompileCtx<'_>,
-) -> Result<LazyDatasetSelection, CompileError> {
+) -> Result<LazyDatasetSelection, BackendError> {
     use polars::prelude::Scalar;
 
     if input.len() < 2 {
-        return Err(CompileError::Unsupported(
+        return Err(BackendError::UnsupportedPolarsExpression(
             format!(
                 "unsupported is_in expression: {:?}",
                 input
@@ -1067,7 +1069,7 @@ fn compile_is_in_lazy(
 fn compile_selector_lazy(
     selector: &Selector,
     ctx: &mut LazyCompileCtx<'_>,
-) -> Result<LazyDatasetSelection, CompileError> {
+) -> Result<LazyDatasetSelection, BackendError> {
     use regex::Regex;
 
     match selector {
@@ -1139,7 +1141,7 @@ fn compile_selector_lazy(
         Selector::Matches(pattern) => {
             let re = Regex::new(pattern.as_str()).map_err(
                 |e| {
-                    CompileError::Unsupported(format!(
+                    BackendError::CompileError(format!(
                         "invalid regex pattern '{}': {}",
                         pattern, e
                     ))
@@ -1213,7 +1215,7 @@ fn interpolate_selection_nd_lazy(
     _source_values: &Expr,
     target_values: &Expr,
     ctx: &mut LazyCompileCtx<'_>,
-) -> Result<LazyDatasetSelection, CompileError> {
+) -> Result<LazyDatasetSelection, BackendError> {
     use crate::chunk_plan::indexing::types::CoordScalar;
 
     // Extract coordinate dimension names from the source coord struct expression.

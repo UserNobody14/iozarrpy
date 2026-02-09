@@ -9,9 +9,6 @@
 //! This enables efficient I/O batching and concurrent resolution for async stores.
 
 use crate::IStr;
-use crate::chunk_plan::indexing::lazy_materialize::{
-    MergedCache, collect_requests_with_meta, materialize,
-};
 use crate::meta::ZarrMeta;
 
 pub(crate) fn compute_dims_and_lengths_unified(

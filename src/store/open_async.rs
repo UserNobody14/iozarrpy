@@ -12,10 +12,9 @@ use zarrs_object_store::object_store;
 use zarrs_object_store::object_store::ObjectStore;
 
 use crate::IStr;
+use crate::errors::BackendError;
 use crate::reader::ShardedCacheAsync;
-use crate::shared::{
-    BackendError, normalize_path,
-};
+use crate::shared::normalize_path;
 use crate::store::adapters::TokioSpawnBlocking;
 use crate::store::array::OpenedArrayAsync;
 use zarrs::array::Array;

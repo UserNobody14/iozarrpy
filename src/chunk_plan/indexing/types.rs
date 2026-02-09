@@ -349,9 +349,3 @@ pub(crate) struct IndexRange {
     pub(crate) start: u64,
     pub(crate) end_exclusive: u64,
 }
-
-impl IndexRange {
-    pub(crate) fn is_empty(&self) -> bool {
-        self.end_exclusive <= self.start
-    }
-}

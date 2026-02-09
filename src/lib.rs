@@ -2,6 +2,7 @@ use pyo3::prelude::*;
 
 mod backend;
 mod chunk_plan;
+mod errors;
 mod meta;
 mod py;
 mod reader;

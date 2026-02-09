@@ -31,6 +31,7 @@ pub(super) fn to_py_err<E: std::fmt::Display>(
 
 use crate::IStr;
 use crate::chunk_plan::ChunkGridSignature;
+use crate::errors::BackendError;
 use crate::scan::shared::{
     build_coord_column, build_var_column,
     compute_actual_chunk_shape,
@@ -39,8 +40,7 @@ use crate::scan::shared::{
     should_include_column,
 };
 use crate::shared::{
-    BackendError, ChunkDataSourceAsync,
-    ChunkedDataBackendAsync,
+    ChunkDataSourceAsync, ChunkedDataBackendAsync,
 };
 
 // =============================================================================

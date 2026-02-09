@@ -122,14 +122,6 @@ impl<Sel: ArraySelectionType>
         self.var_to_sig.is_empty()
     }
 
-    /// Get the selection for a specific variable.
-    pub fn get(&self, var: &str) -> Option<&Sel> {
-        let sig = self
-            .var_to_sig
-            .get(&crate::IntoIStr::istr(var))?;
-        self.by_dims.get(sig)
-    }
-
     /// Iterate over variables and their selections.
     ///
     /// Note: Multiple variables may point to the same selection object.
@@ -153,15 +145,6 @@ impl<Sel: ArraySelectionType>
         self.by_dims
             .iter()
             .map(|(sig, sel)| (sig.as_ref(), sel))
-    }
-
-    /// Get the dimension signature for a variable.
-    pub fn get_signature(
-        &self,
-        var: &str,
-    ) -> Option<&Arc<DimSignature>> {
-        self.var_to_sig
-            .get(&crate::IntoIStr::istr(var))
     }
 
     /// Get the internal by_dims map (for materialization).
@@ -427,45 +410,46 @@ impl<Sel: ArraySelectionType>
         Self::Empty
     }
 
-    /// Returns true if this is an empty selection.
-    pub fn is_empty_selection(&self) -> bool {
-        matches!(self, Self::Empty)
-    }
+    // TODO: consider removing?
+    // /// Returns true if this is an empty selection.
+    // pub fn is_empty_selection(&self) -> bool {
+    //     matches!(self, Self::Empty)
+    // }
 
-    /// Iterate over variables and their selections.
-    pub fn vars(
-        &self,
-    ) -> Box<dyn Iterator<Item = (&str, &Sel)> + '_>
-    {
-        match self {
-            Self::Selection(sel) => {
-                Box::new(sel.vars())
-            }
-            Self::NoSelectionMade
-            | Self::Empty => {
-                Box::new(std::iter::empty())
-            }
-        }
-    }
+    // /// Iterate over variables and their selections.
+    // pub fn vars(
+    //     &self,
+    // ) -> Box<dyn Iterator<Item = (&str, &Sel)> + '_>
+    // {
+    //     match self {
+    //         Self::Selection(sel) => {
+    //             Box::new(sel.vars())
+    //         }
+    //         Self::NoSelectionMade
+    //         | Self::Empty => {
+    //             Box::new(std::iter::empty())
+    //         }
+    //     }
+    // }
 
-    /// Get the selection for a specific variable.
-    pub fn get(&self, var: &str) -> Option<&Sel> {
-        match self {
-            Self::Selection(sel) => sel.get(var),
-            Self::NoSelectionMade
-            | Self::Empty => None,
-        }
-    }
+    // /// Get the selection for a specific variable.
+    // pub fn get(&self, var: &str) -> Option<&Sel> {
+    //     match self {
+    //         Self::Selection(sel) => sel.get(var),
+    //         Self::NoSelectionMade
+    //         | Self::Empty => None,
+    //     }
+    // }
 
-    /// Get the inner grouped selection, if present.
-    pub fn as_selection(
-        &self,
-    ) -> Option<&GroupedSelection<Sel>> {
-        match self {
-            Self::Selection(sel) => Some(sel),
-            _ => None,
-        }
-    }
+    // /// Get the inner grouped selection, if present.
+    // pub fn as_selection(
+    //     &self,
+    // ) -> Option<&GroupedSelection<Sel>> {
+    //     match self {
+    //         Self::Selection(sel) => Some(sel),
+    //         _ => None,
+    //     }
+    // }
 
     /// Create a selection for variables with the given selection.
     pub fn for_vars_with_selection(

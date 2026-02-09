@@ -95,6 +95,8 @@ impl PyZarrBackendSync {
     /// * `max_concurrency` - Maximum concurrent chunk reads
     /// * `with_columns` - Optional list of columns to include
     /// * `max_chunks_to_read` - Maximum number of chunks to read (safety limit)
+    /// * `n_rows` - Maximum number of rows to read
+    /// * `batch_size` - Batch size for reading
     #[pyo3(signature = (predicate=None, with_columns=None, max_chunks_to_read=None, n_rows=None, batch_size=None))]
     fn scan_zarr_sync<'py>(
         &self,

@@ -1,9 +1,6 @@
-use crate::shared::traits::HasStats;
 use crate::{IStr, PlannerStats};
-use ambassador::delegatable_trait;
 use std::collections::BTreeMap;
 use tokio::sync::RwLock;
-use zarrs::array::Array;
 use zarrs::storage::{
     AsyncReadableWritableListableStorage,
     ReadableWritableListableStorage,
@@ -12,7 +9,7 @@ use zarrs::storage::{
 /// Backend handler for (non-icechunk) zarr datasets
 ///
 use super::traits::{
-    BackendError, ChunkedDataBackendAsync,
+    ChunkedDataBackendAsync,
     ChunkedDataBackendSync,
     ChunkedDataCacheAsync, ChunkedDataCacheSync,
     HasAsyncStore, HasMetadataBackendAsync,
@@ -20,13 +17,13 @@ use super::traits::{
     HasMetadataBackendCacheSync,
     HasMetadataBackendSync, HasStore,
 };
+use crate::errors::BackendError;
 use crate::meta::{
     ZarrMeta, load_zarr_meta_from_opened,
     load_zarr_meta_from_opened_async,
 };
 use crate::reader::{
-    ColumnData, ShardedCacheAsync,
-    ShardedCacheSync, retrieve_chunk,
+    ColumnData, retrieve_chunk,
     retrieve_chunk_async,
 };
 use crate::store::{

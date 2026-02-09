@@ -1,13 +1,13 @@
 use std::collections::BTreeMap;
 
-use polars::prelude::Expr;
-
 use super::traits::{
-    BackendError, ChunkedDataBackendAsync,
+    ChunkedDataBackendAsync,
     ChunkedDataBackendSync, HasAsyncStore,
     HasMetadataBackendAsync,
     HasMetadataBackendSync, HasStore,
 };
+use crate::errors::BackendError;
+use polars::prelude::Expr;
 
 use crate::PlannerStats;
 use crate::chunk_plan::GroupedChunkPlan;
@@ -102,7 +102,7 @@ impl<
             &merged,
         )
         .map_err(|e| {
-            CompileError::Unsupported(format!(
+            BackendError::CompileError(format!(
                 "materialization failed: {}",
                 e
             ))
@@ -173,7 +173,7 @@ impl<
             &merged,
         )
         .map_err(|e| {
-            CompileError::Unsupported(format!(
+            BackendError::CompileError(format!(
                 "materialization failed: {}",
                 e
             ))
@@ -1015,7 +1015,7 @@ impl<
         dir: std::cmp::Ordering,
         n: u64,
         chunk_size: u64,
-        time_enc: Option<
+        _time_enc: Option<
             &crate::meta::TimeEncoding,
         >,
     ) -> Option<IndexRange> {
