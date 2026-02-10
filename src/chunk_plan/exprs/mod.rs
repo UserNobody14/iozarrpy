@@ -8,6 +8,7 @@ pub mod compile_ctx;
 pub mod compile_node;
 pub mod compile_node_lazy;
 pub mod expr_utils;
+pub mod expr_walk;
 pub mod literals;
 
 pub(crate) use crate::chunk_plan::indexing::Emptyable;

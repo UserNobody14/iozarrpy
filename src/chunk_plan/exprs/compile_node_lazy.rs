@@ -1,4 +1,4 @@
-//! Lazy expression compilation - produces LazyDatasetSelection without resolving.
+//! Lazy expression compilation - produces Sel without resolving.
 //!
 //! This module mirrors `compile_node.rs` but produces lazy selections that store
 //! `ValueRange` constraints instead of resolved index ranges.
@@ -7,13 +7,19 @@ use super::compile_ctx::LazyCompileCtx;
 use super::compile_node::{
     collect_column_refs, extract_struct_field_path,
 };
+use super::expr_utils::{
+    extract_column_names_lazy,
+    try_expr_to_value_range_lazy,
+    extract_literal_struct_series_lazy,
+    series_values_scalar_lazy,
+};
 use super::literals::{
     col_lit, literal_anyvalue, literal_to_scalar,
     reverse_operator, strip_wrappers,
 };
 use super::{Emptyable, SetOperations};
 use crate::chunk_plan::indexing::lazy_selection::{
-    LazyArraySelection, LazyDatasetSelection,
+    LazyArraySelection, LazyDatasetSelection as Sel,
     LazyDimConstraint, LazyHyperRectangle,
     lazy_dataset_all_for_vars,
     lazy_dataset_for_vars_with_selection,
@@ -30,13 +36,13 @@ use std::sync::Arc;
 
 /// Compile an expression to a lazy dataset selection.
 ///
-/// This function traverses the expression tree and produces a `LazyDatasetSelection`
+/// This function traverses the expression tree and produces a `Sel`
 /// containing unresolved `ValueRange` constraints. These constraints can later be
 /// batch-resolved and materialized into a concrete `DatasetSelection`.
 pub(crate) fn compile_node_lazy(
     expr: impl std::borrow::Borrow<Expr>,
     ctx: &mut LazyCompileCtx<'_>,
-) -> Result<LazyDatasetSelection, BackendError> {
+) -> Result<Sel, BackendError> {
     let expr: &Expr =
         std::borrow::Borrow::borrow(&expr);
     match expr {
@@ -75,8 +81,10 @@ pub(crate) fn compile_node_lazy(
             partition_by,
             ..
         } => {
-            let func_sel =
-                compile_node_lazy(function.as_ref(), ctx)?;
+            let func_sel = compile_node_lazy(
+                function.as_ref(),
+                ctx,
+            )?;
             let mut refs = Vec::new();
             for p in partition_by {
                 collect_column_refs(p, &mut refs);
@@ -86,26 +94,34 @@ pub(crate) fn compile_node_lazy(
             if refs.is_empty() {
                 Ok(func_sel)
             } else {
-                let part_sel = lazy_dataset_all_for_vars(
-                    refs, ctx.meta,
-                );
+                let part_sel =
+                    lazy_dataset_all_for_vars(
+                        refs, ctx.meta,
+                    );
                 Ok(func_sel.union(&part_sel))
             }
         }
 
         Expr::Rolling { function, .. } => {
-            compile_node_lazy(function.as_ref(), ctx)
+            compile_node_lazy(
+                function.as_ref(),
+                ctx,
+            )
         }
 
         Expr::Filter { input, by } => {
-            let filter_sel =
-                compile_node_lazy(by.as_ref(), ctx)?;
+            let filter_sel = compile_node_lazy(
+                by.as_ref(),
+                ctx,
+            )?;
             // If the filter predicate is proven always-false, no chunks match
             if filter_sel.is_empty() {
-                return Ok(LazyDatasetSelection::empty());
+                return Ok(Sel::Empty);
             }
-            let input_sel =
-                compile_node_lazy(input.as_ref(), ctx)?;
+            let input_sel = compile_node_lazy(
+                input.as_ref(),
+                ctx,
+            )?;
             // Use intersect so the filter predicate constrains which chunks to read.
             // Union would take the less-restrictive "all" from the input projection,
             // completely ignoring the filter predicate.
@@ -114,13 +130,15 @@ pub(crate) fn compile_node_lazy(
 
         Expr::BinaryExpr { left, op, right } => {
             match op {
-                Operator::And | Operator::LogicalAnd => {
+                Operator::And
+                | Operator::LogicalAnd => {
                     // Special-case: A & !B => A \ B
                     if let Expr::Function {
                         input,
                         function,
-                    } = strip_wrappers(right.as_ref())
-                    {
+                    } = strip_wrappers(
+                        right.as_ref(),
+                    ) {
                         if matches!(
                             function,
                             FunctionExpr::Boolean(
@@ -141,8 +159,9 @@ pub(crate) fn compile_node_lazy(
                     if let Expr::Function {
                         input,
                         function,
-                    } = strip_wrappers(left.as_ref())
-                    {
+                    } = strip_wrappers(
+                        left.as_ref(),
+                    ) {
                         if matches!(
                             function,
                             FunctionExpr::Boolean(
@@ -191,7 +210,8 @@ pub(crate) fn compile_node_lazy(
                     )?;
                     Ok(a.intersect(&b))
                 }
-                Operator::Or | Operator::LogicalOr => {
+                Operator::Or
+                | Operator::LogicalOr => {
                     let a = compile_node_lazy(
                         left.as_ref(),
                         ctx,
@@ -220,26 +240,40 @@ pub(crate) fn compile_node_lazy(
                 | Operator::LtEq
                 | Operator::Lt => {
                     // Check for struct field access (e.g., model_a.struct.field("temp") > 280)
-                    if let Some((struct_col, field_name)) =
+                    if let Some((
+                        struct_col,
+                        field_name,
+                    )) =
                         extract_struct_field_path(
-                            strip_wrappers(left.as_ref()),
+                            strip_wrappers(
+                                left.as_ref(),
+                            ),
                         )
                     {
-                        if let Expr::Literal(lit) =
-                            strip_wrappers(right.as_ref())
-                        {
+                        if let Expr::Literal(
+                            lit,
+                        ) = strip_wrappers(
+                            right.as_ref(),
+                        ) {
                             return compile_struct_field_cmp(&struct_col, &field_name, *op, lit, ctx)
                                 .or_else(|_| Ok(all_for_referenced_vars_lazy(expr, ctx)));
                         }
                     }
-                    if let Some((struct_col, field_name)) =
+                    if let Some((
+                        struct_col,
+                        field_name,
+                    )) =
                         extract_struct_field_path(
-                            strip_wrappers(right.as_ref()),
+                            strip_wrappers(
+                                right.as_ref(),
+                            ),
                         )
                     {
-                        if let Expr::Literal(lit) =
-                            strip_wrappers(left.as_ref())
-                        {
+                        if let Expr::Literal(
+                            lit,
+                        ) = strip_wrappers(
+                            left.as_ref(),
+                        ) {
                             return compile_struct_field_cmp(&struct_col, &field_name, reverse_operator(*op), lit, ctx)
                                 .or_else(|_| Ok(all_for_referenced_vars_lazy(expr, ctx)));
                         }
@@ -247,12 +281,17 @@ pub(crate) fn compile_node_lazy(
 
                     // Regular column comparison
                     if let Some((col, lit)) =
-                        col_lit(left, right).or_else(|| {
-                            col_lit(right, left)
-                        })
+                        col_lit(left, right)
+                            .or_else(|| {
+                                col_lit(
+                                    right, left,
+                                )
+                            })
                     {
                         let op_eff = if matches!(
-                            strip_wrappers(left.as_ref()),
+                            strip_wrappers(
+                                left.as_ref()
+                            ),
                             Expr::Literal(_)
                         ) {
                             reverse_operator(*op)
@@ -267,31 +306,38 @@ pub(crate) fn compile_node_lazy(
                         ))
                     }
                 }
-                _ => Ok(all_for_referenced_vars_lazy(
-                    expr, ctx,
-                )),
+                _ => Ok(
+                    all_for_referenced_vars_lazy(
+                        expr, ctx,
+                    ),
+                ),
             }
         }
 
-        Expr::Literal(lit) => match literal_anyvalue(lit) {
-            Some(AnyValue::Boolean(true)) => {
-                Ok(LazyDatasetSelection::NoSelectionMade)
+        Expr::Literal(lit) => {
+            match literal_anyvalue(lit) {
+                Some(AnyValue::Boolean(true)) => {
+                    Ok(Sel::NoSelectionMade)
+                }
+                Some(AnyValue::Boolean(
+                    false,
+                )) => Ok(Sel::Empty),
+                Some(AnyValue::Null) => {
+                    Ok(Sel::Empty)
+                }
+                _ => Ok(Sel::NoSelectionMade),
             }
-            Some(AnyValue::Boolean(false)) => {
-                Ok(LazyDatasetSelection::empty())
-            }
-            Some(AnyValue::Null) => {
-                Ok(LazyDatasetSelection::empty())
-            }
-            _ => Ok(LazyDatasetSelection::NoSelectionMade),
-        },
+        }
 
         Expr::Ternary {
             predicate,
             truthy,
             falsy,
         } => {
-            if let (Expr::Literal(t), Expr::Literal(f)) = (
+            if let (
+                Expr::Literal(t),
+                Expr::Literal(f),
+            ) = (
                 strip_wrappers(truthy.as_ref()),
                 strip_wrappers(falsy.as_ref()),
             ) {
@@ -308,26 +354,28 @@ pub(crate) fn compile_node_lazy(
                             ctx,
                         );
                     }
-                    if !t && f {
-                        return Ok(LazyDatasetSelection::NoSelectionMade);
-                    }
-                    if t && f {
-                        return Ok(LazyDatasetSelection::NoSelectionMade);
-                    }
-                    if !t && !f {
+                    if f {
                         return Ok(
-                            LazyDatasetSelection::empty(),
+                            Sel::NoSelectionMade,
                         );
                     }
+                    return Ok(Sel::Empty);
                 }
             }
 
             let predicate_node =
-                compile_node_lazy(predicate.as_ref(), ctx)?;
-            let truthy_node =
-                compile_node_lazy(truthy.as_ref(), ctx)?;
-            let falsy_node =
-                compile_node_lazy(falsy.as_ref(), ctx)?;
+                compile_node_lazy(
+                    predicate.as_ref(),
+                    ctx,
+                )?;
+            let truthy_node = compile_node_lazy(
+                truthy.as_ref(),
+                ctx,
+            )?;
+            let falsy_node = compile_node_lazy(
+                falsy.as_ref(),
+                ctx,
+            )?;
             Ok(truthy_node
                 .union(&falsy_node)
                 .union(&predicate_node))
@@ -340,15 +388,17 @@ pub(crate) fn compile_node_lazy(
                         bf, input, ctx,
                     )
                 }
-                FunctionExpr::NullCount => Ok(
-                    LazyDatasetSelection::NoSelectionMade,
-                ),
+                FunctionExpr::NullCount => {
+                    Ok(Sel::NoSelectionMade)
+                }
                 FunctionExpr::FfiPlugin {
-                    symbol, ..
+                    symbol,
+                    ..
                 } => {
-                    if symbol == "interpolate_nd" {
+                    if symbol == "interpolate_nd"
+                    {
                         if input.len() < 3 {
-                            return Ok(LazyDatasetSelection::NoSelectionMade);
+                            return Ok(Sel::NoSelectionMade);
                         }
                         interpolate_selection_nd_lazy(
                             &input[0], &input[1],
@@ -363,12 +413,14 @@ pub(crate) fn compile_node_lazy(
                 _ => {
                     let mut refs = Vec::new();
                     for i in input {
-                        collect_column_refs(i, &mut refs);
+                        collect_column_refs(
+                            i, &mut refs,
+                        );
                     }
                     refs.sort();
                     refs.dedup();
                     if refs.is_empty() {
-                        Ok(LazyDatasetSelection::NoSelectionMade)
+                        Ok(Sel::NoSelectionMade)
                     } else {
                         Ok(lazy_dataset_all_for_vars(
                             refs, ctx.meta,
@@ -390,10 +442,14 @@ pub(crate) fn compile_node_lazy(
         }
 
         Expr::Agg(_) => {
-            Ok(all_for_referenced_vars_lazy(expr, ctx))
+            Ok(all_for_referenced_vars_lazy(
+                expr, ctx,
+            ))
         }
 
-        Expr::AnonymousFunction { input, .. } => {
+        Expr::AnonymousFunction {
+            input, ..
+        } => {
             let mut refs = Vec::new();
             for i in input {
                 collect_column_refs(i, &mut refs);
@@ -401,7 +457,7 @@ pub(crate) fn compile_node_lazy(
             refs.sort();
             refs.dedup();
             if refs.is_empty() {
-                Ok(LazyDatasetSelection::NoSelectionMade)
+                Ok(Sel::NoSelectionMade)
             } else {
                 Ok(lazy_dataset_all_for_vars(
                     refs, ctx.meta,
@@ -416,7 +472,7 @@ pub(crate) fn compile_node_lazy(
             refs.sort();
             refs.dedup();
             if refs.is_empty() {
-                Ok(LazyDatasetSelection::NoSelectionMade)
+                Ok(Sel::NoSelectionMade)
             } else {
                 Ok(lazy_dataset_all_for_vars(
                     refs, ctx.meta,
@@ -429,10 +485,12 @@ pub(crate) fn compile_node_lazy(
         }
 
         Expr::Field(names) => {
-            let vars: Vec<IStr> =
-                names.iter().map(|n| n.istr()).collect();
+            let vars: Vec<IStr> = names
+                .iter()
+                .map(|n| n.istr())
+                .collect();
             if vars.is_empty() {
-                Ok(LazyDatasetSelection::NoSelectionMade)
+                Ok(Sel::NoSelectionMade)
             } else {
                 Ok(lazy_dataset_all_for_vars(
                     vars, ctx.meta,
@@ -444,7 +502,7 @@ pub(crate) fn compile_node_lazy(
         | Expr::Len
         | Expr::SubPlan(_, _)
         | Expr::DataTypeFunction(_) => {
-            Ok(LazyDatasetSelection::NoSelectionMade)
+            Ok(Sel::NoSelectionMade)
         }
 
         Expr::StructEval { expr, .. } => {
@@ -456,102 +514,20 @@ pub(crate) fn compile_node_lazy(
     }
 }
 
-/// Returns a LazyDatasetSelection for the variables referenced in an expression.
+/// Returns a Sel for the variables referenced in an expression.
 fn all_for_referenced_vars_lazy(
     expr: &Expr,
     ctx: &LazyCompileCtx<'_>,
-) -> LazyDatasetSelection {
+) -> Sel {
     let mut refs = Vec::new();
     collect_column_refs(expr, &mut refs);
     refs.sort();
     refs.dedup();
     if refs.is_empty() {
-        LazyDatasetSelection::NoSelectionMade
+        Sel::NoSelectionMade
     } else {
         lazy_dataset_all_for_vars(refs, ctx.meta)
     }
-}
-
-/// Try to extract a column name and ValueRange from a comparison expression.
-fn try_expr_to_value_range_lazy(
-    expr: &Expr,
-    ctx: &LazyCompileCtx<'_>,
-) -> Option<(IStr, ValueRange)> {
-    let expr = strip_wrappers(expr);
-    let Expr::BinaryExpr { left, op, right } =
-        expr
-    else {
-        return None;
-    };
-    if !matches!(
-        op,
-        Operator::Eq
-            | Operator::GtEq
-            | Operator::Gt
-            | Operator::LtEq
-            | Operator::Lt
-    ) {
-        return None;
-    }
-
-    let (col, lit, op_eff) = if let (
-        Expr::Column(name),
-        Expr::Literal(lit),
-    ) = (
-        strip_wrappers(left),
-        strip_wrappers(right),
-    ) {
-        (name.istr(), lit, *op)
-    } else if let (
-        Expr::Literal(lit),
-        Expr::Column(name),
-    ) = (
-        strip_wrappers(left),
-        strip_wrappers(right),
-    ) {
-        (name.istr(), lit, reverse_operator(*op))
-    } else {
-        return None;
-    };
-
-    let time_encoding =
-        ctx.meta.arrays.get(&col).and_then(|a| {
-            a.time_encoding.as_ref()
-        });
-    let scalar =
-        literal_to_scalar(lit, time_encoding)?;
-
-    let mut vr = ValueRange::default();
-    match op_eff {
-        Operator::Eq => vr.eq = Some(scalar),
-        Operator::Gt => {
-            vr.min = Some((
-                scalar,
-                BoundKind::Exclusive,
-            ))
-        }
-        Operator::GtEq => {
-            vr.min = Some((
-                scalar,
-                BoundKind::Inclusive,
-            ))
-        }
-        Operator::Lt => {
-            vr.max = Some((
-                scalar,
-                BoundKind::Exclusive,
-            ))
-        }
-        Operator::LtEq => {
-            vr.max = Some((
-                scalar,
-                BoundKind::Inclusive,
-            ))
-        }
-        _ => return None,
-    }
-
-    Some((col, vr))
 }
 
 /// Compile a comparison to a lazy selection.
@@ -560,7 +536,7 @@ fn compile_cmp_to_lazy_selection(
     op: Operator,
     lit: &LiteralValue,
     ctx: &LazyCompileCtx<'_>,
-) -> Result<LazyDatasetSelection, BackendError> {
+) -> Result<Sel, BackendError> {
     let time_encoding = ctx
         .meta
         .arrays
@@ -626,18 +602,16 @@ fn compile_value_range_to_lazy_selection(
     col: &str,
     vr: &ValueRange,
     ctx: &LazyCompileCtx<'_>,
-) -> Result<LazyDatasetSelection, BackendError> {
+) -> Result<Sel, BackendError> {
     if vr.empty {
-        return Ok(LazyDatasetSelection::empty());
+        return Ok(Sel::Empty);
     }
 
     // Check if this is a dimension
     let dim_idx = ctx.dim_index(col);
     if dim_idx.is_none() {
         // Not a dimension: skip pushdown and let runtime filtering handle it.
-        return Ok(
-            LazyDatasetSelection::NoSelectionMade,
-        );
+        return Ok(Sel::NoSelectionMade);
     }
 
     // Create a lazy constraint with the unresolved value range
@@ -663,7 +637,7 @@ fn compile_struct_field_cmp(
     op: Operator,
     lit: &LiteralValue,
     ctx: &mut LazyCompileCtx<'_>,
-) -> Result<LazyDatasetSelection, BackendError> {
+) -> Result<Sel, BackendError> {
     // Build the array path (e.g., "model_a/temperature")
     let array_path: IStr =
         format!("{}/{}", struct_col, field_name)
@@ -783,7 +757,7 @@ fn compile_boolean_function_lazy(
     bf: &BooleanFunction,
     input: &[Expr],
     ctx: &mut LazyCompileCtx<'_>,
-) -> Result<LazyDatasetSelection, BackendError> {
+) -> Result<Sel, BackendError> {
     match bf {
         BooleanFunction::Not => {
             let [arg] = input else {
@@ -799,21 +773,31 @@ fn compile_boolean_function_lazy(
             if let Expr::Literal(lit) =
                 strip_wrappers(arg)
             {
-                return match literal_anyvalue(lit) {
-                    Some(AnyValue::Boolean(true)) => Ok(LazyDatasetSelection::empty()),
-                    Some(AnyValue::Boolean(false)) => Ok(LazyDatasetSelection::NoSelectionMade),
-                    Some(AnyValue::Null) => Ok(LazyDatasetSelection::empty()),
-                    _ => Ok(LazyDatasetSelection::NoSelectionMade),
+                return match literal_anyvalue(lit)
+                {
+                    Some(AnyValue::Boolean(
+                        true,
+                    )) => Ok(Sel::Empty),
+                    Some(AnyValue::Boolean(
+                        false,
+                    )) => {
+                        Ok(Sel::NoSelectionMade)
+                    }
+                    Some(AnyValue::Null) => {
+                        Ok(Sel::Empty)
+                    }
+                    _ => Ok(Sel::NoSelectionMade),
                 };
             }
-            let inner = compile_node_lazy(arg, ctx)
-                .unwrap_or_else(|_| {
-                    LazyDatasetSelection::NoSelectionMade
-                });
+            let inner =
+                compile_node_lazy(arg, ctx)
+                    .unwrap_or_else(|_| {
+                        Sel::NoSelectionMade
+                    });
             if inner.is_empty() {
-                Ok(LazyDatasetSelection::NoSelectionMade)
+                Ok(Sel::NoSelectionMade)
             } else {
-                Ok(LazyDatasetSelection::NoSelectionMade)
+                Ok(Sel::NoSelectionMade)
             }
         }
         BooleanFunction::IsNull
@@ -841,12 +825,12 @@ fn compile_boolean_function_lazy(
                     _ => unreachable!(),
                 };
                 return Ok(if keep {
-                    LazyDatasetSelection::NoSelectionMade
+                    Sel::NoSelectionMade
                 } else {
-                    LazyDatasetSelection::empty()
+                    Sel::Empty
                 });
             }
-            Ok(LazyDatasetSelection::NoSelectionMade)
+            Ok(Sel::NoSelectionMade)
         }
         BooleanFunction::IsBetween { .. } => {
             compile_is_between_lazy(input, ctx)
@@ -855,19 +839,25 @@ fn compile_boolean_function_lazy(
             compile_is_in_lazy(input, ctx)
         }
         BooleanFunction::AnyHorizontal => {
-            let mut acc =
-                LazyDatasetSelection::empty();
+            let mut acc = Sel::Empty;
             for e in input {
-                let sel = compile_node_lazy(e, ctx).unwrap_or_else(|_| LazyDatasetSelection::NoSelectionMade);
+                let sel =
+                    compile_node_lazy(e, ctx)
+                        .unwrap_or_else(|_| {
+                            Sel::NoSelectionMade
+                        });
                 acc = acc.union(&sel);
             }
             Ok(acc)
         }
         BooleanFunction::AllHorizontal => {
-            let mut acc =
-                LazyDatasetSelection::NoSelectionMade;
+            let mut acc = Sel::NoSelectionMade;
             for e in input {
-                let sel = compile_node_lazy(e, ctx).unwrap_or_else(|_| LazyDatasetSelection::NoSelectionMade);
+                let sel =
+                    compile_node_lazy(e, ctx)
+                        .unwrap_or_else(|_| {
+                            Sel::NoSelectionMade
+                        });
                 acc = acc.intersect(&sel);
                 if acc.is_empty() {
                     break;
@@ -875,9 +865,7 @@ fn compile_boolean_function_lazy(
             }
             Ok(acc)
         }
-        _ => Ok(
-            LazyDatasetSelection::NoSelectionMade,
-        ),
+        _ => Ok(Sel::NoSelectionMade),
     }
 }
 
@@ -885,7 +873,7 @@ fn compile_boolean_function_lazy(
 fn compile_is_between_lazy(
     input: &[Expr],
     ctx: &mut LazyCompileCtx<'_>,
-) -> Result<LazyDatasetSelection, BackendError> {
+) -> Result<Sel, BackendError> {
     if input.len() < 3 {
         return Err(BackendError::UnsupportedPolarsExpression(
             format!(
@@ -899,23 +887,17 @@ fn compile_is_between_lazy(
     let high = &input[2];
 
     let Some(col) = expr_to_col_name(expr) else {
-        return Ok(
-            LazyDatasetSelection::NoSelectionMade,
-        );
+        return Ok(Sel::NoSelectionMade);
     };
     let Expr::Literal(low_lit) =
         strip_wrappers(low)
     else {
-        return Ok(
-            LazyDatasetSelection::NoSelectionMade,
-        );
+        return Ok(Sel::NoSelectionMade);
     };
     let Expr::Literal(high_lit) =
         strip_wrappers(high)
     else {
-        return Ok(
-            LazyDatasetSelection::NoSelectionMade,
-        );
+        return Ok(Sel::NoSelectionMade);
     };
 
     let a = compile_cmp_to_lazy_selection(
@@ -924,18 +906,14 @@ fn compile_is_between_lazy(
         low_lit,
         ctx,
     )
-    .unwrap_or_else(|_| {
-        LazyDatasetSelection::NoSelectionMade
-    });
+    .unwrap_or_else(|_| Sel::NoSelectionMade);
     let b = compile_cmp_to_lazy_selection(
         &col,
         Operator::LtEq,
         high_lit,
         ctx,
     )
-    .unwrap_or_else(|_| {
-        LazyDatasetSelection::NoSelectionMade
-    });
+    .unwrap_or_else(|_| Sel::NoSelectionMade);
     Ok(a.intersect(&b))
 }
 
@@ -943,7 +921,7 @@ fn compile_is_between_lazy(
 fn compile_is_in_lazy(
     input: &[Expr],
     ctx: &mut LazyCompileCtx<'_>,
-) -> Result<LazyDatasetSelection, BackendError> {
+) -> Result<Sel, BackendError> {
     use polars::prelude::Scalar;
 
     if input.len() < 2 {
@@ -958,16 +936,12 @@ fn compile_is_in_lazy(
     let list = &input[1];
 
     let Some(col) = expr_to_col_name(expr) else {
-        return Ok(
-            LazyDatasetSelection::NoSelectionMade,
-        );
+        return Ok(Sel::NoSelectionMade);
     };
     let Expr::Literal(list_lit) =
         strip_wrappers(list)
     else {
-        return Ok(
-            LazyDatasetSelection::NoSelectionMade,
-        );
+        return Ok(Sel::NoSelectionMade);
     };
 
     let (dtype, values): (
@@ -977,9 +951,7 @@ fn compile_is_in_lazy(
         LiteralValue::Series(s) => {
             let series = &**s;
             if series.len() > 4096 {
-                return Ok(
-                    LazyDatasetSelection::NoSelectionMade,
-                );
+                return Ok(Sel::NoSelectionMade);
             }
             (
                 series.dtype(),
@@ -995,47 +967,52 @@ fn compile_is_in_lazy(
             match av {
                 AnyValue::List(series) => {
                     if series.len() > 4096 {
-                        return Ok(LazyDatasetSelection::NoSelectionMade);
+                        return Ok(
+                            Sel::NoSelectionMade,
+                        );
                     }
                     (
                         &series.dtype().clone(),
                         series
                             .iter()
-                            .map(|av| av.into_static())
+                            .map(|av| {
+                                av.into_static()
+                            })
                             .collect(),
                     )
                 }
                 AnyValue::Array(series, _) => {
                     if series.len() > 4096 {
-                        return Ok(LazyDatasetSelection::NoSelectionMade);
+                        return Ok(
+                            Sel::NoSelectionMade,
+                        );
                     }
                     (
                         &series.dtype().clone(),
                         series
                             .iter()
-                            .map(|av| av.into_static())
+                            .map(|av| {
+                                av.into_static()
+                            })
                             .collect(),
                     )
                 }
-                _ => return Ok(
-                    LazyDatasetSelection::NoSelectionMade,
-                ),
+                _ => {
+                    return Ok(
+                        Sel::NoSelectionMade,
+                    );
+                }
             }
         }
         _ => {
-            return Ok(
-                LazyDatasetSelection::NoSelectionMade,
-            );
+            return Ok(Sel::NoSelectionMade);
         }
     };
 
-    let mut out: Option<LazyDatasetSelection> =
-        None;
+    let mut out: Option<Sel> = None;
     for av in values {
         if matches!(av, AnyValue::Null) {
-            return Ok(
-                LazyDatasetSelection::NoSelectionMade,
-            );
+            return Ok(Sel::NoSelectionMade);
         }
         let lit = LiteralValue::Scalar(
             Scalar::new(dtype.clone(), av),
@@ -1046,30 +1023,24 @@ fn compile_is_in_lazy(
             &lit,
             ctx,
         )
-        .unwrap_or_else(|_| {
-            LazyDatasetSelection::NoSelectionMade
-        });
+        .unwrap_or_else(|_| Sel::NoSelectionMade);
 
-        if node == LazyDatasetSelection::NoSelectionMade {
-            return Ok(
-                LazyDatasetSelection::NoSelectionMade,
-            );
+        if node == Sel::NoSelectionMade {
+            return Ok(Sel::NoSelectionMade);
         }
         out = Some(match out.take() {
             None => node,
             Some(acc) => acc.union(&node),
         });
     }
-    Ok(out.unwrap_or_else(
-        LazyDatasetSelection::empty,
-    ))
+    Ok(out.unwrap_or_else(Sel::empty))
 }
 
 /// Compile selector to lazy selection.
 fn compile_selector_lazy(
     selector: &Selector,
     ctx: &mut LazyCompileCtx<'_>,
-) -> Result<LazyDatasetSelection, BackendError> {
+) -> Result<Sel, BackendError> {
     use regex::Regex;
 
     match selector {
@@ -1126,9 +1097,7 @@ fn compile_selector_lazy(
                 )?;
             Ok(left_node.intersect(&right_node))
         }
-        Selector::Empty => {
-            Ok(LazyDatasetSelection::empty())
-        }
+        Selector::Empty => Ok(Sel::Empty),
         Selector::ByName { names, .. } => {
             let vars: Vec<IStr> = names
                 .iter()
@@ -1157,7 +1126,7 @@ fn compile_selector_lazy(
                 .cloned()
                 .collect();
             if matching_vars.is_empty() {
-                Ok(LazyDatasetSelection::empty())
+                Ok(Sel::Empty)
             } else {
                 Ok(lazy_dataset_all_for_vars(
                     matching_vars,
@@ -1185,7 +1154,7 @@ fn compile_selector_lazy(
                 .cloned()
                 .collect();
             if matching_vars.is_empty() {
-                Ok(LazyDatasetSelection::empty())
+                Ok(Sel::Empty)
             } else {
                 Ok(lazy_dataset_all_for_vars(
                     matching_vars,
@@ -1193,9 +1162,9 @@ fn compile_selector_lazy(
                 ))
             }
         }
-        Selector::ByIndex { .. } => Ok(
-            LazyDatasetSelection::NoSelectionMade,
-        ),
+        Selector::ByIndex { .. } => {
+            Ok(Sel::NoSelectionMade)
+        }
         Selector::Wildcard => {
             Ok(lazy_dataset_all_for_vars(
                 ctx.meta.data_vars.clone(),
@@ -1215,16 +1184,14 @@ fn interpolate_selection_nd_lazy(
     _source_values: &Expr,
     target_values: &Expr,
     ctx: &mut LazyCompileCtx<'_>,
-) -> Result<LazyDatasetSelection, BackendError> {
+) -> Result<Sel, BackendError> {
     use crate::chunk_plan::indexing::types::CoordScalar;
 
     // Extract coordinate dimension names from the source coord struct expression.
     let coord_names =
         extract_column_names_lazy(source_coords);
     if coord_names.is_empty() {
-        return Ok(
-            LazyDatasetSelection::NoSelectionMade,
-        );
+        return Ok(Sel::NoSelectionMade);
     }
 
     // Extract the target values struct (a literal Series containing the target points).
@@ -1233,16 +1200,12 @@ fn interpolate_selection_nd_lazy(
             target_values,
         )
     else {
-        return Ok(
-            LazyDatasetSelection::NoSelectionMade,
-        );
+        return Ok(Sel::NoSelectionMade);
     };
 
     let Ok(target_sc) = target_struct.struct_()
     else {
-        return Ok(
-            LazyDatasetSelection::NoSelectionMade,
-        );
+        return Ok(Sel::NoSelectionMade);
     };
     let target_fields =
         target_sc.fields_as_series();
@@ -1269,9 +1232,7 @@ fn interpolate_selection_nd_lazy(
         let Ok(values) =
             series_values_scalar_lazy(s)
         else {
-            return Ok(
-                LazyDatasetSelection::NoSelectionMade,
-            );
+            return Ok(Sel::NoSelectionMade);
         };
 
         if !values.is_empty() {
@@ -1281,9 +1242,7 @@ fn interpolate_selection_nd_lazy(
     }
 
     if dim_values.is_empty() {
-        return Ok(
-            LazyDatasetSelection::NoSelectionMade,
-        );
+        return Ok(Sel::NoSelectionMade);
     }
 
     // For each dimension, create interpolation constraints for each unique target value.
@@ -1316,260 +1275,4 @@ fn interpolate_selection_nd_lazy(
         ctx.meta,
         sel,
     ))
-}
-
-/// Extract column names from an expression (for lazy interpolation).
-fn extract_column_names_lazy(
-    expr: &Expr,
-) -> Vec<IStr> {
-    let mut out: Vec<IStr> = Vec::new();
-    walk_expr_lazy(expr, &mut |e| {
-        if let Expr::Column(name) = e {
-            out.push(name.istr());
-        }
-    });
-    out.sort();
-    out.dedup();
-    out
-}
-
-/// Walk an expression tree and call the function on each node.
-fn walk_expr_lazy(
-    expr: &Expr,
-    f: &mut impl FnMut(&Expr),
-) {
-    use super::literals::strip_wrappers;
-    f(expr);
-    let expr = strip_wrappers(expr);
-    match expr {
-        Expr::Alias(inner, _)
-        | Expr::KeepName(inner)
-        | Expr::RenameAlias {
-            expr: inner, ..
-        } => walk_expr_lazy(inner.as_ref(), f),
-        Expr::Cast { expr: inner, .. }
-        | Expr::Sort { expr: inner, .. }
-        | Expr::SortBy { expr: inner, .. }
-        | Expr::Explode {
-            input: inner, ..
-        }
-        | Expr::Slice { input: inner, .. } => {
-            walk_expr_lazy(inner.as_ref(), f)
-        }
-        Expr::Over { function, .. } => {
-            walk_expr_lazy(function.as_ref(), f)
-        }
-        Expr::Rolling { function, .. } => {
-            walk_expr_lazy(function.as_ref(), f)
-        }
-        Expr::Filter { by, .. } => {
-            walk_expr_lazy(by.as_ref(), f)
-        }
-        Expr::BinaryExpr {
-            left, right, ..
-        } => {
-            walk_expr_lazy(left.as_ref(), f);
-            walk_expr_lazy(right.as_ref(), f);
-        }
-        Expr::Ternary {
-            predicate,
-            truthy,
-            falsy,
-        } => {
-            walk_expr_lazy(predicate.as_ref(), f);
-            walk_expr_lazy(truthy.as_ref(), f);
-            walk_expr_lazy(falsy.as_ref(), f);
-        }
-        Expr::Function { input, .. }
-        | Expr::AnonymousFunction {
-            input, ..
-        } => {
-            for e in input {
-                walk_expr_lazy(e, f);
-            }
-        }
-        _ => {}
-    }
-}
-
-/// Extract a literal struct Series from an expression.
-fn extract_literal_struct_series_lazy(
-    expr: &Expr,
-) -> Option<polars::prelude::Series> {
-    use super::literals::strip_wrappers;
-    use polars::prelude::LiteralValue;
-    let expr = strip_wrappers(expr);
-    let Expr::Literal(lit) = expr else {
-        return None;
-    };
-    match lit {
-        LiteralValue::Series(s) => {
-            Some((**s).clone())
-        }
-        _ => None,
-    }
-}
-
-/// Extract scalar values from a Series.
-fn series_values_scalar_lazy(
-    s: &polars::prelude::Series,
-) -> Result<
-    Vec<crate::chunk_plan::indexing::types::CoordScalar>,
-    (),
->{
-    use crate::chunk_plan::indexing::types::CoordScalar;
-    use polars::prelude::DataType;
-    use polars::prelude::TimeUnit;
-
-    let mut out = Vec::with_capacity(s.len());
-
-    match s.dtype() {
-        DataType::Int64 => {
-            let ca = s.i64().map_err(|_| ())?;
-            for v in ca.into_iter().flatten() {
-                out.push(CoordScalar::I64(v));
-            }
-        }
-        DataType::UInt64 => {
-            let ca = s.u64().map_err(|_| ())?;
-            for v in ca.into_iter().flatten() {
-                out.push(CoordScalar::U64(v));
-            }
-        }
-        DataType::Float64 => {
-            let ca = s.f64().map_err(|_| ())?;
-            for v in ca.into_iter().flatten() {
-                out.push(CoordScalar::F64(
-                    v.into(),
-                ));
-            }
-        }
-        DataType::Float32 => {
-            let ca = s.f32().map_err(|_| ())?;
-            for v in ca.into_iter().flatten() {
-                out.push(CoordScalar::F64(
-                    (v as f64).into(),
-                ));
-            }
-        }
-        DataType::Int32 => {
-            let ca = s.i32().map_err(|_| ())?;
-            for v in ca.into_iter().flatten() {
-                out.push(CoordScalar::I64(
-                    v as i64,
-                ));
-            }
-        }
-        DataType::Int16 => {
-            let ca = s.i16().map_err(|_| ())?;
-            for v in ca.into_iter().flatten() {
-                out.push(CoordScalar::I64(
-                    v as i64,
-                ));
-            }
-        }
-        DataType::Int8 => {
-            let ca = s.i8().map_err(|_| ())?;
-            for v in ca.into_iter().flatten() {
-                out.push(CoordScalar::I64(
-                    v as i64,
-                ));
-            }
-        }
-        DataType::UInt32 => {
-            let ca = s.u32().map_err(|_| ())?;
-            for v in ca.into_iter().flatten() {
-                out.push(CoordScalar::U64(
-                    v as u64,
-                ));
-            }
-        }
-        DataType::UInt16 => {
-            let ca = s.u16().map_err(|_| ())?;
-            for v in ca.into_iter().flatten() {
-                out.push(CoordScalar::U64(
-                    v as u64,
-                ));
-            }
-        }
-        DataType::UInt8 => {
-            let ca = s.u8().map_err(|_| ())?;
-            for v in ca.into_iter().flatten() {
-                out.push(CoordScalar::U64(
-                    v as u64,
-                ));
-            }
-        }
-        DataType::Datetime(tu, _) => {
-            // Use physical representation for Datetime
-            let phys = s.to_physical_repr();
-            let ca =
-                phys.i64().map_err(|_| ())?;
-            for v in ca.into_iter().flatten() {
-                let ns = match tu {
-                    TimeUnit::Nanoseconds => v,
-                    TimeUnit::Microseconds => {
-                        v.saturating_mul(1_000)
-                    }
-                    TimeUnit::Milliseconds => v
-                        .saturating_mul(
-                            1_000_000,
-                        ),
-                };
-                out.push(
-                    CoordScalar::DatetimeNs(ns),
-                );
-            }
-        }
-        DataType::Date => {
-            // Use physical representation for Date (i32 days since epoch)
-            let phys = s.to_physical_repr();
-            let ca =
-                phys.i32().map_err(|_| ())?;
-            for v in ca.into_iter().flatten() {
-                let ns = (v as i64)
-                    .saturating_mul(
-                        86_400_000_000_000,
-                    );
-                out.push(
-                    CoordScalar::DatetimeNs(ns),
-                );
-            }
-        }
-        DataType::Duration(tu) => {
-            // Use physical representation for Duration
-            let phys = s.to_physical_repr();
-            let ca =
-                phys.i64().map_err(|_| ())?;
-            for v in ca.into_iter().flatten() {
-                let ns = match tu {
-                    TimeUnit::Nanoseconds => v,
-                    TimeUnit::Microseconds => {
-                        v.saturating_mul(1_000)
-                    }
-                    TimeUnit::Milliseconds => v
-                        .saturating_mul(
-                            1_000_000,
-                        ),
-                };
-                out.push(
-                    CoordScalar::DurationNs(ns),
-                );
-            }
-        }
-        DataType::Time => {
-            // Use physical representation for Time (i64 nanoseconds since midnight)
-            let phys = s.to_physical_repr();
-            let ca =
-                phys.i64().map_err(|_| ())?;
-            for v in ca.into_iter().flatten() {
-                out.push(
-                    CoordScalar::DurationNs(v),
-                );
-            }
-        }
-        _ => return Err(()),
-    }
-
-    Ok(out)
 }

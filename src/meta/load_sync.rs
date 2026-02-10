@@ -134,7 +134,9 @@ pub fn load_zarr_meta_from_opened(
             dims,
             polars_dtype,
             time_encoding,
-            array_metadata: Some(Arc::new(array_md.clone())),
+            array_metadata: Some(Arc::new(
+                array_md.clone(),
+            )),
         };
 
         // Store in both flat and grouped maps

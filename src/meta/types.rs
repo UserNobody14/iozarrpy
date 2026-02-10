@@ -615,7 +615,8 @@ pub struct ZarrArrayMeta {
     pub polars_dtype: PlDataType,
     pub time_encoding: Option<TimeEncoding>,
     /// Raw zarrs ArrayMetadata from traverse (for unconsolidated stores)
-    pub array_metadata: Option<Arc<zarrs::array::ArrayMetadata>>,
+    pub array_metadata:
+        Option<Arc<zarrs::array::ArrayMetadata>>,
 }
 
 #[derive(Debug, Clone)]
