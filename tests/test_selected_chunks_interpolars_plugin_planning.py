@@ -270,3 +270,211 @@ def test_interpolate_nd_duration_coords_plan_and_clamp(tmp_path: Path) -> None:
 
     assert idxs == {(0,), (9,)}
 
+
+# ---------------------------------------------------------------------------
+# Sparse / non-uniform coordinate tests
+# ---------------------------------------------------------------------------
+# The interpolation planner uses resolution to find bracketing indices (left_idx, right_idx)
+# for each target point. It expands by ±1 in index space for chunk boundaries. These tests
+# verify correct behavior when coordinate *values* jump by large amounts (e.g. [0, 100, 200])
+# rather than consecutive integers. The bracket indices come from binary search on the coord
+# array, so they should be correct regardless of value spacing; these tests document and
+# verify that behavior.
+
+
+def test_interpolate_nd_sparse_1d_coords_bracket_within_chunk(tmp_path: Path) -> None:
+    """1D sparse coords: interpolation point between indices in same chunk.
+
+    Coords [0, 100, 200, ..., 1900] (20 points). Chunk size 5 => 4 chunks.
+    Interpolate at 550: bracket is indices 5 and 6 (coords 500, 600). Both in chunk 1.
+    Planner may conservatively include chunk 0 due to ±1 expansion; we assert at least chunk 1.
+    """
+    import numpy as np
+    import xarray as xr
+
+    n = 20
+    coords = np.array([i * 100 for i in range(n)], dtype=np.float64)
+    ds = xr.Dataset(
+        data_vars={"value": (["x"], np.arange(n, dtype=np.float64))},
+        coords={"x": coords},
+    )
+
+    zarr_path = tmp_path / "interp_sparse_1d.zarr"
+    ds.to_zarr(
+        zarr_path,
+        zarr_format=3,
+        encoding={
+            "value": {
+                "chunks": (5,),
+                "compressors": [BloscCodec(cname="zstd", clevel=5, shuffle=BloscShuffle.shuffle)],
+            }
+        },
+    )
+
+    # 550 is between coord 500 (idx 5) and 600 (idx 6). Both in chunk 1 (indices 5-9).
+    target = pl.DataFrame({"x": [550.0], "label": ["mid"]})
+    expr = interpolate_nd(["x"], ["value"], target)
+    chunks = ZarrBackend.from_url(str(zarr_path)).selected_chunks_debug(expr)
+    idxs = _chunk_indices(chunks, variable="value")
+
+    # Must include chunk 1 (bracket indices 5,6). Expansion may add chunk 0.
+    assert (1,) in idxs
+
+
+def test_interpolate_nd_sparse_1d_coords_bracket_spans_chunk_boundary(tmp_path: Path) -> None:
+    """1D sparse coords: interpolation point where bracket spans chunk boundary.
+
+    Coords [0, 10, 20, ..., 390] (40 points). Chunk size 10 => 4 chunks.
+    Interpolate at 95: bracket is indices 9 and 10 (coords 90, 100). Index 9 in chunk 0,
+    index 10 in chunk 1. Must select both chunks.
+    """
+    import numpy as np
+    import xarray as xr
+
+    n = 40
+    coords = np.array([i * 10.0 for i in range(n)], dtype=np.float64)
+    ds = xr.Dataset(
+        data_vars={"value": (["x"], np.arange(n, dtype=np.float64))},
+        coords={"x": coords},
+    )
+
+    zarr_path = tmp_path / "interp_sparse_1d_boundary.zarr"
+    ds.to_zarr(
+        zarr_path,
+        zarr_format=3,
+        encoding={
+            "value": {
+                "chunks": (10,),
+                "compressors": [BloscCodec(cname="zstd", clevel=5, shuffle=BloscShuffle.shuffle)],
+            }
+        },
+    )
+
+    # 95 is between coord 90 (idx 9) and 100 (idx 10). Span chunk 0 and 1.
+    target = pl.DataFrame({"x": [95.0], "label": ["boundary"]})
+    expr = interpolate_nd(["x"], ["value"], target)
+    chunks = ZarrBackend.from_url(str(zarr_path)).selected_chunks_debug(expr)
+    idxs = _chunk_indices(chunks, variable="value")
+
+    assert idxs == {(0,), (1,)}
+
+
+def test_interpolate_nd_sparse_1d_large_coord_gaps(tmp_path: Path) -> None:
+    """1D: coordinate values jump by 1000; bracket spans exactly two chunks.
+
+    Coords [0, 1000, 2000, 3000, 4000] (5 points). Chunk size 1 => 5 chunks.
+    Interpolate at 500: needs indices 0 and 1. Interpolate at 2500: needs indices 2 and 3.
+    Per-point selection should NOT overselect; we get only the 2 chunks per point.
+    """
+    import numpy as np
+    import xarray as xr
+
+    n = 5
+    coords = np.array([i * 1000.0 for i in range(n)], dtype=np.float64)
+    ds = xr.Dataset(
+        data_vars={"value": (["x"], np.arange(n, dtype=np.float64))},
+        coords={"x": coords},
+    )
+
+    zarr_path = tmp_path / "interp_sparse_large_gaps.zarr"
+    ds.to_zarr(
+        zarr_path,
+        zarr_format=3,
+        encoding={
+            "value": {
+                "chunks": (1,),
+                "compressors": [BloscCodec(cname="zstd", clevel=5, shuffle=BloscShuffle.shuffle)],
+            }
+        },
+    )
+
+    # Two points: 500 (bracket 0,1) and 2500 (bracket 2,3). Should get chunks 0,1,2,3 (not 4).
+    target = pl.DataFrame({"x": [500.0, 2500.0], "label": ["early", "late"]})
+    expr = interpolate_nd(["x"], ["value"], target)
+    chunks = ZarrBackend.from_url(str(zarr_path)).selected_chunks_debug(expr)
+    idxs = _chunk_indices(chunks, variable="value")
+
+    # Per-point: 500 needs chunks 0,1; 2500 needs chunks 2,3. Union = {0,1,2,3}. Chunk 4 unused.
+    assert idxs == {(0,), (1,), (2,), (3,)}
+
+
+def test_interpolate_nd_sparse_2d_coords_bracket_within_chunk(tmp_path: Path) -> None:
+    """2D sparse coords: interpolation point where both dim brackets stay in one chunk.
+
+    x: [0, 100, 200, ..., 900] (10 pts), y: same. Chunks (5, 5) => 2x2 chunks.
+    Interpolate at (250, 250): x bracket (2,3), y bracket (2,3). All in chunk (0,0).
+    """
+    import numpy as np
+    import xarray as xr
+
+    nx, ny = 10, 10
+    x_coords = np.array([i * 100.0 for i in range(nx)], dtype=np.float64)
+    y_coords = np.array([i * 100.0 for i in range(ny)], dtype=np.float64)
+    data = np.arange(nx * ny, dtype=np.float64).reshape(ny, nx)
+
+    ds = xr.Dataset(
+        data_vars={"value": (["y", "x"], data)},
+        coords={"x": x_coords, "y": y_coords},
+    )
+
+    zarr_path = tmp_path / "interp_sparse_2d.zarr"
+    ds.to_zarr(
+        zarr_path,
+        zarr_format=3,
+        encoding={
+            "value": {
+                "chunks": (5, 5),
+                "compressors": [BloscCodec(cname="zstd", clevel=5, shuffle=BloscShuffle.shuffle)],
+            }
+        },
+    )
+
+    # (250, 250) is between (200,300) in x and (200,300) in y. Indices (2,3) x (2,3). Chunk (0,0).
+    target = pl.DataFrame({"x": [250.0], "y": [250.0], "label": ["mid"]})
+    expr = interpolate_nd(["y", "x"], ["value"], target)
+    chunks = ZarrBackend.from_url(str(zarr_path)).selected_chunks_debug(expr)
+    idxs = _chunk_indices(chunks, variable="value")
+
+    assert idxs == {(0, 0)}
+
+
+def test_interpolate_nd_sparse_2d_coords_bracket_spans_chunk_boundaries(tmp_path: Path) -> None:
+    """2D sparse coords: interpolation point where brackets span chunk boundaries.
+
+    x: [0, 100, ..., 900], y: same. Chunks (5, 5). Interpolate at (450, 450):
+    x bracket (4,5), y bracket (4,5). Index 4 in chunk 0, index 5 in chunk 1 for each dim.
+    Must select all 4 chunks: (0,0), (0,1), (1,0), (1,1).
+    """
+    import numpy as np
+    import xarray as xr
+
+    nx, ny = 10, 10
+    x_coords = np.array([i * 100.0 for i in range(nx)], dtype=np.float64)
+    y_coords = np.array([i * 100.0 for i in range(ny)], dtype=np.float64)
+    data = np.arange(nx * ny, dtype=np.float64).reshape(ny, nx)
+
+    ds = xr.Dataset(
+        data_vars={"value": (["y", "x"], data)},
+        coords={"x": x_coords, "y": y_coords},
+    )
+
+    zarr_path = tmp_path / "interp_sparse_2d_boundary.zarr"
+    ds.to_zarr(
+        zarr_path,
+        zarr_format=3,
+        encoding={
+            "value": {
+                "chunks": (5, 5),
+                "compressors": [BloscCodec(cname="zstd", clevel=5, shuffle=BloscShuffle.shuffle)],
+            }
+        },
+    )
+
+    # (450, 450) between (400,500) in both dims. Indices (4,5) x (4,5). Spans all 4 chunks.
+    target = pl.DataFrame({"x": [450.0], "y": [450.0], "label": ["corner"]})
+    expr = interpolate_nd(["y", "x"], ["value"], target)
+    chunks = ZarrBackend.from_url(str(zarr_path)).selected_chunks_debug(expr)
+    idxs = _chunk_indices(chunks, variable="value")
+
+    assert idxs == {(0, 0), (0, 1), (1, 0), (1, 1)}
+

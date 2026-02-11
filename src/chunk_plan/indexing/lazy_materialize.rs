@@ -321,19 +321,17 @@ fn materialize_constraint_multi(
                     None => return Err(ResolutionError::NotFound(req_min)),
                 };
 
-                // Compute bracketing indices
+                // Compute bracketing indices: left and right are the exact indices
+                // that bracket the interpolation point. No expansion - with sparse
+                // coords (e.g. [0, 1000, 2000, 3000, 4000]), adjacent indices may
+                // be far apart; expanding by ±1 would incorrectly include extra chunks.
                 let left_idx = if left_end == 0 { 0 } else { left_end - 1 };
                 let right_idx = right_start;
 
-                // The bracket spans from min to max + 1
                 let start = left_idx.min(right_idx);
-                let end_exclusive = left_idx.max(right_idx).saturating_add(1);
+                let end_exclusive = (left_idx.max(right_idx) + 1).min(dim_range.end);
 
-                // Expand by 1 on each side to be safe near chunk boundaries
-                let expanded_start = start.saturating_sub(1);
-                let expanded_end = end_exclusive.saturating_add(1).min(dim_range.end);
-
-                ranges.push(expanded_start..expanded_end);
+                ranges.push(start..end_exclusive);
             }
 
             // Merge adjacent/overlapping ranges for efficiency
