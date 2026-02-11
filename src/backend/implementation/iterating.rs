@@ -6,9 +6,6 @@ use pyo3::PyErr;
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
-use crate::chunk_plan::{
-    ConsolidatedGridGroup, GroupedChunkPlan,
-};
 use crate::meta::ZarrMeta;
 use crate::scan::chunk_to_df_from_grid_with_backend_sync;
 use crate::shared::HasMetadataBackendSync;
@@ -19,7 +16,7 @@ use crate::shared::{
     expand_projection_to_flat_paths,
     restructure_to_structs,
 };
-use crate::{IStr, IntoIStr};
+use crate::IStr;
 
 /// Version of scan zarr sync that returns an iterator
 ///
@@ -121,7 +118,7 @@ impl ZarrIteratorInner {
     fn initialize(
         &mut self,
     ) -> Result<(), PyErr> {
-        use std::sync::Arc as StdArc;
+        
 
         // Get metadata from backend
         let meta = self.backend.metadata()?;
