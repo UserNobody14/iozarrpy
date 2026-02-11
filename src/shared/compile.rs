@@ -12,7 +12,7 @@ use polars::prelude::Expr;
 use crate::PlannerStats;
 use crate::chunk_plan::GroupedChunkPlan;
 use crate::chunk_plan::SyncCoordResolver;
-use crate::chunk_plan::compile_node_lazy;
+use crate::chunk_plan::compile_expr;
 use crate::chunk_plan::selection_to_grouped_chunk_plan_unified_from_meta;
 use crate::chunk_plan::{
     MergedCache, collect_requests_with_meta,
@@ -79,7 +79,7 @@ impl<
             &vars,
         );
         let lazy_selection =
-            compile_node_lazy(expr, &mut ctx)?;
+            compile_expr(expr, &mut ctx)?;
 
         let (requests, immediate_cache) =
             collect_requests_with_meta(
@@ -150,7 +150,7 @@ impl<
             &vars,
         );
         let lazy_selection =
-            compile_node_lazy(expr, &mut ctx)?;
+            compile_expr(expr, &mut ctx)?;
 
         let (requests, immediate_cache) =
             collect_requests_with_meta(

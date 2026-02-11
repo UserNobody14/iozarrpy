@@ -14,7 +14,7 @@ mod indexing;
 // GroupedChunkPlan entry points (heterogeneous chunk grids)
 pub(crate) use compile_entry::compute_dims_and_lengths_unified;
 pub(crate) use exprs::LazyCompileCtx;
-pub(crate) use exprs::compile_node_lazy;
+pub(crate) use exprs::compile_expr;
 pub(crate) use indexing::SyncCoordResolver;
 pub(crate) use indexing::AsyncCoordResolver;
 pub(crate) use indexing::GroupedChunkPlan;

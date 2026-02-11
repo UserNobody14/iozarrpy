@@ -34,15 +34,17 @@ use crate::errors::BackendError;
 use super::expr_utils::expr_to_col_name;
 use std::sync::Arc;
 
+type LazyResult = Result<Sel, BackendError>;
+
 /// Compile an expression to a lazy dataset selection.
 ///
 /// This function traverses the expression tree and produces a `Sel`
 /// containing unresolved `ValueRange` constraints. These constraints can later be
 /// batch-resolved and materialized into a concrete `DatasetSelection`.
-pub(crate) fn compile_node_lazy(
+pub(crate) fn compile_expr(
     expr: impl std::borrow::Borrow<Expr>,
     ctx: &mut LazyCompileCtx<'_>,
-) -> Result<Sel, BackendError> {
+) -> LazyResult {
     let expr: &Expr =
         std::borrow::Borrow::borrow(&expr);
     match expr {
@@ -52,28 +54,28 @@ pub(crate) fn compile_node_lazy(
             ));
         }
         Expr::Alias(inner, _) => {
-            compile_node_lazy(inner.as_ref(), ctx)
+            compile_expr(inner.as_ref(), ctx)
         }
         Expr::KeepName(inner) => {
-            compile_node_lazy(inner.as_ref(), ctx)
+            compile_expr(inner.as_ref(), ctx)
         }
         Expr::RenameAlias { expr, .. } => {
-            compile_node_lazy(expr.as_ref(), ctx)
+            compile_expr(expr.as_ref(), ctx)
         }
         Expr::Cast { expr, .. } => {
-            compile_node_lazy(expr.as_ref(), ctx)
+            compile_expr(expr.as_ref(), ctx)
         }
         Expr::Sort { expr, .. } => {
-            compile_node_lazy(expr.as_ref(), ctx)
+            compile_expr(expr.as_ref(), ctx)
         }
         Expr::SortBy { expr, .. } => {
-            compile_node_lazy(expr.as_ref(), ctx)
+            compile_expr(expr.as_ref(), ctx)
         }
         Expr::Explode { input, .. } => {
-            compile_node_lazy(input.as_ref(), ctx)
+            compile_expr(input.as_ref(), ctx)
         }
         Expr::Slice { input, .. } => {
-            compile_node_lazy(input.as_ref(), ctx)
+            compile_expr(input.as_ref(), ctx)
         }
 
         Expr::Over {
@@ -81,7 +83,7 @@ pub(crate) fn compile_node_lazy(
             partition_by,
             ..
         } => {
-            let func_sel = compile_node_lazy(
+            let func_sel = compile_expr(
                 function.as_ref(),
                 ctx,
             )?;
@@ -103,22 +105,17 @@ pub(crate) fn compile_node_lazy(
         }
 
         Expr::Rolling { function, .. } => {
-            compile_node_lazy(
-                function.as_ref(),
-                ctx,
-            )
+            compile_expr(function.as_ref(), ctx)
         }
 
         Expr::Filter { input, by } => {
-            let filter_sel = compile_node_lazy(
-                by.as_ref(),
-                ctx,
-            )?;
+            let filter_sel =
+                compile_expr(by.as_ref(), ctx)?;
             // If the filter predicate is proven always-false, no chunks match
             if filter_sel.is_empty() {
                 return Ok(Sel::Empty);
             }
-            let input_sel = compile_node_lazy(
+            let input_sel = compile_expr(
                 input.as_ref(),
                 ctx,
             )?;
@@ -146,11 +143,11 @@ pub(crate) fn compile_node_lazy(
                             )
                         ) && input.len() == 1
                         {
-                            let a = compile_node_lazy(
+                            let a = compile_expr(
                                 left.as_ref(),
                                 ctx,
                             )?;
-                            let b = compile_node_lazy(
+                            let b = compile_expr(
                                 &input[0], ctx,
                             )?;
                             return Ok(a.difference(&b));
@@ -169,11 +166,11 @@ pub(crate) fn compile_node_lazy(
                             )
                         ) && input.len() == 1
                         {
-                            let a = compile_node_lazy(
+                            let a = compile_expr(
                                 right.as_ref(),
                                 ctx,
                             )?;
-                            let b = compile_node_lazy(
+                            let b = compile_expr(
                                 &input[0], ctx,
                             )?;
                             return Ok(a.difference(&b));
@@ -200,11 +197,11 @@ pub(crate) fn compile_node_lazy(
                         }
                     }
 
-                    let a = compile_node_lazy(
+                    let a = compile_expr(
                         left.as_ref(),
                         ctx,
                     )?;
-                    let b = compile_node_lazy(
+                    let b = compile_expr(
                         right.as_ref(),
                         ctx,
                     )?;
@@ -212,22 +209,22 @@ pub(crate) fn compile_node_lazy(
                 }
                 Operator::Or
                 | Operator::LogicalOr => {
-                    let a = compile_node_lazy(
+                    let a = compile_expr(
                         left.as_ref(),
                         ctx,
                     )?;
-                    let b = compile_node_lazy(
+                    let b = compile_expr(
                         right.as_ref(),
                         ctx,
                     )?;
                     Ok(a.union(&b))
                 }
                 Operator::Xor => {
-                    let a = compile_node_lazy(
+                    let a = compile_expr(
                         left.as_ref(),
                         ctx,
                     )?;
-                    let b = compile_node_lazy(
+                    let b = compile_expr(
                         right.as_ref(),
                         ctx,
                     )?;
@@ -349,7 +346,7 @@ pub(crate) fn compile_node_lazy(
                     literal_anyvalue(f),
                 ) {
                     if t && !f {
-                        return compile_node_lazy(
+                        return compile_expr(
                             predicate.as_ref(),
                             ctx,
                         );
@@ -363,16 +360,15 @@ pub(crate) fn compile_node_lazy(
                 }
             }
 
-            let predicate_node =
-                compile_node_lazy(
-                    predicate.as_ref(),
-                    ctx,
-                )?;
-            let truthy_node = compile_node_lazy(
+            let predicate_node = compile_expr(
+                predicate.as_ref(),
+                ctx,
+            )?;
+            let truthy_node = compile_expr(
                 truthy.as_ref(),
                 ctx,
             )?;
-            let falsy_node = compile_node_lazy(
+            let falsy_node = compile_expr(
                 falsy.as_ref(),
                 ctx,
             )?;
@@ -481,7 +477,7 @@ pub(crate) fn compile_node_lazy(
         }
 
         Expr::Eval { expr, .. } => {
-            compile_node_lazy(expr.as_ref(), ctx)
+            compile_expr(expr.as_ref(), ctx)
         }
 
         Expr::Field(names) => {
@@ -536,7 +532,7 @@ fn compile_cmp_to_lazy_selection(
     op: Operator,
     lit: &LiteralValue,
     ctx: &LazyCompileCtx<'_>,
-) -> Result<Sel, BackendError> {
+) -> LazyResult {
     let time_encoding = ctx
         .meta
         .arrays
@@ -602,7 +598,7 @@ fn compile_value_range_to_lazy_selection(
     col: &str,
     vr: &ValueRange,
     ctx: &LazyCompileCtx<'_>,
-) -> Result<Sel, BackendError> {
+) -> LazyResult {
     if vr.empty {
         return Ok(Sel::Empty);
     }
@@ -637,7 +633,7 @@ fn compile_struct_field_cmp(
     op: Operator,
     lit: &LiteralValue,
     ctx: &mut LazyCompileCtx<'_>,
-) -> Result<Sel, BackendError> {
+) -> LazyResult {
     // Build the array path (e.g., "model_a/temperature")
     let array_path: IStr =
         format!("{}/{}", struct_col, field_name)
@@ -757,7 +753,7 @@ fn compile_boolean_function_lazy(
     bf: &BooleanFunction,
     input: &[Expr],
     ctx: &mut LazyCompileCtx<'_>,
-) -> Result<Sel, BackendError> {
+) -> LazyResult {
     match bf {
         BooleanFunction::Not => {
             let [arg] = input else {
@@ -789,15 +785,15 @@ fn compile_boolean_function_lazy(
                     _ => Ok(Sel::NoSelectionMade),
                 };
             }
-            let inner =
-                compile_node_lazy(arg, ctx)
-                    .unwrap_or_else(|_| {
-                        Sel::NoSelectionMade
-                    });
+            let inner = compile_expr(arg, ctx)
+                .unwrap_or_else(|_| {
+                    Sel::NoSelectionMade
+                });
             if inner.is_empty() {
                 Ok(Sel::NoSelectionMade)
             } else {
                 Ok(Sel::NoSelectionMade)
+                // return Ok(inner);
             }
         }
         BooleanFunction::IsNull
@@ -841,11 +837,10 @@ fn compile_boolean_function_lazy(
         BooleanFunction::AnyHorizontal => {
             let mut acc = Sel::Empty;
             for e in input {
-                let sel =
-                    compile_node_lazy(e, ctx)
-                        .unwrap_or_else(|_| {
-                            Sel::NoSelectionMade
-                        });
+                let sel = compile_expr(e, ctx)
+                    .unwrap_or_else(|_| {
+                        Sel::NoSelectionMade
+                    });
                 acc = acc.union(&sel);
             }
             Ok(acc)
@@ -853,11 +848,10 @@ fn compile_boolean_function_lazy(
         BooleanFunction::AllHorizontal => {
             let mut acc = Sel::NoSelectionMade;
             for e in input {
-                let sel =
-                    compile_node_lazy(e, ctx)
-                        .unwrap_or_else(|_| {
-                            Sel::NoSelectionMade
-                        });
+                let sel = compile_expr(e, ctx)
+                    .unwrap_or_else(|_| {
+                        Sel::NoSelectionMade
+                    });
                 acc = acc.intersect(&sel);
                 if acc.is_empty() {
                     break;
@@ -873,7 +867,7 @@ fn compile_boolean_function_lazy(
 fn compile_is_between_lazy(
     input: &[Expr],
     ctx: &mut LazyCompileCtx<'_>,
-) -> Result<Sel, BackendError> {
+) -> LazyResult {
     if input.len() < 3 {
         return Err(BackendError::UnsupportedPolarsExpression(
             format!(
@@ -921,7 +915,7 @@ fn compile_is_between_lazy(
 fn compile_is_in_lazy(
     input: &[Expr],
     ctx: &mut LazyCompileCtx<'_>,
-) -> Result<Sel, BackendError> {
+) -> LazyResult {
     use polars::prelude::Scalar;
 
     if input.len() < 2 {
@@ -1040,7 +1034,7 @@ fn compile_is_in_lazy(
 fn compile_selector_lazy(
     selector: &Selector,
     ctx: &mut LazyCompileCtx<'_>,
-) -> Result<Sel, BackendError> {
+) -> LazyResult {
     use regex::Regex;
 
     match selector {
@@ -1184,7 +1178,7 @@ fn interpolate_selection_nd_lazy(
     _source_values: &Expr,
     target_values: &Expr,
     ctx: &mut LazyCompileCtx<'_>,
-) -> Result<Sel, BackendError> {
+) -> LazyResult {
     use crate::chunk_plan::indexing::types::CoordScalar;
 
     // Extract coordinate dimension names from the source coord struct expression.

@@ -14,5 +14,5 @@ pub mod literals;
 pub(crate) use crate::chunk_plan::indexing::Emptyable;
 pub(crate) use crate::chunk_plan::indexing::selection::SetOperations;
 pub(crate) use compile_ctx::LazyCompileCtx;
-pub(crate) use compile_node_lazy::compile_node_lazy;
+pub(crate) use compile_node_lazy::compile_expr;
 pub(crate) use literals::apply_time_encoding;
