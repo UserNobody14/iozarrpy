@@ -61,7 +61,12 @@ pub(super) fn try_expr_to_value_range_lazy(
 
     let mut vr = ValueRangePresent::default();
     match op_eff {
-        Operator::Eq => vr.eq = Some(scalar),
+        Operator::Eq => {
+            vr =
+                ValueRangePresent::from_equal_case(
+                    scalar,
+                )
+        }
         Operator::Gt => {
             vr.min = Some((
                 scalar,

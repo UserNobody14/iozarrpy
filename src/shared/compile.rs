@@ -15,8 +15,8 @@ use crate::chunk_plan::SyncCoordResolver;
 use crate::chunk_plan::compile_expr;
 use crate::chunk_plan::selection_to_grouped_chunk_plan_unified_from_meta;
 use crate::chunk_plan::{
-    MergedCache, collect_requests_with_meta,
-    materialize,
+    HasEqualCase, MergedCache,
+    collect_requests_with_meta, materialize,
 };
 use crate::meta::ZarrMeta;
 use crate::{IStr, chunk_plan::*};
@@ -801,16 +801,16 @@ impl<
         // }
         if let Some(vr) = vr {
             // Equality case
-            if let Some(eq) = &vr.eq {
+            if let Some(eq) = vr.equal_case() {
                 let start = self
                     .lower_bound(
-                        dim, eq, false, dir, n,
+                        dim, &eq, false, dir, n,
                         chunk_size, time_enc,
                     )
                     .await?;
                 let end = self
                     .upper_bound(
-                        dim, eq, false, dir, n,
+                        dim, &eq, false, dir, n,
                         chunk_size, time_enc,
                     )
                     .await?;
@@ -1206,14 +1206,14 @@ impl<
 
         if let Some(vr) = vr {
             // Equality case
-            if let Some(eq) = &vr.eq {
+            if let Some(eq) = vr.equal_case() {
                 let start = self
                     .lower_bound_sync(
-                        dim, eq, false, dir, n,
+                        dim, &eq, false, dir, n,
                         chunk_size, time_enc,
                     )?;
                 let end = self.upper_bound_sync(
-                    dim, eq, false, dir, n,
+                    dim, &eq, false, dir, n,
                     chunk_size, time_enc,
                 )?;
                 return Some(start..end);

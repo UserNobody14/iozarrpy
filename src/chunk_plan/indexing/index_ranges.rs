@@ -1,8 +1,7 @@
 use crate::chunk_plan::indexing::types::ValueRangePresent;
 
 use super::types::{
-    BoundKind, CoordScalar, HasIntersect,
-    ValueRange,
+    BoundKind, CoordScalar, HasEqualCase,
 };
 
 pub(crate) fn index_range_for_index_dim(
@@ -39,8 +38,8 @@ pub(crate) fn index_range_for_index_dim(
     };
 
     // Equality: [idx, idx+1)
-    if let Some(eq) = &vr.eq {
-        let idx = to_i128(eq)?;
+    if let Some(eq) = vr.equal_case() {
+        let idx = to_i128(&eq)?;
         if idx < 0 {
             return Some(0..0);
         }

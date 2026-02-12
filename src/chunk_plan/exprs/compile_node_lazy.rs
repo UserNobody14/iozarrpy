@@ -551,7 +551,12 @@ fn compile_cmp_to_lazy_selection(
 
     let mut vr = ValueRangePresent::default();
     match op {
-        Operator::Eq => vr.eq = Some(scalar),
+        Operator::Eq => {
+            vr =
+                ValueRangePresent::from_equal_case(
+                    scalar,
+                )
+        }
         Operator::Gt => {
             vr.min = Some((
                 scalar,
@@ -677,7 +682,12 @@ fn compile_struct_field_cmp(
 
     let mut vr = ValueRangePresent::default();
     match op {
-        Operator::Eq => vr.eq = Some(scalar),
+        Operator::Eq => {
+            vr =
+                ValueRangePresent::from_equal_case(
+                    scalar,
+                )
+        }
         Operator::Gt => {
             vr.min = Some((
                 scalar,

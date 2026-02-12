@@ -189,6 +189,35 @@ impl CoordScalar {
     }
 }
 
+impl PartialOrd for CoordScalar {
+    fn partial_cmp(
+        &self,
+        other: &CoordScalar,
+    ) -> Option<std::cmp::Ordering> {
+        match (self, other) {
+            (
+                CoordScalar::F64(a),
+                CoordScalar::F64(b),
+            ) => a.partial_cmp(b),
+            (CoordScalar::F64(a), b) => {
+                Some((*a).partial_cmp(
+                    &(b.as_i128_orderable()?
+                        as f64),
+                )?)
+            }
+            (a, CoordScalar::F64(b)) => Some(
+                (a.as_i128_orderable()? as f64)
+                    .partial_cmp(b)?,
+            ),
+            _ => Some(
+                self.as_i128_orderable()?.cmp(
+                    &other.as_i128_orderable()?,
+                ),
+            ),
+        }
+    }
+}
+
 #[derive(
     Debug, Clone, Default, PartialEq, Eq, Hash,
 )]
@@ -197,9 +226,111 @@ pub(crate) struct ValueRangePresent {
         Option<(CoordScalar, BoundKind)>,
     pub(crate) max:
         Option<(CoordScalar, BoundKind)>,
-    pub(crate) eq: Option<CoordScalar>,
 }
 
+impl ValueRangePresent {
+    pub(crate) fn from_equal_case(
+        eq: CoordScalar,
+    ) -> Self {
+        Self {
+            min: Some((
+                eq.clone(),
+                BoundKind::Inclusive,
+            )),
+            max: Some((
+                eq.clone(),
+                BoundKind::Inclusive,
+            )),
+            ..Default::default()
+        }
+    }
+
+    pub(crate) fn from_min_max(
+        min: CoordScalar,
+        max: CoordScalar,
+    ) -> Self {
+        Self {
+            min: Some((
+                min,
+                BoundKind::Inclusive,
+            )),
+            max: Some((
+                max,
+                BoundKind::Inclusive,
+            )),
+        }
+    }
+
+    pub(crate) fn from_min_only(
+        min: CoordScalar,
+    ) -> Self {
+        Self {
+            min: Some((
+                min,
+                BoundKind::Inclusive,
+            )),
+            ..Default::default()
+        }
+    }
+
+    pub(crate) fn from_max_only(
+        max: CoordScalar,
+    ) -> Self {
+        Self {
+            max: Some((
+                max,
+                BoundKind::Inclusive,
+            )),
+            ..Default::default()
+        }
+    }
+
+    pub(crate) fn in_range(
+        &self,
+        value: CoordScalar,
+    ) -> bool {
+        let min = self.min.as_ref();
+        let max = self.max.as_ref();
+        if let (
+            Some((min_v, min_k)),
+            Some((max_v, max_k)),
+        ) = (min, max)
+        {
+            match (min_k, max_k) {
+                (
+                    BoundKind::Inclusive,
+                    BoundKind::Inclusive,
+                ) => {
+                    &value >= min_v
+                        && value <= *max_v
+                }
+                (
+                    BoundKind::Inclusive,
+                    BoundKind::Exclusive,
+                ) => {
+                    &value >= min_v
+                        && value < *max_v
+                }
+                (
+                    BoundKind::Exclusive,
+                    BoundKind::Inclusive,
+                ) => {
+                    &value > min_v
+                        && value <= *max_v
+                }
+                (
+                    BoundKind::Exclusive,
+                    BoundKind::Exclusive,
+                ) => {
+                    &value > min_v
+                        && value < *max_v
+                }
+            }
+        } else {
+            false
+        }
+    }
+}
 pub(crate) type ValueRange =
     Option<ValueRangePresent>;
 
@@ -212,79 +343,128 @@ pub(crate) trait HasIntersect:
     ) -> Option<Self>;
 }
 
+pub(crate) trait HasEqualCase {
+    fn equal_case(&self) -> Option<CoordScalar>;
+}
+
+impl HasEqualCase for ValueRangePresent {
+    fn equal_case(&self) -> Option<CoordScalar> {
+        let min = self.min.as_ref();
+        let max = self.max.as_ref();
+        if let (
+            Some((min_v, min_k)),
+            Some((max_v, max_k)),
+        ) = (min, max)
+        {
+            if min_v == max_v
+                && matches!(
+                    min_k,
+                    BoundKind::Inclusive
+                )
+                && matches!(
+                    max_k,
+                    BoundKind::Inclusive
+                )
+            {
+                Some(min_v.clone())
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    }
+}
+
 impl HasIntersect for ValueRangePresent {
     fn intersect(
         &self,
         other_range: Option<Self>,
     ) -> Option<Self> {
         if let Some(other) = other_range {
-            let mut out =
-                ValueRangePresent::default();
-            out.eq = match (&self.eq, &other.eq) {
-                (Some(a), Some(b)) if a == b => {
-                    Some(a.clone())
+            let out;
+            match (
+                self.equal_case(),
+                other.equal_case(),
+            ) {
+                (Some(eq), Some(other_eq)) => {
+                    if eq != other_eq {
+                        return None;
+                    } else {
+                        out = ValueRangePresent::from_equal_case(eq);
+                    }
                 }
-                (Some(_), Some(_)) => None,
-                (Some(a), None) => {
-                    Some(a.clone())
-                }
-                (None, Some(b)) => {
-                    Some(b.clone())
-                }
-                (None, None) => None,
-            };
-
-            out.min = pick_tighter_min(
-                self.min.clone(),
-                other.min.clone(),
-            );
-            out.max = pick_tighter_max(
-                self.max.clone(),
-                other.max.clone(),
-            );
-
-            // If we have an equality constraint, ensure it's compatible with min/max.
-            if let Some(eq) = &out.eq {
-                if let Some((min_v, min_k)) =
-                    &out.min
-                {
-                    let ord =
-                        eq.partial_cmp(min_v);
-                    let ok = match (ord, min_k) {
-                    (
-                        Some(std::cmp::Ordering::Greater),
-                        _,
-                    ) => true,
-                    (
-                        Some(std::cmp::Ordering::Equal),
-                        BoundKind::Inclusive,
-                    ) => true,
-                    _ => false,
-                };
-                    if !ok {
+                (Some(eq), None) => {
+                    // If we have an equality constraint, ensure it's compatible with min/max.
+                    if !other.in_range(eq.clone())
+                    {
                         return None;
                     }
+                    out = ValueRangePresent::from_equal_case(eq);
                 }
-                if let Some((max_v, max_k)) =
-                    &out.max
-                {
-                    let ord =
-                        eq.partial_cmp(max_v);
-                    let ok = match (ord, max_k) {
-                    (Some(std::cmp::Ordering::Less), _) => {
-                        true
-                    }
-                    (
-                        Some(std::cmp::Ordering::Equal),
-                        BoundKind::Inclusive,
-                    ) => true,
-                    _ => false,
-                };
-                    if !ok {
+                (None, Some(other_eq)) => {
+                    if !self.in_range(
+                        other_eq.clone(),
+                    ) {
                         return None;
                     }
+                    out = ValueRangePresent::from_equal_case(other_eq)
+                }
+                (None, None) => {
+                    out = ValueRangePresent {
+                        min: pick_tighter_min(
+                            self.min.clone(),
+                            other.min.clone(),
+                        ),
+                        max: pick_tighter_max(
+                            self.max.clone(),
+                            other.max.clone(),
+                        ),
+                    };
                 }
             }
+
+            // if let Some(eq) = &out.eq {
+            //     if let Some((min_v, min_k)) =
+            //         &out.min
+            //     {
+            //         let ord =
+            //             eq.partial_cmp(min_v);
+            //         let ok = match (ord, min_k) {
+            //         (
+            //             Some(std::cmp::Ordering::Greater),
+            //             _,
+            //         ) => true,
+            //         (
+            //             Some(std::cmp::Ordering::Equal),
+            //             BoundKind::Inclusive,
+            //         ) => true,
+            //         _ => false,
+            //     };
+            //         if !ok {
+            //             return None;
+            //         }
+            //     }
+            //     if let Some((max_v, max_k)) =
+            //         &out.max
+            //     {
+            //         let ord =
+            //             eq.partial_cmp(max_v);
+            //         let ok = match (ord, max_k) {
+            //         (Some(std::cmp::Ordering::Less), _) => {
+            //             true
+            //         }
+            //         (
+            //             Some(std::cmp::Ordering::Equal),
+            //             BoundKind::Inclusive,
+            //         ) => true,
+            //         _ => false,
+            //     };
+            //         if !ok {
+            //             return None;
+            //         }
+            //     }
+            // }
 
             Some(out)
         } else {
