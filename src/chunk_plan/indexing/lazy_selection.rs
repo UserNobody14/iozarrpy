@@ -1,7 +1,7 @@
 //! Lazy selection types that defer value-to-index resolution.
 //!
 //! These types mirror the concrete selection types in `selection.rs` but store
-//! `ValueRange` constraints instead of resolved `IndexRange`s, enabling batched
+//! `ValueRange` constraints instead of resolved `std::ops::Range<u64>`s, enabling batched
 //! resolution.
 
 use std::collections::BTreeMap;

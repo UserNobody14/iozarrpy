@@ -1,12 +1,11 @@
 use super::types::{
-    BoundKind, CoordScalar, IndexRange,
-    ValueRange,
+    BoundKind, CoordScalar, ValueRange,
 };
 
 pub(crate) fn index_range_for_index_dim(
     vr: &ValueRange,
     dim_len_est: u64,
-) -> Option<IndexRange> {
+) -> Option<std::ops::Range<u64>> {
     let to_i128 =
         |v: &CoordScalar| -> Option<i128> {
             match v {

@@ -294,7 +294,7 @@ trait ResolveDimension {
         )>,
     ) -> Vec<(
         ResolutionRequest,
-        Option<IndexRange>,
+        Option<std::ops::Range<u64>>,
     )>;
 
     async fn scalar_at(
@@ -354,7 +354,7 @@ trait ResolveDimension {
         time_enc: Option<
             &crate::meta::TimeEncoding,
         >,
-    ) -> Option<IndexRange>;
+    ) -> Option<std::ops::Range<u64>>;
 }
 
 trait ResolveDimensionSync {
@@ -367,7 +367,7 @@ trait ResolveDimensionSync {
         )>,
     ) -> Vec<(
         ResolutionRequest,
-        Option<IndexRange>,
+        Option<std::ops::Range<u64>>,
     )>;
 
     fn scalar_at_sync(
@@ -427,7 +427,7 @@ trait ResolveDimensionSync {
         time_enc: Option<
             &crate::meta::TimeEncoding,
         >,
-    ) -> Option<IndexRange>;
+    ) -> Option<std::ops::Range<u64>>;
 }
 
 impl<
@@ -445,7 +445,7 @@ impl<
         )>,
     ) -> Vec<(
         ResolutionRequest,
-        Option<IndexRange>,
+        Option<std::ops::Range<u64>>,
     )> {
         // Get coordinate array metadata
         let coord_meta = match self
@@ -795,7 +795,7 @@ impl<
         time_enc: Option<
             &crate::meta::TimeEncoding,
         >,
-    ) -> Option<IndexRange> {
+    ) -> Option<std::ops::Range<u64>> {
         if vr.empty {
             return Some(0..0);
         }
@@ -863,7 +863,7 @@ impl<
         )>,
     ) -> Vec<(
         ResolutionRequest,
-        Option<IndexRange>,
+        Option<std::ops::Range<u64>>,
     )> {
         use rayon::prelude::*;
 
@@ -1198,7 +1198,7 @@ impl<
         time_enc: Option<
             &crate::meta::TimeEncoding,
         >,
-    ) -> Option<IndexRange> {
+    ) -> Option<std::ops::Range<u64>> {
         use crate::chunk_plan::BoundKind;
 
         if vr.empty {

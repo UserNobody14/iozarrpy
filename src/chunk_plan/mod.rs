@@ -27,7 +27,6 @@ pub(crate) use indexing::selection_to_chunks::selection_to_grouped_chunk_plan_un
 pub(crate) use indexing::resolver_traits::ResolutionRequest;
 pub(crate) use indexing::resolver_traits::ResolutionCache;
 pub(crate) use indexing::types::ChunkGridSignature;
-pub(crate) use indexing::types::IndexRange;
 pub(crate) use indexing::types::ValueRange;
 pub(crate) use indexing::types::CoordScalar;
 pub(crate) use exprs::apply_time_encoding;

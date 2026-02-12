@@ -6,7 +6,7 @@
 
 use std::collections::HashMap;
 
-use super::types::{IndexRange, ValueRange};
+use super::types::ValueRange;
 use crate::{IStr, IntoIStr};
 
 /// A request to resolve a value range to an index range for a specific dimension.
@@ -48,7 +48,7 @@ pub(crate) trait ResolutionCache:
     fn get(
         &self,
         request: &ResolutionRequest,
-    ) -> Option<Option<IndexRange>>;
+    ) -> Option<Option<std::ops::Range<u64>>>;
 }
 
 /// A simple HashMap-based resolution cache.
@@ -56,7 +56,7 @@ pub(crate) trait ResolutionCache:
 pub(crate) struct HashMapCache {
     cache: HashMap<
         ResolutionRequest,
-        Option<IndexRange>,
+        Option<std::ops::Range<u64>>,
     >,
 }
 
@@ -70,7 +70,7 @@ impl HashMapCache {
     pub(crate) fn insert(
         &mut self,
         request: ResolutionRequest,
-        result: Option<IndexRange>,
+        result: Option<std::ops::Range<u64>>,
     ) {
         self.cache.insert(request, result);
     }
@@ -86,7 +86,8 @@ impl ResolutionCache for HashMapCache {
     fn get(
         &self,
         request: &ResolutionRequest,
-    ) -> Option<Option<IndexRange>> {
+    ) -> Option<Option<std::ops::Range<u64>>>
+    {
         self.cache.get(request).cloned()
     }
 }

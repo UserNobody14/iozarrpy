@@ -23,9 +23,7 @@ use super::selection::{
     DataArraySelection, DatasetSelection,
     Emptyable, SetOperations,
 };
-use super::types::{
-    DimSignature, IndexRange, ValueRange,
-};
+use super::types::{DimSignature, ValueRange};
 
 /// Materialize a lazy dataset selection into a concrete selection.
 ///
@@ -406,13 +404,12 @@ fn materialize_constraint(
             match cache.get(&request) {
                 Some(Some(idx_range)) => {
                     // Expand by 1 on each side for interpolation bracketing
-                    let expanded = IndexRange {
-                        start: idx_range.start.saturating_sub(1),
-                        // TODO: This is not correct. We need to know the dimension length to expand correctly.\
-                        // Note: we don't know dim_len here, so we just add 1
-                        // The caller should clamp this if needed
-                        end: idx_range.end.saturating_add(1),
-                    };
+                    // TODO: This is not correct. We need to know the dimension length to expand correctly.\
+                    // Note: we don't know dim_len here, so we just add 1
+                    // The caller should clamp this if needed
+                    let start = idx_range.start.saturating_sub(1);
+                    let end = idx_range.end.saturating_add(1);
+                    let expanded = start..end;
                     Ok(expanded)
                 }
                 Some(None) => {
@@ -652,8 +649,7 @@ impl ResolutionCache for MergedCache<'_> {
     fn get(
         &self,
         request: &ResolutionRequest,
-    ) -> Option<Option<super::types::IndexRange>>
-    {
+    ) -> Option<Option<Range<u64>>> {
         self.primary.get(request).or_else(|| {
             self.secondary.get(request)
         })

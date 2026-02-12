@@ -341,5 +341,3 @@ fn pick_tighter_max(
         }
     }
 }
-
-pub(crate) type IndexRange = std::ops::Range<u64>;
