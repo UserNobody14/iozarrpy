@@ -477,15 +477,7 @@ impl<
         if n == 0 {
             return reqs
                 .into_iter()
-                .map(|(req, _)| {
-                    (
-                        req,
-                        Some(IndexRange {
-                            start: 0,
-                            end_exclusive: 0,
-                        }),
-                    )
-                })
+                .map(|(req, _)| (req, Some(0..0)))
                 .collect();
         }
 
@@ -805,10 +797,7 @@ impl<
         >,
     ) -> Option<IndexRange> {
         if vr.empty {
-            return Some(IndexRange {
-                start: 0,
-                end_exclusive: 0,
-            });
+            return Some(0..0);
         }
 
         // Equality case
@@ -825,10 +814,7 @@ impl<
                     chunk_size, time_enc,
                 )
                 .await?;
-            return Some(IndexRange {
-                start,
-                end_exclusive: end,
-            });
+            return Some(start..end);
         }
 
         let start = if let Some((v, bk)) = &vr.min
@@ -857,10 +843,7 @@ impl<
                 n
             };
 
-        Some(IndexRange {
-            start,
-            end_exclusive,
-        })
+        Some(start..end_exclusive)
     }
 }
 
@@ -913,15 +896,7 @@ impl<
         if n == 0 {
             return reqs
                 .into_iter()
-                .map(|(req, _)| {
-                    (
-                        req,
-                        Some(IndexRange {
-                            start: 0,
-                            end_exclusive: 0,
-                        }),
-                    )
-                })
+                .map(|(req, _)| (req, Some(0..0)))
                 .collect();
         }
 
@@ -1227,10 +1202,7 @@ impl<
         use crate::chunk_plan::BoundKind;
 
         if vr.empty {
-            return Some(IndexRange {
-                start: 0,
-                end_exclusive: 0,
-            });
+            return Some(0..0);
         }
 
         // Equality case
@@ -1243,10 +1215,7 @@ impl<
                 dim, eq, false, dir, n,
                 chunk_size, time_enc,
             )?;
-            return Some(IndexRange {
-                start,
-                end_exclusive: end,
-            });
+            return Some(start..end);
         }
 
         let start = if let Some((v, bk)) = &vr.min
@@ -1273,9 +1242,6 @@ impl<
                 n
             };
 
-        Some(IndexRange {
-            start,
-            end_exclusive,
-        })
+        Some(start..end_exclusive)
     }
 }

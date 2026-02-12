@@ -87,7 +87,7 @@ impl ResolutionCache for HashMapCache {
         &self,
         request: &ResolutionRequest,
     ) -> Option<Option<IndexRange>> {
-        self.cache.get(request).copied()
+        self.cache.get(request).cloned()
     }
 }
 

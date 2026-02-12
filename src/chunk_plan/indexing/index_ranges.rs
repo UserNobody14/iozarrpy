@@ -40,20 +40,14 @@ pub(crate) fn index_range_for_index_dim(
     if let Some(eq) = &vr.eq {
         let idx = to_i128(eq)?;
         if idx < 0 {
-            return Some(IndexRange {
-                start: 0,
-                end_exclusive: 0,
-            });
+            return Some(0..0);
         }
         let start =
             clamp_u64(idx).min(dim_len_est);
         let end_exclusive = start
             .saturating_add(1)
             .min(dim_len_est);
-        return Some(IndexRange {
-            start,
-            end_exclusive,
-        });
+        return Some(start..end_exclusive);
     }
 
     let start = if let Some((v, bk)) = &vr.min {
@@ -91,8 +85,5 @@ pub(crate) fn index_range_for_index_dim(
             dim_len_est
         };
 
-    Some(IndexRange {
-        start,
-        end_exclusive,
-    })
+    Some(start..end_exclusive)
 }

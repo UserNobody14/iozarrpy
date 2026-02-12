@@ -342,10 +342,4 @@ fn pick_tighter_max(
     }
 }
 
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Hash,
-)]
-pub(crate) struct IndexRange {
-    pub(crate) start: u64,
-    pub(crate) end_exclusive: u64,
-}
+pub(crate) type IndexRange = std::ops::Range<u64>;

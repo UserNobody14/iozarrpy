@@ -310,7 +310,7 @@ fn materialize_constraint_multi(
                 let req_min = ResolutionRequest::new(dim.as_ref(), vr_min);
 
                 let left_end = match cache.get(&req_max) {
-                    Some(Some(r)) => r.end_exclusive,
+                    Some(Some(r)) => r.end,
                     Some(None) => return Ok(vec![dim_range]), // Can't resolve
                     None => return Err(ResolutionError::NotFound(req_max)),
                 };
@@ -390,7 +390,7 @@ fn materialize_constraint(
             let request = ResolutionRequest::new(dim.as_ref(), vr.clone());
             match cache.get(&request) {
                 Some(Some(idx_range)) => Ok(
-                    idx_range.start..idx_range.end_exclusive
+                    idx_range.clone()
                 ),
                 Some(None) => {
                     // Resolution was attempted but couldn't determine a range
@@ -408,11 +408,12 @@ fn materialize_constraint(
                     // Expand by 1 on each side for interpolation bracketing
                     let expanded = IndexRange {
                         start: idx_range.start.saturating_sub(1),
+                        // TODO: This is not correct. We need to know the dimension length to expand correctly.\
                         // Note: we don't know dim_len here, so we just add 1
                         // The caller should clamp this if needed
-                        end_exclusive: idx_range.end_exclusive.saturating_add(1),
+                        end: idx_range.end.saturating_add(1),
                     };
-                    Ok(expanded.start..expanded.end_exclusive)
+                    Ok(expanded)
                 }
                 Some(None) => {
                     // Resolution was attempted but couldn't determine a range
