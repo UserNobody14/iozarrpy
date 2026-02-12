@@ -796,9 +796,6 @@ impl<
             &crate::meta::TimeEncoding,
         >,
     ) -> Option<std::ops::Range<u64>> {
-        // if vr.empty {
-        //     return Some(0..0);
-        // }
         if let Some(vr) = vr {
             // Equality case
             if let Some(eq) = vr.equal_case() {
@@ -817,25 +814,28 @@ impl<
                 return Some(start..end);
             }
 
-            let start =
-                if let Some((v, bk)) = &vr.min {
-                    let strict = *bk
-                        == BoundKind::Exclusive;
-                    self.lower_bound(
-                        dim, v, strict, dir, n,
-                        chunk_size, time_enc,
-                    )
-                    .await?
-                } else {
-                    0
-                };
+            let start = if let Some((v, bk)) =
+                vr.to_min_case()
+            {
+                let strict =
+                    bk == BoundKind::Exclusive;
+                self.lower_bound(
+                    dim, &v, strict, dir, n,
+                    chunk_size, time_enc,
+                )
+                .await?
+            } else {
+                0
+            };
 
             let end_exclusive =
-                if let Some((v, bk)) = &vr.max {
-                    let strict = *bk
+                if let Some((v, bk)) =
+                    vr.to_max_case()
+                {
+                    let strict = bk
                         == BoundKind::Exclusive;
                     self.upper_bound(
-                        dim, v, strict, dir, n,
+                        dim, &v, strict, dir, n,
                         chunk_size, time_enc,
                     )
                     .await?
@@ -1219,24 +1219,27 @@ impl<
                 return Some(start..end);
             }
 
-            let start =
-                if let Some((v, bk)) = &vr.min {
-                    let strict = *bk
-                        == BoundKind::Exclusive;
-                    self.lower_bound_sync(
-                        dim, v, strict, dir, n,
-                        chunk_size, time_enc,
-                    )?
-                } else {
-                    0
-                };
+            let start = if let Some((v, bk)) =
+                vr.to_min_case()
+            {
+                let strict =
+                    bk == BoundKind::Exclusive;
+                self.lower_bound_sync(
+                    dim, &v, strict, dir, n,
+                    chunk_size, time_enc,
+                )?
+            } else {
+                0
+            };
 
             let end_exclusive =
-                if let Some((v, bk)) = &vr.max {
-                    let strict = *bk
+                if let Some((v, bk)) =
+                    vr.to_max_case()
+                {
+                    let strict = bk
                         == BoundKind::Exclusive;
                     self.upper_bound_sync(
-                        dim, v, strict, dir, n,
+                        dim, &v, strict, dir, n,
                         chunk_size, time_enc,
                     )?
                 } else {

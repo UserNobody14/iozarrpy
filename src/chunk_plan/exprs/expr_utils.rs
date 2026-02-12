@@ -5,7 +5,7 @@ use super::literals::{
 };
 use crate::chunk_plan::exprs::compile_ctx::LazyCompileCtx;
 use crate::chunk_plan::indexing::types::{
-    BoundKind, ValueRange, ValueRangePresent,
+    ValueRange, ValueRangePresent,
 };
 use crate::chunk_plan::prelude::*;
 use crate::{IStr, IntoIStr};
@@ -59,42 +59,11 @@ pub(super) fn try_expr_to_value_range_lazy(
     let scalar =
         literal_to_scalar(lit, time_encoding)?;
 
-    let mut vr = ValueRangePresent::default();
-    match op_eff {
-        Operator::Eq => {
-            vr =
-                ValueRangePresent::from_equal_case(
-                    scalar,
-                )
-        }
-        Operator::Gt => {
-            vr.min = Some((
-                scalar,
-                BoundKind::Exclusive,
-            ))
-        }
-        Operator::GtEq => {
-            vr.min = Some((
-                scalar,
-                BoundKind::Inclusive,
-            ))
-        }
-        Operator::Lt => {
-            vr.max = Some((
-                scalar,
-                BoundKind::Exclusive,
-            ))
-        }
-        Operator::LtEq => {
-            vr.max = Some((
-                scalar,
-                BoundKind::Inclusive,
-            ))
-        }
-        _ => return None,
-    }
+    let vr = ValueRangePresent::from_polars_op(
+        op_eff, scalar,
+    );
 
-    Some((col, Some(vr)))
+    Some((col, vr))
 }
 
 pub(super) fn expr_to_col_name(

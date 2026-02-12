@@ -3,6 +3,7 @@ use std::hash::{Hash, Hasher};
 use smallvec::SmallVec;
 
 use crate::IStr;
+use polars::prelude::Operator;
 
 /// Chunk grid signature - dimensions + chunk shape for grouping.
 ///
@@ -222,10 +223,8 @@ impl PartialOrd for CoordScalar {
     Debug, Clone, Default, PartialEq, Eq, Hash,
 )]
 pub(crate) struct ValueRangePresent {
-    pub(crate) min:
-        Option<(CoordScalar, BoundKind)>,
-    pub(crate) max:
-        Option<(CoordScalar, BoundKind)>,
+    min: Option<(CoordScalar, BoundKind)>,
+    max: Option<(CoordScalar, BoundKind)>,
 }
 
 impl ValueRangePresent {
@@ -245,42 +244,22 @@ impl ValueRangePresent {
         }
     }
 
-    pub(crate) fn from_min_max(
-        min: CoordScalar,
-        max: CoordScalar,
-    ) -> Self {
-        Self {
-            min: Some((
-                min,
-                BoundKind::Inclusive,
-            )),
-            max: Some((
-                max,
-                BoundKind::Inclusive,
-            )),
-        }
-    }
-
     pub(crate) fn from_min_only(
         min: CoordScalar,
+        bound_kind: BoundKind,
     ) -> Self {
         Self {
-            min: Some((
-                min,
-                BoundKind::Inclusive,
-            )),
+            min: Some((min, bound_kind)),
             ..Default::default()
         }
     }
 
     pub(crate) fn from_max_only(
         max: CoordScalar,
+        bound_kind: BoundKind,
     ) -> Self {
         Self {
-            max: Some((
-                max,
-                BoundKind::Inclusive,
-            )),
+            max: Some((max, bound_kind)),
             ..Default::default()
         }
     }
@@ -329,6 +308,150 @@ impl ValueRangePresent {
         } else {
             false
         }
+    }
+
+    pub(crate) fn from_polars_op(
+        op: Operator,
+        scalar: CoordScalar,
+    ) -> Option<Self> {
+        match op {
+            Operator::Eq => Some(
+                ValueRangePresent::from_equal_case(
+                    scalar,
+                ),
+            ),
+            Operator::Gt => Some(
+                ValueRangePresent::from_min_only(
+                    scalar,
+                    BoundKind::Exclusive,
+                ),
+            ),
+            Operator::GtEq => Some(
+                ValueRangePresent::from_min_only(
+                    scalar,
+                    BoundKind::Inclusive,
+                ),
+            ),
+            Operator::Lt => Some(
+                ValueRangePresent::from_max_only(
+                    scalar,
+                    BoundKind::Exclusive,
+                ),
+            ),
+            Operator::LtEq => Some(
+                ValueRangePresent::from_max_only(
+                    scalar,
+                    BoundKind::Inclusive,
+                ),
+            ),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn index_range_for_index_dim(
+        &self,
+        dim_len_est: u64,
+    ) -> Option<std::ops::Range<u64>> {
+        let to_i128 =
+            |v: &CoordScalar| -> Option<i128> {
+                match v {
+                    CoordScalar::I64(x) => {
+                        Some(*x as i128)
+                    }
+                    CoordScalar::U64(x) => {
+                        Some(*x as i128)
+                    }
+                    CoordScalar::F64(_)
+                    | CoordScalar::DatetimeNs(
+                        _,
+                    )
+                    | CoordScalar::DurationNs(
+                        _,
+                    ) => None,
+                }
+            };
+
+        let clamp_u64 = |x: i128| -> u64 {
+            if x <= 0 {
+                0
+            } else if (x as u128)
+                >= (u64::MAX as u128)
+            {
+                u64::MAX
+            } else {
+                x as u64
+            }
+        };
+
+        // Equality: [idx, idx+1)
+        if let Some(eq) = self.equal_case() {
+            let idx = to_i128(&eq)?;
+            if idx < 0 {
+                return Some(0..0);
+            }
+            let start =
+                clamp_u64(idx).min(dim_len_est);
+            let end_exclusive = start
+                .saturating_add(1)
+                .min(dim_len_est);
+            return Some(start..end_exclusive);
+        }
+
+        let start = if let Some((v, bk)) =
+            &self.min
+        {
+            let idx = to_i128(v)?;
+            let idx = match bk {
+                BoundKind::Inclusive => idx,
+                BoundKind::Exclusive => {
+                    idx.saturating_add(1)
+                }
+            };
+            if idx < 0 {
+                0
+            } else {
+                clamp_u64(idx).min(dim_len_est)
+            }
+        } else {
+            0
+        };
+
+        let end_exclusive = if let Some((v, bk)) =
+            &self.max
+        {
+            let idx = to_i128(v)?;
+            let end = match bk {
+                BoundKind::Inclusive => {
+                    idx.saturating_add(1)
+                }
+                BoundKind::Exclusive => idx,
+            };
+            if end < 0 {
+                0
+            } else {
+                clamp_u64(end).min(dim_len_est)
+            }
+        } else {
+            dim_len_est
+        };
+
+        Some(start..end_exclusive)
+    }
+
+    pub(crate) fn to_max_case(
+        &self,
+    ) -> Option<(CoordScalar, BoundKind)> {
+        self.max
+            .as_ref()
+            .map(|(v, k)| (v.clone(), k.clone()))
+    }
+
+    pub(crate) fn to_min_case(
+        &self,
+    ) -> Option<(CoordScalar, BoundKind)> {
+        self.min
+            .as_ref()
+            .map(|(v, k)| (v.clone(), k.clone()))
     }
 }
 pub(crate) type ValueRange =
@@ -423,49 +546,6 @@ impl HasIntersect for ValueRangePresent {
                     };
                 }
             }
-
-            // if let Some(eq) = &out.eq {
-            //     if let Some((min_v, min_k)) =
-            //         &out.min
-            //     {
-            //         let ord =
-            //             eq.partial_cmp(min_v);
-            //         let ok = match (ord, min_k) {
-            //         (
-            //             Some(std::cmp::Ordering::Greater),
-            //             _,
-            //         ) => true,
-            //         (
-            //             Some(std::cmp::Ordering::Equal),
-            //             BoundKind::Inclusive,
-            //         ) => true,
-            //         _ => false,
-            //     };
-            //         if !ok {
-            //             return None;
-            //         }
-            //     }
-            //     if let Some((max_v, max_k)) =
-            //         &out.max
-            //     {
-            //         let ord =
-            //             eq.partial_cmp(max_v);
-            //         let ok = match (ord, max_k) {
-            //         (Some(std::cmp::Ordering::Less), _) => {
-            //             true
-            //         }
-            //         (
-            //             Some(std::cmp::Ordering::Equal),
-            //             BoundKind::Inclusive,
-            //         ) => true,
-            //         _ => false,
-            //     };
-            //         if !ok {
-            //             return None;
-            //         }
-            //     }
-            // }
-
             Some(out)
         } else {
             None

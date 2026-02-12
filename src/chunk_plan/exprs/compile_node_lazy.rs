@@ -25,7 +25,7 @@ use crate::chunk_plan::indexing::lazy_selection::{
     lazy_dataset_for_vars_with_selection,
 };
 use crate::chunk_plan::indexing::types::{
-    BoundKind, ValueRange, ValueRangePresent, HasIntersect,
+    ValueRange, ValueRangePresent, HasIntersect,
 };
 use crate::chunk_plan::prelude::*;
 use crate::{IStr, IntoIStr};
@@ -549,49 +549,17 @@ fn compile_cmp_to_lazy_selection(
         ));
     };
 
-    let mut vr = ValueRangePresent::default();
-    match op {
-        Operator::Eq => {
-            vr =
-                ValueRangePresent::from_equal_case(
-                    scalar,
-                )
-        }
-        Operator::Gt => {
-            vr.min = Some((
-                scalar,
-                BoundKind::Exclusive,
-            ))
-        }
-        Operator::GtEq => {
-            vr.min = Some((
-                scalar,
-                BoundKind::Inclusive,
-            ))
-        }
-        Operator::Lt => {
-            vr.max = Some((
-                scalar,
-                BoundKind::Exclusive,
-            ))
-        }
-        Operator::LtEq => {
-            vr.max = Some((
-                scalar,
-                BoundKind::Inclusive,
-            ))
-        }
-        _ => {
-            return Err(
-                BackendError::UnsupportedPolarsExpression(
-                    format!(
-                        "unsupported operator: {:?}",
-                        op
-                    ),
-                ),
-            );
-        }
-    }
+    let vr = ValueRangePresent::from_polars_op(
+        op, scalar,
+    )
+    .ok_or_else(|| {
+        BackendError::UnsupportedPolarsExpression(
+            format!(
+                "unsupported operator: {:?}",
+                op
+            ),
+        )
+    })?;
 
     compile_value_range_to_lazy_selection(
         col,
@@ -680,49 +648,17 @@ fn compile_struct_field_cmp(
         ));
     };
 
-    let mut vr = ValueRangePresent::default();
-    match op {
-        Operator::Eq => {
-            vr =
-                ValueRangePresent::from_equal_case(
-                    scalar,
-                )
-        }
-        Operator::Gt => {
-            vr.min = Some((
-                scalar,
-                BoundKind::Exclusive,
-            ))
-        }
-        Operator::GtEq => {
-            vr.min = Some((
-                scalar,
-                BoundKind::Inclusive,
-            ))
-        }
-        Operator::Lt => {
-            vr.max = Some((
-                scalar,
-                BoundKind::Exclusive,
-            ))
-        }
-        Operator::LtEq => {
-            vr.max = Some((
-                scalar,
-                BoundKind::Inclusive,
-            ))
-        }
-        _ => {
-            return Err(
-                BackendError::UnsupportedPolarsExpression(
-                    format!(
-                        "unsupported op: {:?}",
-                        op
-                    ),
-                ),
-            );
-        }
-    }
+    let vr = ValueRangePresent::from_polars_op(
+        op, scalar,
+    )
+    .ok_or_else(|| {
+        BackendError::UnsupportedPolarsExpression(
+            format!(
+                "unsupported operator: {:?}",
+                op
+            ),
+        )
+    })?;
 
     // For struct fields, we need to find which dimensions apply
     // If the array is a dimension array, constrain that dimension
