@@ -192,55 +192,65 @@ impl CoordScalar {
 #[derive(
     Debug, Clone, Default, PartialEq, Eq, Hash,
 )]
-pub(crate) struct ValueRange {
+pub(crate) struct ValueRangePresent {
     pub(crate) min:
         Option<(CoordScalar, BoundKind)>,
     pub(crate) max:
         Option<(CoordScalar, BoundKind)>,
     pub(crate) eq: Option<CoordScalar>,
-    pub(crate) empty: bool,
 }
 
-impl ValueRange {
-    pub(crate) fn intersect(
+pub(crate) type ValueRange =
+    Option<ValueRangePresent>;
+
+pub(crate) trait HasIntersect:
+    Sized
+{
+    fn intersect(
         &self,
-        other: &ValueRange,
-    ) -> ValueRange {
-        if self.empty || other.empty {
-            return ValueRange {
-                empty: true,
-                ..Default::default()
+        other: Option<Self>,
+    ) -> Option<Self>;
+}
+
+impl HasIntersect for ValueRangePresent {
+    fn intersect(
+        &self,
+        other_range: Option<Self>,
+    ) -> Option<Self> {
+        if let Some(other) = other_range {
+            let mut out =
+                ValueRangePresent::default();
+            out.eq = match (&self.eq, &other.eq) {
+                (Some(a), Some(b)) if a == b => {
+                    Some(a.clone())
+                }
+                (Some(_), Some(_)) => None,
+                (Some(a), None) => {
+                    Some(a.clone())
+                }
+                (None, Some(b)) => {
+                    Some(b.clone())
+                }
+                (None, None) => None,
             };
-        }
-        let mut out = ValueRange::default();
-        out.eq = match (&self.eq, &other.eq) {
-            (Some(a), Some(b)) if a == b => {
-                Some(a.clone())
-            }
-            (Some(_), Some(_)) => {
-                out.empty = true;
-                return out;
-            }
-            (Some(a), None) => Some(a.clone()),
-            (None, Some(b)) => Some(b.clone()),
-            (None, None) => None,
-        };
 
-        out.min = pick_tighter_min(
-            self.min.clone(),
-            other.min.clone(),
-        );
-        out.max = pick_tighter_max(
-            self.max.clone(),
-            other.max.clone(),
-        );
+            out.min = pick_tighter_min(
+                self.min.clone(),
+                other.min.clone(),
+            );
+            out.max = pick_tighter_max(
+                self.max.clone(),
+                other.max.clone(),
+            );
 
-        // If we have an equality constraint, ensure it's compatible with min/max.
-        if let Some(eq) = &out.eq {
-            if let Some((min_v, min_k)) = &out.min
-            {
-                let ord = eq.partial_cmp(min_v);
-                let ok = match (ord, min_k) {
+            // If we have an equality constraint, ensure it's compatible with min/max.
+            if let Some(eq) = &out.eq {
+                if let Some((min_v, min_k)) =
+                    &out.min
+                {
+                    let ord =
+                        eq.partial_cmp(min_v);
+                    let ok = match (ord, min_k) {
                     (
                         Some(std::cmp::Ordering::Greater),
                         _,
@@ -251,15 +261,16 @@ impl ValueRange {
                     ) => true,
                     _ => false,
                 };
-                if !ok {
-                    out.empty = true;
-                    return out;
+                    if !ok {
+                        return None;
+                    }
                 }
-            }
-            if let Some((max_v, max_k)) = &out.max
-            {
-                let ord = eq.partial_cmp(max_v);
-                let ok = match (ord, max_k) {
+                if let Some((max_v, max_k)) =
+                    &out.max
+                {
+                    let ord =
+                        eq.partial_cmp(max_v);
+                    let ok = match (ord, max_k) {
                     (Some(std::cmp::Ordering::Less), _) => {
                         true
                     }
@@ -269,14 +280,51 @@ impl ValueRange {
                     ) => true,
                     _ => false,
                 };
-                if !ok {
-                    out.empty = true;
-                    return out;
+                    if !ok {
+                        return None;
+                    }
                 }
             }
-        }
 
-        out
+            Some(out)
+        } else {
+            None
+        }
+    }
+}
+
+impl HasIntersect for Option<ValueRangePresent> {
+    fn intersect(
+        &self,
+        other: Option<Self>,
+    ) -> Option<Self> {
+        match (self, other) {
+            (None, None) => None,
+            (Some(a), None) => {
+                Some(Some(a.clone()))
+            }
+            (None, Some(a)) => Some(a),
+            (Some(a), Some(b)) => {
+                Some(a.intersect(Some(b?)))
+            }
+        }
+    }
+}
+
+impl HasIntersect
+    for std::sync::Arc<Option<ValueRangePresent>>
+{
+    fn intersect(
+        &self,
+        other: Option<Self>,
+    ) -> Option<Self> {
+        self.as_ref()
+            .intersect(other.map(|o| {
+                o.as_ref()
+                    .as_ref()
+                    .map(|o| o.clone())
+            }))
+            .map(|o| std::sync::Arc::new(o))
     }
 }
 

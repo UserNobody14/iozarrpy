@@ -796,54 +796,57 @@ impl<
             &crate::meta::TimeEncoding,
         >,
     ) -> Option<std::ops::Range<u64>> {
-        if vr.empty {
-            return Some(0..0);
-        }
+        // if vr.empty {
+        //     return Some(0..0);
+        // }
+        if let Some(vr) = vr {
+            // Equality case
+            if let Some(eq) = &vr.eq {
+                let start = self
+                    .lower_bound(
+                        dim, eq, false, dir, n,
+                        chunk_size, time_enc,
+                    )
+                    .await?;
+                let end = self
+                    .upper_bound(
+                        dim, eq, false, dir, n,
+                        chunk_size, time_enc,
+                    )
+                    .await?;
+                return Some(start..end);
+            }
 
-        // Equality case
-        if let Some(eq) = &vr.eq {
-            let start = self
-                .lower_bound(
-                    dim, eq, false, dir, n,
-                    chunk_size, time_enc,
-                )
-                .await?;
-            let end = self
-                .upper_bound(
-                    dim, eq, false, dir, n,
-                    chunk_size, time_enc,
-                )
-                .await?;
-            return Some(start..end);
-        }
+            let start =
+                if let Some((v, bk)) = &vr.min {
+                    let strict = *bk
+                        == BoundKind::Exclusive;
+                    self.lower_bound(
+                        dim, v, strict, dir, n,
+                        chunk_size, time_enc,
+                    )
+                    .await?
+                } else {
+                    0
+                };
 
-        let start = if let Some((v, bk)) = &vr.min
-        {
-            let strict =
-                *bk == BoundKind::Exclusive;
-            self.lower_bound(
-                dim, v, strict, dir, n,
-                chunk_size, time_enc,
-            )
-            .await?
+            let end_exclusive =
+                if let Some((v, bk)) = &vr.max {
+                    let strict = *bk
+                        == BoundKind::Exclusive;
+                    self.upper_bound(
+                        dim, v, strict, dir, n,
+                        chunk_size, time_enc,
+                    )
+                    .await?
+                } else {
+                    n
+                };
+
+            Some(start..end_exclusive)
         } else {
-            0
-        };
-
-        let end_exclusive =
-            if let Some((v, bk)) = &vr.max {
-                let strict =
-                    *bk == BoundKind::Exclusive;
-                self.upper_bound(
-                    dim, v, strict, dir, n,
-                    chunk_size, time_enc,
-                )
-                .await?
-            } else {
-                n
-            };
-
-        Some(start..end_exclusive)
+            None
+        }
     }
 }
 
@@ -1201,47 +1204,48 @@ impl<
     ) -> Option<std::ops::Range<u64>> {
         use crate::chunk_plan::BoundKind;
 
-        if vr.empty {
+        if let Some(vr) = vr {
+            // Equality case
+            if let Some(eq) = &vr.eq {
+                let start = self
+                    .lower_bound_sync(
+                        dim, eq, false, dir, n,
+                        chunk_size, time_enc,
+                    )?;
+                let end = self.upper_bound_sync(
+                    dim, eq, false, dir, n,
+                    chunk_size, time_enc,
+                )?;
+                return Some(start..end);
+            }
+
+            let start =
+                if let Some((v, bk)) = &vr.min {
+                    let strict = *bk
+                        == BoundKind::Exclusive;
+                    self.lower_bound_sync(
+                        dim, v, strict, dir, n,
+                        chunk_size, time_enc,
+                    )?
+                } else {
+                    0
+                };
+
+            let end_exclusive =
+                if let Some((v, bk)) = &vr.max {
+                    let strict = *bk
+                        == BoundKind::Exclusive;
+                    self.upper_bound_sync(
+                        dim, v, strict, dir, n,
+                        chunk_size, time_enc,
+                    )?
+                } else {
+                    n
+                };
+
+            Some(start..end_exclusive)
+        } else {
             return Some(0..0);
         }
-
-        // Equality case
-        if let Some(eq) = &vr.eq {
-            let start = self.lower_bound_sync(
-                dim, eq, false, dir, n,
-                chunk_size, time_enc,
-            )?;
-            let end = self.upper_bound_sync(
-                dim, eq, false, dir, n,
-                chunk_size, time_enc,
-            )?;
-            return Some(start..end);
-        }
-
-        let start = if let Some((v, bk)) = &vr.min
-        {
-            let strict =
-                *bk == BoundKind::Exclusive;
-            self.lower_bound_sync(
-                dim, v, strict, dir, n,
-                chunk_size, time_enc,
-            )?
-        } else {
-            0
-        };
-
-        let end_exclusive =
-            if let Some((v, bk)) = &vr.max {
-                let strict =
-                    *bk == BoundKind::Exclusive;
-                self.upper_bound_sync(
-                    dim, v, strict, dir, n,
-                    chunk_size, time_enc,
-                )?
-            } else {
-                n
-            };
-
-        Some(start..end_exclusive)
     }
 }

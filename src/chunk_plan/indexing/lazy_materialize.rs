@@ -294,18 +294,18 @@ fn materialize_constraint_multi(
 
             for point in points.iter() {
                 // Look up the <= v request (to find left bracket)
-                let vr_max = ValueRange {
+                let vr_max = ValueRangePresent {
                     max: Some((point.clone(), super::types::BoundKind::Inclusive)),
                     ..Default::default()
                 };
-                let req_max = ResolutionRequest::new(dim.as_ref(), vr_max);
+                let req_max = ResolutionRequest::new(dim.as_ref(), Some(vr_max));
 
                 // Look up the >= v request (to find right bracket)
-                let vr_min = ValueRange {
+                let vr_min = ValueRangePresent {
                     min: Some((point.clone(), super::types::BoundKind::Inclusive)),
                     ..Default::default()
                 };
-                let req_min = ResolutionRequest::new(dim.as_ref(), vr_min);
+                let req_min = ResolutionRequest::new(dim.as_ref(), Some(vr_min));
 
                 let left_end = match cache.get(&req_max) {
                     Some(Some(r)) => r.end,
@@ -433,6 +433,7 @@ fn materialize_constraint(
 
 use crate::chunk_plan::indexing::index_ranges::index_range_for_index_dim;
 use crate::chunk_plan::indexing::selection::ArraySubsetList;
+use crate::chunk_plan::indexing::types::ValueRangePresent;
 use crate::meta::ZarrDatasetMeta;
 
 /// Collect requests and handle index-only dimensions.
@@ -540,9 +541,11 @@ fn collect_rectangle_requests_with_meta(
                     // Index-only dimension - resolve immediately
                     if let Some(dim_idx) = dims.iter().position(|d| d == dim) {
                         if let Some(&dim_len) = dim_lengths.get(dim_idx) {
-                            if let Some(idx_range) = index_range_for_index_dim(vr, dim_len) {
-                                immediate_cache.insert(request.clone(), Some(idx_range));
-                                continue;
+                            if let Some(vr) = vr {
+                                if let Some(idx_range) = index_range_for_index_dim(&vr, dim_len) {
+                                    immediate_cache.insert(request.clone(), Some(idx_range));
+                                    continue;
+                                }
                             }
                         }
                     }
@@ -562,9 +565,11 @@ fn collect_rectangle_requests_with_meta(
                     // Index-only dimension - resolve immediately
                     if let Some(dim_idx) = dims.iter().position(|d| d == dim) {
                         if let Some(&dim_len) = dim_lengths.get(dim_idx) {
-                            if let Some(idx_range) = index_range_for_index_dim(&vr, dim_len) {
-                                immediate_cache.insert(request.clone(), Some(idx_range));
-                                continue;
+                            if let Some(vr) = vr {
+                                if let Some(idx_range) = index_range_for_index_dim(&vr, dim_len) {
+                                    immediate_cache.insert(request.clone(), Some(idx_range));
+                                    continue;
+                                }
                             }
                         }
                     }
@@ -578,11 +583,11 @@ fn collect_rectangle_requests_with_meta(
             LazyDimConstraint::UnresolvedInterpolationPoints(points) => {
                 // For interpolation points, create bracketing requests
                 for point in points.iter() {
-                    let vr_max = ValueRange {
+                    let vr_max = ValueRangePresent {
                         max: Some((point.clone(), super::types::BoundKind::Inclusive)),
                         ..Default::default()
                     };
-                    let vr_min = ValueRange {
+                    let vr_min = ValueRangePresent {
                         min: Some((point.clone(), super::types::BoundKind::Inclusive)),
                         ..Default::default()
                     };
@@ -594,13 +599,13 @@ fn collect_rectangle_requests_with_meta(
                                 // For index-only dims, resolve immediately
                                 if let Some(r) = index_range_for_index_dim(&vr_max, dim_len) {
                                     immediate_cache.insert(
-                                        ResolutionRequest::new(dim.as_ref(), vr_max.clone()),
+                                        ResolutionRequest::new(dim.as_ref(), Some(vr_max.clone())),
                                         Some(r),
                                     );
                                 }
                                 if let Some(r) = index_range_for_index_dim(&vr_min, dim_len) {
                                     immediate_cache.insert(
-                                        ResolutionRequest::new(dim.as_ref(), vr_min.clone()),
+                                        ResolutionRequest::new(dim.as_ref(), Some(vr_min.clone())),
                                         Some(r),
                                     );
                                 }
@@ -609,8 +614,8 @@ fn collect_rectangle_requests_with_meta(
                         }
                     }
 
-                    requests.insert(ResolutionRequest::new(dim.as_ref(), vr_max));
-                    requests.insert(ResolutionRequest::new(dim.as_ref(), vr_min));
+                    requests.insert(ResolutionRequest::new(dim.as_ref(), Some(vr_max.clone())));
+                    requests.insert(ResolutionRequest::new(dim.as_ref(), Some(vr_min.clone())));
                 }
             }
             _ => {}

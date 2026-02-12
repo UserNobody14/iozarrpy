@@ -1,9 +1,12 @@
+use crate::chunk_plan::indexing::types::ValueRangePresent;
+
 use super::types::{
-    BoundKind, CoordScalar, ValueRange,
+    BoundKind, CoordScalar, HasIntersect,
+    ValueRange,
 };
 
 pub(crate) fn index_range_for_index_dim(
-    vr: &ValueRange,
+    vr: &ValueRangePresent,
     dim_len_est: u64,
 ) -> Option<std::ops::Range<u64>> {
     let to_i128 =

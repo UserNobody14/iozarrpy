@@ -25,7 +25,7 @@ use crate::chunk_plan::indexing::lazy_selection::{
     lazy_dataset_for_vars_with_selection,
 };
 use crate::chunk_plan::indexing::types::{
-    BoundKind, ValueRange,
+    BoundKind, ValueRange, ValueRangePresent, HasIntersect,
 };
 use crate::chunk_plan::prelude::*;
 use crate::{IStr, IntoIStr};
@@ -192,7 +192,7 @@ pub(crate) fn compile_expr(
                         ),
                     ) {
                         if col_a == col_b {
-                            let vr = vr_a.intersect(&vr_b);
+                            let vr = vr_a.intersect(Some(vr_b)).flatten();
                             return compile_value_range_to_lazy_selection(&col_a, &vr, ctx);
                         }
                     }
@@ -549,7 +549,7 @@ fn compile_cmp_to_lazy_selection(
         ));
     };
 
-    let mut vr = ValueRange::default();
+    let mut vr = ValueRangePresent::default();
     match op {
         Operator::Eq => vr.eq = Some(scalar),
         Operator::Gt => {
@@ -589,40 +589,46 @@ fn compile_cmp_to_lazy_selection(
     }
 
     compile_value_range_to_lazy_selection(
-        col, &vr, ctx,
+        col,
+        &Some(vr),
+        ctx,
     )
 }
 
 /// Compile a value range to a lazy selection.
 fn compile_value_range_to_lazy_selection(
     col: &str,
-    vr: &ValueRange,
+    vrr: &ValueRange,
     ctx: &LazyCompileCtx<'_>,
 ) -> LazyResult {
-    if vr.empty {
-        return Ok(Sel::Empty);
+    if let Some(vr) = vrr {
+        // Check if this is a dimension
+        let dim_idx = ctx.dim_index(col);
+        if dim_idx.is_none() {
+            // Not a dimension: skip pushdown and let runtime filtering handle it.
+            return Ok(Sel::NoSelectionMade);
+        }
+
+        // Create a lazy constraint with the unresolved value range
+        let constraint =
+            LazyDimConstraint::Unresolved(Some(
+                vr.clone(),
+            ));
+        let rect = LazyHyperRectangle::all()
+            .with_dim(col.istr(), constraint);
+        let sel =
+            LazyArraySelection::from_rectangle(
+                rect,
+            );
+
+        Ok(lazy_dataset_for_vars_with_selection(
+            ctx.vars.iter().cloned(),
+            ctx.meta,
+            sel,
+        ))
+    } else {
+        Ok(Sel::Empty)
     }
-
-    // Check if this is a dimension
-    let dim_idx = ctx.dim_index(col);
-    if dim_idx.is_none() {
-        // Not a dimension: skip pushdown and let runtime filtering handle it.
-        return Ok(Sel::NoSelectionMade);
-    }
-
-    // Create a lazy constraint with the unresolved value range
-    let constraint =
-        LazyDimConstraint::Unresolved(vr.clone());
-    let rect = LazyHyperRectangle::all()
-        .with_dim(col.istr(), constraint);
-    let sel =
-        LazyArraySelection::from_rectangle(rect);
-
-    Ok(lazy_dataset_for_vars_with_selection(
-        ctx.vars.iter().cloned(),
-        ctx.meta,
-        sel,
-    ))
 }
 
 /// Compile a struct field comparison to a lazy selection.
@@ -669,7 +675,7 @@ fn compile_struct_field_cmp(
         ));
     };
 
-    let mut vr = ValueRange::default();
+    let mut vr = ValueRangePresent::default();
     match op {
         Operator::Eq => vr.eq = Some(scalar),
         Operator::Gt => {
@@ -718,7 +724,7 @@ fn compile_struct_field_cmp(
                 // This is a 1D coordinate-like array, apply constraint to its dimension
                 let constraint =
                     LazyDimConstraint::Unresolved(
-                        vr.clone(),
+                        Some(vr.clone()),
                     );
                 let rect =
                     LazyHyperRectangle::all()
