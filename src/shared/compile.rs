@@ -12,6 +12,7 @@ use polars::prelude::Expr;
 use crate::PlannerStats;
 use crate::chunk_plan::GroupedChunkPlan;
 use crate::chunk_plan::SyncCoordResolver;
+use crate::chunk_plan::ValueRangePresent;
 use crate::chunk_plan::compile_expr;
 use crate::chunk_plan::selection_to_grouped_chunk_plan_unified_from_meta;
 use crate::chunk_plan::{
@@ -797,53 +798,84 @@ impl<
         >,
     ) -> Option<std::ops::Range<u64>> {
         if let Some(vr) = vr {
-            // Equality case
-            if let Some(eq) = vr.equal_case() {
-                let start = self
-                    .lower_bound(
-                        dim, &eq, false, dir, n,
-                        chunk_size, time_enc,
-                    )
-                    .await?;
-                let end = self
-                    .upper_bound(
-                        dim, &eq, false, dir, n,
-                        chunk_size, time_enc,
-                    )
-                    .await?;
-                return Some(start..end);
+            let mut start = 0;
+            let mut end = n;
+            match vr {
+                ValueRangePresent::Eq(eq) => {
+                    start = self
+                        .lower_bound(
+                            dim, &eq, false, dir,
+                            n, chunk_size,
+                            time_enc,
+                        )
+                        .await?;
+                    end = self
+                        .upper_bound(
+                            dim, &eq, false, dir,
+                            n, chunk_size,
+                            time_enc,
+                        )
+                        .await?;
+                }
+                ValueRangePresent::Min(min) => {
+                    start = self
+                        .lower_bound(
+                            dim,
+                            &min.get_scalar(),
+                            min.is_exclusive(),
+                            dir,
+                            n,
+                            chunk_size,
+                            time_enc,
+                        )
+                        .await?;
+                }
+                ValueRangePresent::Max(max) => {
+                    end = self
+                        .upper_bound(
+                            dim,
+                            &max.get_scalar(),
+                            max.is_exclusive(),
+                            dir,
+                            n,
+                            chunk_size,
+                            time_enc,
+                        )
+                        .await?;
+                }
+                ValueRangePresent::Segment(
+                    start_bound,
+                    end_bound,
+                ) => {
+                    start = self
+                        .lower_bound(
+                            dim,
+                            &start_bound
+                                .get_scalar(),
+                            start_bound
+                                .is_exclusive(),
+                            dir,
+                            n,
+                            chunk_size,
+                            time_enc,
+                        )
+                        .await?;
+                    end = self
+                        .upper_bound(
+                            dim,
+                            &end_bound
+                                .get_scalar(),
+                            end_bound
+                                .is_exclusive(),
+                            dir,
+                            n,
+                            chunk_size,
+                            time_enc,
+                        )
+                        .await?;
+                }
             }
-
-            let start = if let Some((v, bk)) =
-                vr.to_min_case()
-            {
-                let strict =
-                    bk == BoundKind::Exclusive;
-                self.lower_bound(
-                    dim, &v, strict, dir, n,
-                    chunk_size, time_enc,
-                )
-                .await?
-            } else {
-                0
-            };
-
-            let end_exclusive =
-                if let Some((v, bk)) =
-                    vr.to_max_case()
-                {
-                    let strict = bk
-                        == BoundKind::Exclusive;
-                    self.upper_bound(
-                        dim, &v, strict, dir, n,
-                        chunk_size, time_enc,
-                    )
-                    .await?
-                } else {
-                    n
-                };
-
-            Some(start..end_exclusive)
+            Some(start..end)
         } else {
             None
         }
@@ -985,11 +1017,9 @@ impl<
         time_enc: Option<
             &crate::meta::TimeEncoding,
         >,
-    ) -> Option<std::cmp::Ordering> {
+    ) -> Option<Ord> {
         if n < 2 {
-            return Some(
-                std::cmp::Ordering::Less,
-            );
+            return Some(Ord::Less);
         }
 
         let first = self.scalar_at_sync(
@@ -1004,13 +1034,10 @@ impl<
         )?;
 
         let dir = match first.partial_cmp(&last) {
-            Some(
-                std::cmp::Ordering::Less
-                | std::cmp::Ordering::Equal,
-            ) => std::cmp::Ordering::Less,
-            Some(std::cmp::Ordering::Greater) => {
-                std::cmp::Ordering::Greater
+            Some(Ord::Less | Ord::Equal) => {
+                Ord::Less
             }
+            Some(Ord::Greater) => Ord::Greater,
             None => return None,
         };
 
@@ -1035,17 +1062,17 @@ impl<
                 let ord = p.partial_cmp(&v);
                 let ok = match (dir, ord) {
                     (
-                        std::cmp::Ordering::Less,
+                        Ord::Less,
                         Some(
-                            std::cmp::Ordering::Less
-                            | std::cmp::Ordering::Equal,
+                            Ord::Less
+                            | Ord::Equal,
                         ),
                     ) => true,
                     (
-                        std::cmp::Ordering::Greater,
+                        Ord::Greater,
                         Some(
-                            std::cmp::Ordering::Greater
-                            | std::cmp::Ordering::Equal,
+                            Ord::Greater
+                            | Ord::Equal,
                         ),
                     ) => true,
                     _ => false,
@@ -1065,7 +1092,7 @@ impl<
         dim: &IStr,
         target: &CoordScalar,
         strict: bool,
-        dir: std::cmp::Ordering,
+        dir: Ord,
         n: u64,
         chunk_size: u64,
         time_enc: Option<
@@ -1082,34 +1109,29 @@ impl<
             )?;
             let cmp = v.partial_cmp(target);
 
-            let go_left = match (dir, strict, cmp) {
+            let go_left = match (dir, strict, cmp)
+            {
                 (
-                    std::cmp::Ordering::Less
-                    | std::cmp::Ordering::Equal,
+                    Ord::Less | Ord::Equal,
                     false,
                     Some(
-                        std::cmp::Ordering::Greater
-                        | std::cmp::Ordering::Equal,
+                        Ord::Greater | Ord::Equal,
                     ),
                 ) => true,
                 (
-                    std::cmp::Ordering::Less,
+                    Ord::Less,
                     true,
-                    Some(std::cmp::Ordering::Greater),
+                    Some(Ord::Greater),
                 ) => true,
                 (
-                    std::cmp::Ordering::Greater
-                    | std::cmp::Ordering::Equal,
+                    Ord::Greater | Ord::Equal,
                     false,
-                    Some(
-                        std::cmp::Ordering::Less
-                        | std::cmp::Ordering::Equal,
-                    ),
+                    Some(Ord::Less | Ord::Equal),
                 ) => true,
                 (
-                    std::cmp::Ordering::Greater,
+                    Ord::Greater,
                     true,
-                    Some(std::cmp::Ordering::Less),
+                    Some(Ord::Less),
                 ) => true,
                 _ => false,
             };
@@ -1129,7 +1151,7 @@ impl<
         dim: &IStr,
         target: &CoordScalar,
         strict: bool,
-        dir: std::cmp::Ordering,
+        dir: Ord,
         n: u64,
         chunk_size: u64,
         time_enc: Option<
@@ -1146,40 +1168,36 @@ impl<
             )?;
             let cmp = v.partial_cmp(target);
 
-            let go_right = match (dir, strict, cmp)
-            {
-                (
-                    std::cmp::Ordering::Less
-                    | std::cmp::Ordering::Equal,
-                    false,
-                    Some(
-                        std::cmp::Ordering::Less
-                        | std::cmp::Ordering::Equal,
-                    ),
-                ) => true,
-                (
-                    std::cmp::Ordering::Less,
-                    true,
-                    Some(std::cmp::Ordering::Less),
-                ) => true,
-                (
-                    std::cmp::Ordering::Greater
-                    | std::cmp::Ordering::Equal,
-                    false,
-                    Some(
-                        std::cmp::Ordering::Greater
-                        | std::cmp::Ordering::Equal,
-                    ),
-                ) => true,
-                (
-                    std::cmp::Ordering::Greater,
-                    true,
-                    Some(
-                        std::cmp::Ordering::Greater,
-                    ),
-                ) => true,
-                _ => false,
-            };
+            let go_right =
+                match (dir, strict, cmp) {
+                    (
+                        Ord::Less | Ord::Equal,
+                        false,
+                        Some(
+                            Ord::Less
+                            | Ord::Equal,
+                        ),
+                    ) => true,
+                    (
+                        Ord::Less,
+                        true,
+                        Some(Ord::Less),
+                    ) => true,
+                    (
+                        Ord::Greater | Ord::Equal,
+                        false,
+                        Some(
+                            Ord::Greater
+                            | Ord::Equal,
+                        ),
+                    ) => true,
+                    (
+                        Ord::Greater,
+                        true,
+                        Some(Ord::Greater),
+                    ) => true,
+                    _ => false,
+                };
 
             if go_right {
                 lo = mid + 1;
@@ -1195,58 +1213,122 @@ impl<
         &self,
         dim: &IStr,
         vr: &ValueRange,
-        dir: std::cmp::Ordering,
+        dir: Ord,
         n: u64,
         chunk_size: u64,
         time_enc: Option<
             &crate::meta::TimeEncoding,
         >,
     ) -> Option<std::ops::Range<u64>> {
-        use crate::chunk_plan::BoundKind;
-
         if let Some(vr) = vr {
             // Equality case
-            if let Some(eq) = vr.equal_case() {
-                let start = self
-                    .lower_bound_sync(
+            // if let Some(eq) = vr.equal_case() {
+            //     let start = self
+            //         .lower_bound_sync(
+            //             dim, &eq, false, dir, n,
+            //             chunk_size, time_enc,
+            //         )?;
+            //     let end = self.upper_bound_sync(
+            //         dim, &eq, false, dir, n,
+            //         chunk_size, time_enc,
+            //     )?;
+            //     return Some(start..end);
+            // }
+
+            // let start = if let Some((v, bk)) =
+            //     vr.to_min_case()
+            // {
+            //     let strict =
+            //         bk == BoundKind::Exclusive;
+            //     self.lower_bound_sync(
+            //         dim, &v, strict, dir, n,
+            //         chunk_size, time_enc,
+            //     )?
+            // } else {
+            //     0
+            // };
+
+            // let end_exclusive =
+            //     if let Some((v, bk)) =
+            //         vr.to_max_case()
+            //     {
+            //         let strict = bk
+            //             == BoundKind::Exclusive;
+            //         self.upper_bound_sync(
+            //             dim, &v, strict, dir, n,
+            //             chunk_size, time_enc,
+            //         )?
+            //     } else {
+            //         n
+            //     };
+
+            let mut start = 0;
+            let mut end = n;
+            match vr {
+                ValueRangePresent::Eq(eq) => {
+                    start = self
+                        .lower_bound_sync(
+                            dim, &eq, false, dir,
+                            n, chunk_size,
+                            time_enc,
+                        )?;
+                    end = self.upper_bound_sync(
                         dim, &eq, false, dir, n,
                         chunk_size, time_enc,
                     )?;
-                let end = self.upper_bound_sync(
-                    dim, &eq, false, dir, n,
-                    chunk_size, time_enc,
-                )?;
-                return Some(start..end);
+                }
+                ValueRangePresent::Min(min) => {
+                    start = self
+                        .lower_bound_sync(
+                            dim,
+                            &min.get_scalar(),
+                            min.is_exclusive(),
+                            dir,
+                            n,
+                            chunk_size,
+                            time_enc,
+                        )?;
+                }
+                ValueRangePresent::Max(max) => {
+                    end = self.upper_bound_sync(
+                        dim,
+                        &max.get_scalar(),
+                        max.is_exclusive(),
+                        dir,
+                        n,
+                        chunk_size,
+                        time_enc,
+                    )?;
+                }
+                ValueRangePresent::Segment(
+                    start_bound,
+                    end_bound,
+                ) => {
+                    start = self
+                        .lower_bound_sync(
+                            dim,
+                            &start_bound
+                                .get_scalar(),
+                            start_bound
+                                .is_exclusive(),
+                            dir,
+                            n,
+                            chunk_size,
+                            time_enc,
+                        )?;
+                    end = self.upper_bound_sync(
+                        dim,
+                        &end_bound.get_scalar(),
+                        end_bound.is_exclusive(),
+                        dir,
+                        n,
+                        chunk_size,
+                        time_enc,
+                    )?;
+                }
             }
 
-            let start = if let Some((v, bk)) =
-                vr.to_min_case()
-            {
-                let strict =
-                    bk == BoundKind::Exclusive;
-                self.lower_bound_sync(
-                    dim, &v, strict, dir, n,
-                    chunk_size, time_enc,
-                )?
-            } else {
-                0
-            };
-
-            let end_exclusive =
-                if let Some((v, bk)) =
-                    vr.to_max_case()
-                {
-                    let strict = bk
-                        == BoundKind::Exclusive;
-                    self.upper_bound_sync(
-                        dim, &v, strict, dir, n,
-                        chunk_size, time_enc,
-                    )?
-                } else {
-                    n
-                };
-
-            Some(start..end_exclusive)
+            Some(start..end)
         } else {
             return Some(0..0);
         }

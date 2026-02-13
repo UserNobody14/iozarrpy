@@ -23,8 +23,7 @@ use super::selection::{
     DataArraySelection, DatasetSelection,
     Emptyable, SetOperations,
 };
-use super::types::BoundKind;
-use super::types::{DimSignature, ValueRange};
+use super::types::DimSignature;
 
 /// Materialize a lazy dataset selection into a concrete selection.
 ///
@@ -295,14 +294,14 @@ fn materialize_constraint_multi(
 
             for point in points.iter() {
                 // Look up the <= v request (to find left bracket)
-                let vr_max = ValueRangePresent::from_max_only(
-                    point.clone(), BoundKind::Inclusive
+                let vr_max = ValueRangePresent::from_max_exclusive(
+                    point.clone()
                 );
                 let req_max = ResolutionRequest::new(dim.as_ref(), Some(vr_max));
 
                 // Look up the >= v request (to find right bracket)
-                let vr_min = ValueRangePresent::from_min_only(
-                    point.clone(), BoundKind::Inclusive
+                let vr_min = ValueRangePresent::from_min_inclusive(
+                    point.clone()
                 );
                 let req_min = ResolutionRequest::new(dim.as_ref(), Some(vr_min));
 
@@ -581,11 +580,11 @@ fn collect_rectangle_requests_with_meta(
             LazyDimConstraint::UnresolvedInterpolationPoints(points) => {
                 // For interpolation points, create bracketing requests
                 for point in points.iter() {
-                    let vr_max = ValueRangePresent::from_max_only(
-                        point.clone(), BoundKind::Inclusive
+                    let vr_max = ValueRangePresent::from_max_exclusive(
+                        point.clone()
                     );
-                    let vr_min = ValueRangePresent::from_min_only(
-                        point.clone(), BoundKind::Inclusive
+                    let vr_min = ValueRangePresent::from_min_inclusive(
+                        point.clone()
                     );
 
                     // Check if this is an index-only dimension

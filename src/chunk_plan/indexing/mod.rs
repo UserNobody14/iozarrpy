@@ -26,9 +26,7 @@ pub(crate) use resolver_traits::{
 };
 
 // Core types re-exports
-pub(crate) use plan::{
-    ConsolidatedGridGroup, GroupedChunkPlan,
-};
+pub(crate) use plan::GroupedChunkPlan;
 pub(crate) use selection::{
     DatasetSelection, Emptyable,
 };

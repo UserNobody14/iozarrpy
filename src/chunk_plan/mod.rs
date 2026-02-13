@@ -31,6 +31,6 @@ pub(crate) use indexing::types::{
     ValueRange, HasEqualCase,
 };
 pub(crate) use indexing::types::CoordScalar;
+pub(crate) use indexing::types::ValueRangePresent;
 pub(crate) use exprs::apply_time_encoding;
-pub(crate) use indexing::types::BoundKind;
 use crate::chunk_plan;

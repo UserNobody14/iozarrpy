@@ -291,6 +291,14 @@ impl Bound {
             ) => self.scalar != value,
         }
     }
+
+    pub(crate) fn get_scalar(&self) -> CoordScalar {
+        self.scalar.clone()
+    }
+
+    pub(crate) fn is_exclusive(&self) -> bool {
+        self.kind == BoundKind::Exclusive
+    }
 }
 
 impl ValueRangePresent {
@@ -318,19 +326,30 @@ impl ValueRangePresent {
         }
     }
 
-    pub(crate) fn from_min_only(
-        min: CoordScalar,
-        bound_kind: BoundKind,
+    pub(crate) fn from_min_exclusive(
+        min: CoordScalar
     ) -> Self {
-        Self::Min(Bound::new(min, bound_kind))
+        Self::Min(Bound::exclusive(min))
     }
 
-    pub(crate) fn from_max_only(
+    pub(crate) fn from_max_exclusive(
         max: CoordScalar,
-        bound_kind: BoundKind,
     ) -> Self {
-        Self::Max(Bound::new(max, bound_kind))
+        Self::Max(Bound::exclusive(max))
     }
+
+    pub(crate) fn from_min_inclusive(
+        min: CoordScalar,
+    ) -> Self {
+        Self::Min(Bound::inclusive(min))
+    }
+
+    pub(crate) fn from_max_inclusive(
+        max: CoordScalar,
+    ) -> Self {
+        Self::Max(Bound::inclusive(max))
+    }
+
 
     pub(crate) fn in_range(
         &self,
@@ -367,32 +386,29 @@ impl ValueRangePresent {
                 ),
             ),
             Operator::Gt => Some(
-                ValueRangePresent::from_min_only(
+                ValueRangePresent::from_min_exclusive(
                     scalar,
-                    BoundKind::Exclusive,
                 ),
             ),
             Operator::GtEq => Some(
-                ValueRangePresent::from_min_only(
+                ValueRangePresent::from_min_inclusive(
                     scalar,
-                    BoundKind::Inclusive,
                 ),
             ),
             Operator::Lt => Some(
-                ValueRangePresent::from_max_only(
+                ValueRangePresent::from_max_exclusive(
                     scalar,
-                    BoundKind::Exclusive,
                 ),
             ),
             Operator::LtEq => Some(
-                ValueRangePresent::from_max_only(
+                ValueRangePresent::from_max_inclusive(
                     scalar,
-                    BoundKind::Inclusive,
                 ),
             ),
             _ => None,
         }
     }
+
 
     pub(crate) fn index_range_for_index_dim(
         &self,
