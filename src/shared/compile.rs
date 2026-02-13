@@ -1,5 +1,7 @@
 use std::collections::BTreeMap;
 
+use std::cmp::Ordering as Ord;
+
 use super::traits::{
     ChunkedDataBackendAsync,
     ChunkedDataBackendSync, HasAsyncStore,
@@ -16,12 +18,244 @@ use crate::chunk_plan::ValueRangePresent;
 use crate::chunk_plan::compile_expr;
 use crate::chunk_plan::selection_to_grouped_chunk_plan_unified_from_meta;
 use crate::chunk_plan::{
-    HasEqualCase, MergedCache,
-    collect_requests_with_meta, materialize,
+    MergedCache, collect_requests_with_meta,
+    materialize,
 };
 use crate::meta::ZarrMeta;
 use crate::{IStr, chunk_plan::*};
-use std::cmp::Ordering as Ord;
+
+// -----------------------------------------------------------------------------
+// Pure helper functions (no I/O, no async - safe to extract without perf impact)
+// -----------------------------------------------------------------------------
+
+/// Group resolution requests by dimension for batch processing.
+fn group_requests_by_dimension(
+    requests: Vec<ResolutionRequest>,
+) -> BTreeMap<
+    IStr,
+    Vec<(ResolutionRequest, ValueRange)>,
+> {
+    let mut by_dim: BTreeMap<
+        IStr,
+        Vec<(ResolutionRequest, ValueRange)>,
+    > = BTreeMap::new();
+    for req in requests {
+        by_dim
+            .entry(req.dim.clone())
+            .or_default()
+            .push((
+                req.clone(),
+                req.value_range.clone(),
+            ));
+    }
+    by_dim
+}
+
+/// Binary search: should we move the high bound left? (lower_bound semantics)
+#[inline(always)]
+fn lower_bound_should_go_left(
+    dir: Ord,
+    strict: bool,
+    cmp: Option<Ord>,
+) -> bool {
+    matches!(
+        (dir, strict, cmp),
+        (
+            Ord::Less | Ord::Equal,
+            false,
+            Some(Ord::Greater | Ord::Equal)
+        ) | (Ord::Less, true, Some(Ord::Greater))
+            | (
+                Ord::Greater | Ord::Equal,
+                false,
+                Some(Ord::Less | Ord::Equal)
+            )
+            | (
+                Ord::Greater,
+                true,
+                Some(Ord::Less)
+            )
+    )
+}
+
+/// Binary search: should we move the low bound right? (upper_bound semantics)
+#[inline(always)]
+fn upper_bound_should_go_right(
+    dir: Ord,
+    strict: bool,
+    cmp: Option<Ord>,
+) -> bool {
+    matches!(
+        (dir, strict, cmp),
+        (
+            Ord::Less | Ord::Equal,
+            false,
+            Some(Ord::Less | Ord::Equal)
+        ) | (Ord::Less, true, Some(Ord::Less))
+            | (
+                Ord::Greater | Ord::Equal,
+                false,
+                Some(Ord::Greater | Ord::Equal)
+            )
+            | (
+                Ord::Greater,
+                true,
+                Some(Ord::Greater)
+            )
+    )
+}
+
+/// Sample indices for monotonicity verification (must be sorted ascending).
+fn monotonic_sample_indices(
+    n: u64,
+    chunk_size: u64,
+) -> [u64; 5] {
+    let mut samples = [
+        0u64,
+        chunk_size.saturating_sub(1).min(n - 1),
+        chunk_size.min(n - 1),
+        (n / 2).min(n - 1),
+        n - 1,
+    ];
+    samples.sort();
+    samples
+}
+
+/// Check if the observed ordering between consecutive samples matches expected direction.
+#[inline(always)]
+fn monotonic_ord_matches(
+    dir: Ord,
+    ord: Option<Ord>,
+) -> bool {
+    match (dir, ord) {
+        (
+            Ord::Less,
+            Some(Ord::Less | Ord::Equal),
+        ) => true,
+        (
+            Ord::Greater,
+            Some(Ord::Greater | Ord::Equal),
+        ) => true,
+        _ => false,
+    }
+}
+
+/// Compute (start, end) bounds from a ValueRangePresent using provided lower/upper bound functions.
+fn compute_bounds_from_value_range<FL, FU>(
+    vr: &ValueRangePresent,
+    n: u64,
+    lower: FL,
+    upper: FU,
+) -> Option<(u64, u64)>
+where
+    FL: Fn(&CoordScalar, bool) -> Option<u64>,
+    FU: Fn(&CoordScalar, bool) -> Option<u64>,
+{
+    let mut start = 0u64;
+    let mut end = n;
+    match vr {
+        ValueRangePresent::Eq(eq) => {
+            start = lower(eq, false)?;
+            end = upper(eq, false)?;
+        }
+        ValueRangePresent::Min(min) => {
+            start = lower(
+                &min.get_scalar(),
+                min.is_exclusive(),
+            )?;
+        }
+        ValueRangePresent::Max(max) => {
+            end = upper(
+                &max.get_scalar(),
+                max.is_exclusive(),
+            )?;
+        }
+        ValueRangePresent::Segment(
+            start_bound,
+            end_bound,
+        ) => {
+            start = lower(
+                &start_bound.get_scalar(),
+                start_bound.is_exclusive(),
+            )?;
+            end = upper(
+                &end_bound.get_scalar(),
+                end_bound.is_exclusive(),
+            )?;
+        }
+    }
+    Some((start, end))
+}
+
+/// Prepare compilation inputs: compile expr to lazy selection and collect resolution requests.
+fn prepare_compile_inputs(
+    meta: &ZarrMeta,
+    expr: &Expr,
+) -> Result<
+    (
+        LazyDatasetSelection,
+        Vec<ResolutionRequest>,
+        HashMapCache,
+    ),
+    BackendError,
+> {
+    let legacy_meta = meta.planning_meta();
+    let (dims, dim_lengths) =
+        compute_dims_and_lengths_unified(meta);
+    let vars = legacy_meta.data_vars.clone();
+    let mut ctx = LazyCompileCtx::new(
+        &legacy_meta,
+        Some(meta),
+        &dims,
+        &vars,
+    );
+    let lazy_selection =
+        compile_expr(expr, &mut ctx)?;
+    let (requests, immediate_cache) =
+        collect_requests_with_meta(
+            &lazy_selection,
+            &legacy_meta,
+            &dim_lengths,
+            &dims,
+        );
+    Ok((
+        lazy_selection,
+        requests,
+        immediate_cache,
+    ))
+}
+
+/// Materialize lazy selection with resolved cache and convert to grouped chunk plan.
+fn finish_compile_with_resolved_cache(
+    lazy_selection: &LazyDatasetSelection,
+    meta: &ZarrMeta,
+    resolved_cache: &dyn ResolutionCache,
+    immediate_cache: &HashMapCache,
+) -> Result<
+    (GroupedChunkPlan, PlannerStats),
+    BackendError,
+> {
+    let legacy_meta = meta.planning_meta();
+    let merged = MergedCache::new(
+        resolved_cache,
+        immediate_cache,
+    );
+    let selection = materialize(
+        lazy_selection,
+        &legacy_meta,
+        &merged,
+    )
+    .map_err(|e| {
+        BackendError::CompileError(format!(
+            "materialization failed: {}",
+            e
+        ))
+    })?;
+    let stats = PlannerStats { coord_reads: 0 };
+    let grouped_plan =
+        selection_to_grouped_chunk_plan_unified_from_meta(&selection, meta)?;
+    Ok((grouped_plan, stats))
+}
 
 /// Compile a Polars expression to a chunk plan synchronously.
 pub trait ChunkedExpressionCompilerSync:
@@ -65,60 +299,20 @@ impl<
         (GroupedChunkPlan, PlannerStats),
         BackendError,
     > {
-        // Compile to lazy selection
         let meta = self.metadata()?;
-        let legacy_meta = meta.planning_meta();
-        let (dims, dim_lengths) =
-            compute_dims_and_lengths_unified(
-                &meta,
-            );
-        let vars = legacy_meta.data_vars.clone();
-        let mut ctx = LazyCompileCtx::new(
-            &legacy_meta,
-            Some(&meta),
-            &dims,
-            &vars,
-        );
-        let lazy_selection =
-            compile_expr(expr, &mut ctx)?;
-
-        let (requests, immediate_cache) =
-            collect_requests_with_meta(
-                &lazy_selection,
-                &legacy_meta,
-                &dim_lengths,
-                &dims,
-            );
-
+        let (
+            lazy_selection,
+            requests,
+            immediate_cache,
+        ) = prepare_compile_inputs(&meta, expr)?;
         let resolved_cache =
             self.resolve_batch(requests);
-
-        let merged = MergedCache::new(
+        finish_compile_with_resolved_cache(
+            &lazy_selection,
+            &meta,
             &*resolved_cache,
             &immediate_cache,
-        );
-        let selection = materialize(
-            &lazy_selection,
-            &legacy_meta,
-            &merged,
         )
-        .map_err(|e| {
-            BackendError::CompileError(format!(
-                "materialization failed: {}",
-                e
-            ))
-        })?;
-
-        let stats =
-            PlannerStats { coord_reads: 0 };
-
-        // Convert selection to grouped chunk plan
-        let grouped_plan =
-            selection_to_grouped_chunk_plan_unified_from_meta(
-                &selection, &meta,
-            )?;
-
-        Ok((grouped_plan, stats))
     }
 }
 
@@ -136,60 +330,20 @@ impl<
         (GroupedChunkPlan, PlannerStats),
         BackendError,
     > {
-        // Compile to lazy selection
         let meta = self.metadata().await?;
-        let legacy_meta = meta.planning_meta();
-        let (dims, dim_lengths) =
-            compute_dims_and_lengths_unified(
-                &meta,
-            );
-        let vars = legacy_meta.data_vars.clone();
-        let mut ctx = LazyCompileCtx::new(
-            &legacy_meta,
-            Some(&meta),
-            &dims,
-            &vars,
-        );
-        let lazy_selection =
-            compile_expr(expr, &mut ctx)?;
-
-        let (requests, immediate_cache) =
-            collect_requests_with_meta(
-                &lazy_selection,
-                &legacy_meta,
-                &dim_lengths,
-                &dims,
-            );
-
+        let (
+            lazy_selection,
+            requests,
+            immediate_cache,
+        ) = prepare_compile_inputs(&meta, expr)?;
         let resolved_cache =
             self.resolve_batch(requests).await;
-
-        let merged = MergedCache::new(
+        finish_compile_with_resolved_cache(
+            &lazy_selection,
+            &meta,
             &*resolved_cache,
             &immediate_cache,
-        );
-        let selection = materialize(
-            &lazy_selection,
-            &legacy_meta,
-            &merged,
         )
-        .map_err(|e| {
-            BackendError::CompileError(format!(
-                "materialization failed: {}",
-                e
-            ))
-        })?;
-
-        let stats =
-            PlannerStats { coord_reads: 0 };
-
-        // Convert selection to grouped chunk plan
-        let grouped_plan =
-            selection_to_grouped_chunk_plan_unified_from_meta(
-                &selection, &meta,
-            )?;
-
-        Ok((grouped_plan, stats))
     }
 }
 
@@ -206,23 +360,9 @@ impl<
     ) -> Box<dyn ResolutionCache + Send + Sync>
     {
         let mut cache = HashMapCache::new();
+        let by_dim =
+            group_requests_by_dimension(requests);
 
-        // Group requests by dimension
-        let mut by_dim: BTreeMap<
-            IStr,
-            Vec<(ResolutionRequest, ValueRange)>,
-        > = BTreeMap::new();
-        for req in requests {
-            by_dim
-                .entry(req.dim.clone())
-                .or_default()
-                .push((
-                    req.clone(),
-                    req.value_range.clone(),
-                ));
-        }
-
-        // Resolve each dimension
         for (dim, reqs) in by_dim {
             let results = self
                 .resolve_dimension(&dim, reqs)
@@ -251,23 +391,9 @@ impl<
         use rayon::prelude::*;
 
         let mut cache = HashMapCache::new();
+        let by_dim =
+            group_requests_by_dimension(requests);
 
-        // Group requests by dimension
-        let mut by_dim: BTreeMap<
-            IStr,
-            Vec<(ResolutionRequest, ValueRange)>,
-        > = BTreeMap::new();
-        for req in requests {
-            by_dim
-                .entry(req.dim.clone())
-                .or_default()
-                .push((
-                    req.clone(),
-                    req.value_range.clone(),
-                ));
-        }
-
-        // Resolve all dimensions in parallel
         let results: Vec<_> = by_dim
             .into_par_iter()
             .flat_map_iter(|(dim, reqs)| {
@@ -608,19 +734,9 @@ impl<
             None => return None,
         };
 
-        // Verify with sample points
-        // Note: samples must be sorted in ascending order!
-        let mut samples = [
-            0u64,
-            chunk_size
-                .saturating_sub(1)
-                .min(n - 1),
-            chunk_size.min(n - 1),
-            (n / 2).min(n - 1),
-            n - 1,
-        ];
-        samples.sort();
-
+        let samples = monotonic_sample_indices(
+            n, chunk_size,
+        );
         let mut prev: Option<CoordScalar> = None;
         for &i in &samples {
             let v = self
@@ -630,25 +746,10 @@ impl<
                 )
                 .await?;
             if let Some(p) = &prev {
-                let ord = p.partial_cmp(&v);
-                let ok = match (dir, ord) {
-                    (
-                        Ord::Less,
-                        Some(
-                            Ord::Less
-                            | Ord::Equal,
-                        ),
-                    ) => true,
-                    (
-                        Ord::Greater,
-                        Some(
-                            Ord::Greater
-                            | Ord::Equal,
-                        ),
-                    ) => true,
-                    _ => false,
-                };
-                if !ok {
+                if !monotonic_ord_matches(
+                    dir,
+                    p.partial_cmp(&v),
+                ) {
                     return None;
                 }
             }
@@ -682,33 +783,10 @@ impl<
                 )
                 .await?;
             let cmp = v.partial_cmp(target);
-
-            let go_left = match (dir, strict, cmp)
-            {
-                (
-                    Ord::Less | Ord::Equal,
-                    false,
-                    Some(
-                        Ord::Greater | Ord::Equal,
-                    ),
-                ) => true,
-                (
-                    Ord::Less,
-                    true,
-                    Some(Ord::Greater),
-                ) => true,
-                (
-                    Ord::Greater | Ord::Equal,
-                    false,
-                    Some(Ord::Less | Ord::Equal),
-                ) => true,
-                (
-                    Ord::Greater,
-                    true,
-                    Some(Ord::Less),
-                ) => true,
-                _ => false,
-            };
+            let go_left =
+                lower_bound_should_go_left(
+                    dir, strict, cmp,
+                );
 
             if go_left {
                 hi = mid;
@@ -744,37 +822,10 @@ impl<
                 )
                 .await?;
             let cmp = v.partial_cmp(target);
-
             let go_right =
-                match (dir, strict, cmp) {
-                    (
-                        Ord::Less,
-                        false,
-                        Some(
-                            Ord::Less
-                            | Ord::Equal,
-                        ),
-                    ) => true,
-                    (
-                        Ord::Less,
-                        true,
-                        Some(Ord::Less),
-                    ) => true,
-                    (
-                        Ord::Greater,
-                        false,
-                        Some(
-                            Ord::Greater
-                            | Ord::Equal,
-                        ),
-                    ) => true,
-                    (
-                        Ord::Greater,
-                        true,
-                        Some(Ord::Greater),
-                    ) => true,
-                    _ => false,
-                };
+                upper_bound_should_go_right(
+                    dir, strict, cmp,
+                );
 
             if go_right {
                 lo = mid + 1;
@@ -798,83 +849,72 @@ impl<
         >,
     ) -> Option<std::ops::Range<u64>> {
         if let Some(vr) = vr {
-            let mut start = 0;
-            let mut end = n;
-            match vr {
-                ValueRangePresent::Eq(eq) => {
-                    start = self
-                        .lower_bound(
-                            dim, &eq, false, dir,
-                            n, chunk_size,
-                            time_enc,
-                        )
-                        .await?;
-                    end = self
-                        .upper_bound(
-                            dim, &eq, false, dir,
-                            n, chunk_size,
-                            time_enc,
-                        )
-                        .await?;
-                }
-                ValueRangePresent::Min(min) => {
-                    start = self
-                        .lower_bound(
-                            dim,
-                            &min.get_scalar(),
-                            min.is_exclusive(),
-                            dir,
-                            n,
-                            chunk_size,
-                            time_enc,
-                        )
-                        .await?;
-                }
-                ValueRangePresent::Max(max) => {
-                    end = self
-                        .upper_bound(
-                            dim,
-                            &max.get_scalar(),
-                            max.is_exclusive(),
-                            dir,
-                            n,
-                            chunk_size,
-                            time_enc,
-                        )
-                        .await?;
-                }
+            let (start, end) = match vr {
+                ValueRangePresent::Eq(eq) => (
+                    self.lower_bound(
+                        dim, eq, false, dir, n,
+                        chunk_size, time_enc,
+                    )
+                    .await?,
+                    self.upper_bound(
+                        dim, eq, false, dir, n,
+                        chunk_size, time_enc,
+                    )
+                    .await?,
+                ),
+                ValueRangePresent::Min(min) => (
+                    self.lower_bound(
+                        dim,
+                        &min.get_scalar(),
+                        min.is_exclusive(),
+                        dir,
+                        n,
+                        chunk_size,
+                        time_enc,
+                    )
+                    .await?,
+                    n,
+                ),
+                ValueRangePresent::Max(max) => (
+                    0,
+                    self.upper_bound(
+                        dim,
+                        &max.get_scalar(),
+                        max.is_exclusive(),
+                        dir,
+                        n,
+                        chunk_size,
+                        time_enc,
+                    )
+                    .await?,
+                ),
                 ValueRangePresent::Segment(
                     start_bound,
                     end_bound,
-                ) => {
-                    start = self
-                        .lower_bound(
-                            dim,
-                            &start_bound
-                                .get_scalar(),
-                            start_bound
-                                .is_exclusive(),
-                            dir,
-                            n,
-                            chunk_size,
-                            time_enc,
-                        )
-                        .await?;
-                    end = self
-                        .upper_bound(
-                            dim,
-                            &end_bound
-                                .get_scalar(),
-                            end_bound
-                                .is_exclusive(),
-                            dir,
-                            n,
-                            chunk_size,
-                            time_enc,
-                        )
-                        .await?;
-                }
-            }
+                ) => (
+                    self.lower_bound(
+                        dim,
+                        &start_bound.get_scalar(),
+                        start_bound
+                            .is_exclusive(),
+                        dir,
+                        n,
+                        chunk_size,
+                        time_enc,
+                    )
+                    .await?,
+                    self.upper_bound(
+                        dim,
+                        &end_bound.get_scalar(),
+                        end_bound.is_exclusive(),
+                        dir,
+                        n,
+                        chunk_size,
+                        time_enc,
+                    )
+                    .await?,
+                ),
+            };
             Some(start..end)
         } else {
             None
@@ -1041,43 +1081,19 @@ impl<
             None => return None,
         };
 
-        // Verify with sample points
-        let mut samples = [
-            0u64,
-            chunk_size
-                .saturating_sub(1)
-                .min(n - 1),
-            chunk_size.min(n - 1),
-            (n / 2).min(n - 1),
-            n - 1,
-        ];
-        samples.sort();
-
+        let samples = monotonic_sample_indices(
+            n, chunk_size,
+        );
         let mut prev: Option<CoordScalar> = None;
         for &i in &samples {
             let v = self.scalar_at_sync(
                 dim, i, n, chunk_size, time_enc,
             )?;
             if let Some(p) = &prev {
-                let ord = p.partial_cmp(&v);
-                let ok = match (dir, ord) {
-                    (
-                        Ord::Less,
-                        Some(
-                            Ord::Less
-                            | Ord::Equal,
-                        ),
-                    ) => true,
-                    (
-                        Ord::Greater,
-                        Some(
-                            Ord::Greater
-                            | Ord::Equal,
-                        ),
-                    ) => true,
-                    _ => false,
-                };
-                if !ok {
+                if !monotonic_ord_matches(
+                    dir,
+                    p.partial_cmp(&v),
+                ) {
                     return None;
                 }
             }
@@ -1108,33 +1124,10 @@ impl<
                 dim, mid, n, chunk_size, time_enc,
             )?;
             let cmp = v.partial_cmp(target);
-
-            let go_left = match (dir, strict, cmp)
-            {
-                (
-                    Ord::Less | Ord::Equal,
-                    false,
-                    Some(
-                        Ord::Greater | Ord::Equal,
-                    ),
-                ) => true,
-                (
-                    Ord::Less,
-                    true,
-                    Some(Ord::Greater),
-                ) => true,
-                (
-                    Ord::Greater | Ord::Equal,
-                    false,
-                    Some(Ord::Less | Ord::Equal),
-                ) => true,
-                (
-                    Ord::Greater,
-                    true,
-                    Some(Ord::Less),
-                ) => true,
-                _ => false,
-            };
+            let go_left =
+                lower_bound_should_go_left(
+                    dir, strict, cmp,
+                );
 
             if go_left {
                 hi = mid;
@@ -1167,37 +1160,10 @@ impl<
                 dim, mid, n, chunk_size, time_enc,
             )?;
             let cmp = v.partial_cmp(target);
-
             let go_right =
-                match (dir, strict, cmp) {
-                    (
-                        Ord::Less | Ord::Equal,
-                        false,
-                        Some(
-                            Ord::Less
-                            | Ord::Equal,
-                        ),
-                    ) => true,
-                    (
-                        Ord::Less,
-                        true,
-                        Some(Ord::Less),
-                    ) => true,
-                    (
-                        Ord::Greater | Ord::Equal,
-                        false,
-                        Some(
-                            Ord::Greater
-                            | Ord::Equal,
-                        ),
-                    ) => true,
-                    (
-                        Ord::Greater,
-                        true,
-                        Some(Ord::Greater),
-                    ) => true,
-                    _ => false,
-                };
+                upper_bound_should_go_right(
+                    dir, strict, cmp,
+                );
 
             if go_right {
                 lo = mid + 1;
@@ -1221,116 +1187,26 @@ impl<
         >,
     ) -> Option<std::ops::Range<u64>> {
         if let Some(vr) = vr {
-            // Equality case
-            // if let Some(eq) = vr.equal_case() {
-            //     let start = self
-            //         .lower_bound_sync(
-            //             dim, &eq, false, dir, n,
-            //             chunk_size, time_enc,
-            //         )?;
-            //     let end = self.upper_bound_sync(
-            //         dim, &eq, false, dir, n,
-            //         chunk_size, time_enc,
-            //     )?;
-            //     return Some(start..end);
-            // }
-
-            // let start = if let Some((v, bk)) =
-            //     vr.to_min_case()
-            // {
-            //     let strict =
-            //         bk == BoundKind::Exclusive;
-            //     self.lower_bound_sync(
-            //         dim, &v, strict, dir, n,
-            //         chunk_size, time_enc,
-            //     )?
-            // } else {
-            //     0
-            // };
-
-            // let end_exclusive =
-            //     if let Some((v, bk)) =
-            //         vr.to_max_case()
-            //     {
-            //         let strict = bk
-            //             == BoundKind::Exclusive;
-            //         self.upper_bound_sync(
-            //             dim, &v, strict, dir, n,
-            //             chunk_size, time_enc,
-            //         )?
-            //     } else {
-            //         n
-            //     };
-
-            let mut start = 0;
-            let mut end = n;
-            match vr {
-                ValueRangePresent::Eq(eq) => {
-                    start = self
-                        .lower_bound_sync(
-                            dim, &eq, false, dir,
-                            n, chunk_size,
-                            time_enc,
-                        )?;
-                    end = self.upper_bound_sync(
-                        dim, &eq, false, dir, n,
+            let lower =
+                |t: &CoordScalar, s: bool| {
+                    self.lower_bound_sync(
+                        dim, t, s, dir, n,
                         chunk_size, time_enc,
-                    )?;
-                }
-                ValueRangePresent::Min(min) => {
-                    start = self
-                        .lower_bound_sync(
-                            dim,
-                            &min.get_scalar(),
-                            min.is_exclusive(),
-                            dir,
-                            n,
-                            chunk_size,
-                            time_enc,
-                        )?;
-                }
-                ValueRangePresent::Max(max) => {
-                    end = self.upper_bound_sync(
-                        dim,
-                        &max.get_scalar(),
-                        max.is_exclusive(),
-                        dir,
-                        n,
-                        chunk_size,
-                        time_enc,
-                    )?;
-                }
-                ValueRangePresent::Segment(
-                    start_bound,
-                    end_bound,
-                ) => {
-                    start = self
-                        .lower_bound_sync(
-                            dim,
-                            &start_bound
-                                .get_scalar(),
-                            start_bound
-                                .is_exclusive(),
-                            dir,
-                            n,
-                            chunk_size,
-                            time_enc,
-                        )?;
-                    end = self.upper_bound_sync(
-                        dim,
-                        &end_bound.get_scalar(),
-                        end_bound.is_exclusive(),
-                        dir,
-                        n,
-                        chunk_size,
-                        time_enc,
-                    )?;
-                }
-            }
-
-            Some(start..end)
+                    )
+                };
+            let upper =
+                |t: &CoordScalar, s: bool| {
+                    self.upper_bound_sync(
+                        dim, t, s, dir, n,
+                        chunk_size, time_enc,
+                    )
+                };
+            compute_bounds_from_value_range(
+                vr, n, lower, upper,
+            )
+            .map(|(s, e)| s..e)
         } else {
-            return Some(0..0);
+            Some(0..0)
         }
     }
 }

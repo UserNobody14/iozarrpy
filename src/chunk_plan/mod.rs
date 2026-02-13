@@ -18,6 +18,7 @@ pub(crate) use exprs::compile_expr;
 pub(crate) use indexing::SyncCoordResolver;
 pub(crate) use indexing::AsyncCoordResolver;
 pub(crate) use indexing::GroupedChunkPlan;
+pub(crate) use indexing::lazy_selection::LazyDatasetSelection;
 pub(crate) use chunk_plan::indexing::resolver_traits::HashMapCache;
 pub(crate) use indexing::lazy_materialize::{
     MergedCache, collect_requests_with_meta,
