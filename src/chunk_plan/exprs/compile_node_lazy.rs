@@ -18,6 +18,7 @@ use super::literals::{
     reverse_operator, strip_wrappers,
 };
 use super::{Emptyable, SetOperations};
+use crate::chunk_plan::exprs::expr_utils::all_for_referenced_vars_lazy;
 use crate::chunk_plan::indexing::lazy_selection::{
     LazyArraySelection, LazyDatasetSelection as Sel,
     LazyDimConstraint, LazyHyperRectangle,
@@ -510,22 +511,6 @@ pub(crate) fn compile_expr(
     }
 }
 
-/// Returns a Sel for the variables referenced in an expression.
-fn all_for_referenced_vars_lazy(
-    expr: &Expr,
-    ctx: &LazyCompileCtx<'_>,
-) -> Sel {
-    let mut refs = Vec::new();
-    collect_column_refs(expr, &mut refs);
-    refs.sort();
-    refs.dedup();
-    if refs.is_empty() {
-        Sel::NoSelectionMade
-    } else {
-        lazy_dataset_all_for_vars(refs, ctx.meta)
-    }
-}
-
 /// Compile a comparison to a lazy selection.
 fn compile_cmp_to_lazy_selection(
     col: &IStr,
@@ -538,16 +523,8 @@ fn compile_cmp_to_lazy_selection(
         .arrays
         .get(&col.istr())
         .and_then(|a| a.time_encoding.as_ref());
-    let Some(scalar) =
-        literal_to_scalar(lit, time_encoding)
-    else {
-        return Err(BackendError::UnsupportedPolarsExpression(
-            format!(
-                "unsupported literal: {:?}",
-                lit
-            ),
-        ));
-    };
+    let scalar =
+        literal_to_scalar(lit, time_encoding)?;
 
     let vr = ValueRangePresent::from_polars_op(
         op, scalar,
@@ -637,16 +614,8 @@ fn compile_struct_field_cmp(
 
     let time_encoding = arr_meta
         .and_then(|a| a.time_encoding.as_ref());
-    let Some(scalar) =
-        literal_to_scalar(lit, time_encoding)
-    else {
-        return Err(BackendError::UnsupportedPolarsExpression(
-            format!(
-                "unsupported literal: {:?}",
-                lit
-            ),
-        ));
-    };
+    let scalar =
+        literal_to_scalar(lit, time_encoding)?;
 
     let vr = ValueRangePresent::from_polars_op(
         op, scalar,
@@ -913,8 +882,13 @@ fn compile_is_in_lazy(
             match av {
                 AnyValue::List(series) => {
                     if series.len() > 4096 {
-                        return Ok(
-                            Sel::NoSelectionMade,
+                        return Err(
+                            BackendError::CompileError(
+                                format!(
+                                    "list literal is too long: {:?}",
+                                    series
+                                )
+                            )
                         );
                     }
                     (
@@ -929,8 +903,13 @@ fn compile_is_in_lazy(
                 }
                 AnyValue::Array(series, _) => {
                     if series.len() > 4096 {
-                        return Ok(
-                            Sel::NoSelectionMade,
+                        return Err(
+                            BackendError::CompileError(
+                                format!(
+                                    "array literal is too long: {:?}",
+                                    series
+                                )
+                            )
                         );
                     }
                     (
@@ -1127,7 +1106,7 @@ fn compile_selector_lazy(
 /// we need both indices. This is done by creating per-point constraints.
 fn interpolate_selection_nd_lazy(
     source_coords: &Expr,
-    _source_values: &Expr,
+    source_values: &Expr,
     target_values: &Expr,
     ctx: &mut LazyCompileCtx<'_>,
 ) -> LazyResult {
@@ -1157,10 +1136,7 @@ fn interpolate_selection_nd_lazy(
         target_sc.fields_as_series();
 
     // For each dimension, collect all the target values
-    let mut dim_values: std::collections::BTreeMap<
-        IStr,
-        Vec<CoordScalar>,
-    > = std::collections::BTreeMap::new();
+    let mut dim_values: std::collections::BTreeMap<IStr, Vec<CoordScalar>> = std::collections::BTreeMap::new();
 
     for name in &coord_names {
         // Only constrain actual dataset dimensions
@@ -1193,10 +1169,7 @@ fn interpolate_selection_nd_lazy(
 
     // For each dimension, create interpolation constraints for each unique target value.
     // Each target value needs bracketing (the indices on both sides).
-    let mut constraints: std::collections::BTreeMap<
-        IStr,
-        LazyDimConstraint,
-    > = std::collections::BTreeMap::new();
+    let mut constraints: std::collections::BTreeMap<IStr, LazyDimConstraint> = std::collections::BTreeMap::new();
 
     for (dim_name, values) in dim_values {
         // Create per-point interpolation constraints.
@@ -1216,8 +1189,60 @@ fn interpolate_selection_nd_lazy(
     );
     let sel =
         LazyArraySelection::from_rectangle(rect);
+
+    // Here, use source_values for the list of variables we want to retrieve
+    // This is typically an Expr::Field containing variable names
+    // May be an as_struct("var_a, var_b, var_c")
+    let retrieve_vars = match source_values {
+        Expr::Function { input, function } => {
+            match function {
+                FunctionExpr::AsStruct => input
+                    .clone()
+                    .iter()
+                    .map(|n| -> Result<IStr, BackendError> {
+                        let Expr::Column(name) = strip_wrappers(n) else {
+                            return Err(
+                                BackendError::CompileError(
+                                    format!(
+                                        "source_values must be an Expr::Function with FunctionExpr::AsStruct containing variable names: {:?}",
+                                        source_values
+                                    ),
+                                ),
+                            );
+                        };
+                        Ok(name.istr())
+                    })
+                    .collect::<Result<Vec<IStr>, BackendError>>()?,
+                _ => {
+                    return Err(
+                        BackendError::CompileError(
+                            format!(
+                                "source_values must be an Expr::Function with FunctionExpr::AsStruct containing variable names: {:?}",
+                                source_values
+                            ),
+                        ),
+                    );
+                }
+            }
+        }
+        Expr::Field(names) => names
+            .iter()
+            .map(|n| n.istr())
+            .collect::<Vec<_>>(),
+        _ => {
+            return Err(
+                BackendError::CompileError(
+                    format!(
+                        "source_values must be an Expr::Field containing variable names: {:?}",
+                        source_values
+                    ),
+                ),
+            );
+        }
+    };
+
     Ok(lazy_dataset_for_vars_with_selection(
-        ctx.vars.iter().cloned(),
+        retrieve_vars,
         ctx.meta,
         sel,
     ))
