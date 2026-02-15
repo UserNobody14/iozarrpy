@@ -14,7 +14,6 @@ use polars::prelude::Expr;
 use crate::PlannerStats;
 use crate::chunk_plan::GroupedChunkPlan;
 use crate::chunk_plan::SyncCoordResolver;
-use crate::chunk_plan::ValueRangePresent;
 use crate::chunk_plan::compile_expr;
 use crate::chunk_plan::selection_to_grouped_chunk_plan_unified_from_meta;
 use crate::chunk_plan::{
@@ -138,53 +137,6 @@ fn monotonic_ord_matches(
         ) => true,
         _ => false,
     }
-}
-
-/// Compute (start, end) bounds from a ValueRangePresent using provided lower/upper bound functions.
-fn compute_bounds_from_value_range<FL, FU>(
-    vr: &ValueRangePresent,
-    n: u64,
-    lower: FL,
-    upper: FU,
-) -> Option<(u64, u64)>
-where
-    FL: Fn(&CoordScalar, bool) -> Option<u64>,
-    FU: Fn(&CoordScalar, bool) -> Option<u64>,
-{
-    let mut start = 0u64;
-    let mut end = n;
-    match vr {
-        ValueRangePresent::Eq(eq) => {
-            start = lower(eq, false)?;
-            end = upper(eq, false)?;
-        }
-        ValueRangePresent::Min(min) => {
-            start = lower(
-                &min.get_scalar(),
-                min.is_exclusive(),
-            )?;
-        }
-        ValueRangePresent::Max(max) => {
-            end = upper(
-                &max.get_scalar(),
-                max.is_exclusive(),
-            )?;
-        }
-        ValueRangePresent::Segment(
-            start_bound,
-            end_bound,
-        ) => {
-            start = lower(
-                &start_bound.get_scalar(),
-                start_bound.is_exclusive(),
-            )?;
-            end = upper(
-                &end_bound.get_scalar(),
-                end_bound.is_exclusive(),
-            )?;
-        }
-    }
-    Some((start, end))
 }
 
 /// Prepare compilation inputs: compile expr to lazy selection and collect resolution requests.
@@ -848,77 +800,43 @@ impl<
             &crate::meta::TimeEncoding,
         >,
     ) -> Option<std::ops::Range<u64>> {
-        if let Some(vr) = vr {
-            let (start, end) = match vr {
-                ValueRangePresent::Eq(eq) => (
-                    self.lower_bound(
-                        dim, eq, false, dir, n,
-                        chunk_size, time_enc,
-                    )
-                    .await?,
-                    self.upper_bound(
-                        dim, eq, false, dir, n,
-                        chunk_size, time_enc,
-                    )
-                    .await?,
-                ),
-                ValueRangePresent::Min(min) => (
-                    self.lower_bound(
-                        dim,
-                        &min.get_scalar(),
-                        min.is_exclusive(),
-                        dir,
-                        n,
-                        chunk_size,
-                        time_enc,
-                    )
-                    .await?,
-                    n,
-                ),
-                ValueRangePresent::Max(max) => (
-                    0,
-                    self.upper_bound(
-                        dim,
-                        &max.get_scalar(),
-                        max.is_exclusive(),
-                        dir,
-                        n,
-                        chunk_size,
-                        time_enc,
-                    )
-                    .await?,
-                ),
-                ValueRangePresent::Segment(
-                    start_bound,
-                    end_bound,
-                ) => (
-                    self.lower_bound(
-                        dim,
-                        &start_bound.get_scalar(),
-                        start_bound
-                            .is_exclusive(),
-                        dir,
-                        n,
-                        chunk_size,
-                        time_enc,
-                    )
-                    .await?,
-                    self.upper_bound(
-                        dim,
-                        &end_bound.get_scalar(),
-                        end_bound.is_exclusive(),
-                        dir,
-                        n,
-                        chunk_size,
-                        time_enc,
-                    )
-                    .await?,
-                ),
-            };
-            Some(start..end)
-        } else {
-            None
-        }
+        use std::ops::Bound;
+        let vr = vr.as_ref()?;
+        let start = match &vr.0 {
+            Bound::Included(s) => {
+                self.lower_bound(
+                    dim, s, false, dir, n,
+                    chunk_size, time_enc,
+                )
+                .await?
+            }
+            Bound::Excluded(s) => {
+                self.lower_bound(
+                    dim, s, true, dir, n,
+                    chunk_size, time_enc,
+                )
+                .await?
+            }
+            Bound::Unbounded => 0,
+        };
+        let end = match &vr.1 {
+            Bound::Included(s) => {
+                self.upper_bound(
+                    dim, s, false, dir, n,
+                    chunk_size, time_enc,
+                )
+                .await?
+            }
+            Bound::Excluded(s) => {
+                self.upper_bound(
+                    dim, s, true, dir, n,
+                    chunk_size, time_enc,
+                )
+                .await?
+            }
+            Bound::Unbounded => n,
+        };
+        Some(start..end)
     }
 }
 
@@ -1187,20 +1105,33 @@ impl<
         >,
     ) -> Option<std::ops::Range<u64>> {
         if let Some(vr) = vr {
-            let lower =
-                |t: &CoordScalar, s: bool| {
+            use crate::chunk_plan::HasCoordBound;
+            let lower = |b: &CoordBound| {
+                b.get_scalar().and_then(|t| {
                     self.lower_bound_sync(
-                        dim, t, s, dir, n,
-                        chunk_size, time_enc,
+                        dim,
+                        &t,
+                        b.is_exclusive(),
+                        dir,
+                        n,
+                        chunk_size,
+                        time_enc,
                     )
-                };
-            let upper =
-                |t: &CoordScalar, s: bool| {
+                })
+            };
+            let upper = |b: &CoordBound| {
+                b.get_scalar().and_then(|t| {
                     self.upper_bound_sync(
-                        dim, t, s, dir, n,
-                        chunk_size, time_enc,
+                        dim,
+                        &t,
+                        b.is_exclusive(),
+                        dir,
+                        n,
+                        chunk_size,
+                        time_enc,
                     )
-                };
+                })
+            };
             compute_bounds_from_value_range(
                 vr, n, lower, upper,
             )

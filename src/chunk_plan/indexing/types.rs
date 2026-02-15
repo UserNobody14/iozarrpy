@@ -1,4 +1,5 @@
 use std::hash::{Hash, Hasher};
+use std::ops::{Bound, RangeBounds};
 
 use smallvec::SmallVec;
 
@@ -73,14 +74,6 @@ impl From<&[IStr]> for ChunkGridSignature {
 /// Type alias for backwards compatibility during transition.
 /// DimSignature is now ChunkGridSignature (with optional chunk_shape).
 pub type DimSignature = ChunkGridSignature;
-
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Hash,
-)]
-pub(crate) enum BoundKind {
-    Inclusive,
-    Exclusive,
-}
 
 #[derive(Debug, Clone)]
 pub(crate) enum CoordScalar {
@@ -219,317 +212,266 @@ impl PartialOrd for CoordScalar {
     }
 }
 
+pub(crate) type CoordBound = Bound<CoordScalar>;
+
+/// A value-space range constraint, stored as a (start, end) pair of `Bound`s.
+///
+/// Implements `RangeBounds<CoordScalar>` and can be constructed from any
+/// standard Rust range type (`Range`, `RangeFrom`, `RangeToInclusive`, etc.).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub(crate) struct Bound {
-    scalar: CoordScalar,
-    kind: BoundKind,
+pub(crate) struct ValueRangePresent(
+    pub(crate) CoordBound,
+    pub(crate) CoordBound,
+);
+
+impl RangeBounds<CoordScalar>
+    for ValueRangePresent
+{
+    fn start_bound(&self) -> Bound<&CoordScalar> {
+        self.0.as_ref()
+    }
+    fn end_bound(&self) -> Bound<&CoordScalar> {
+        self.1.as_ref()
+    }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub(crate) enum ValueRangePresent {
-    Eq(CoordScalar),
-    Min(Bound),
-    Max(Bound),
-    Segment(Bound, Bound),
+impl From<std::ops::Range<CoordScalar>>
+    for ValueRangePresent
+{
+    fn from(
+        r: std::ops::Range<CoordScalar>,
+    ) -> Self {
+        Self(
+            Bound::Included(r.start),
+            Bound::Excluded(r.end),
+        )
+    }
 }
 
-impl Bound {
-    pub(crate) fn new(
-        scalar: CoordScalar,
-        kind: BoundKind,
+impl From<std::ops::RangeInclusive<CoordScalar>>
+    for ValueRangePresent
+{
+    fn from(
+        r: std::ops::RangeInclusive<CoordScalar>,
     ) -> Self {
-        Self { scalar, kind }
+        let (start, end) = r.into_inner();
+        Self(
+            Bound::Included(start),
+            Bound::Included(end),
+        )
     }
+}
 
-    pub(crate) fn exclusive(
-        scalar: CoordScalar,
+impl From<std::ops::RangeFrom<CoordScalar>>
+    for ValueRangePresent
+{
+    fn from(
+        r: std::ops::RangeFrom<CoordScalar>,
     ) -> Self {
-        Self {
-            scalar,
-            kind: BoundKind::Exclusive,
+        Self(
+            Bound::Included(r.start),
+            Bound::Unbounded,
+        )
+    }
+}
+
+impl From<std::ops::RangeTo<CoordScalar>>
+    for ValueRangePresent
+{
+    fn from(
+        r: std::ops::RangeTo<CoordScalar>,
+    ) -> Self {
+        Self(
+            Bound::Unbounded,
+            Bound::Excluded(r.end),
+        )
+    }
+}
+
+impl From<std::ops::RangeToInclusive<CoordScalar>>
+    for ValueRangePresent
+{
+    fn from(
+        r: std::ops::RangeToInclusive<
+            CoordScalar,
+        >,
+    ) -> Self {
+        Self(
+            Bound::Unbounded,
+            Bound::Included(r.end),
+        )
+    }
+}
+
+impl From<std::ops::RangeFull>
+    for ValueRangePresent
+{
+    fn from(_: std::ops::RangeFull) -> Self {
+        Self(Bound::Unbounded, Bound::Unbounded)
+    }
+}
+
+impl From<(CoordBound, CoordBound)>
+    for ValueRangePresent
+{
+    fn from(
+        (start, end): (CoordBound, CoordBound),
+    ) -> Self {
+        Self(start, end)
+    }
+}
+
+pub(crate) trait HasCoordBound {
+    fn get_scalar(&self) -> Option<CoordScalar>;
+    fn is_exclusive(&self) -> bool;
+}
+
+impl HasCoordBound for CoordBound {
+    fn get_scalar(&self) -> Option<CoordScalar> {
+        match self {
+            CoordBound::Included(scalar) => {
+                Some(scalar.clone())
+            }
+            CoordBound::Excluded(scalar) => {
+                Some(scalar.clone())
+            }
+            CoordBound::Unbounded => None,
         }
     }
 
-    pub(crate) fn inclusive(
-        scalar: CoordScalar,
-    ) -> Self {
-        Self {
-            scalar,
-            kind: BoundKind::Inclusive,
+    fn is_exclusive(&self) -> bool {
+        match self {
+            CoordBound::Included(_) => false,
+            CoordBound::Excluded(_) => true,
+            CoordBound::Unbounded => false,
         }
-    }
-
-    pub(crate) fn cmp(
-        &self,
-        value: CoordScalar,
-        ord: std::cmp::Ordering,
-    ) -> bool {
-        match (self.kind, ord) {
-            (
-                BoundKind::Inclusive,
-                std::cmp::Ordering::Less,
-            ) => self.scalar <= value,
-            (
-                BoundKind::Exclusive,
-                std::cmp::Ordering::Less,
-            ) => self.scalar < value,
-            (
-                BoundKind::Inclusive,
-                std::cmp::Ordering::Greater,
-            ) => self.scalar > value,
-            (
-                BoundKind::Exclusive,
-                std::cmp::Ordering::Greater,
-            ) => self.scalar >= value,
-            (
-                BoundKind::Inclusive,
-                std::cmp::Ordering::Equal,
-            ) => self.scalar == value,
-            (
-                BoundKind::Exclusive,
-                std::cmp::Ordering::Equal,
-            ) => self.scalar != value,
-        }
-    }
-
-    pub(crate) fn get_scalar(&self) -> CoordScalar {
-        self.scalar.clone()
-    }
-
-    pub(crate) fn is_exclusive(&self) -> bool {
-        self.kind == BoundKind::Exclusive
     }
 }
 
 impl ValueRangePresent {
+    /// Point equality: `value == eq`.
     pub(crate) fn from_equal_case(
         eq: CoordScalar,
     ) -> Self {
-        Self::Eq(eq)
+        Self(
+            Bound::Included(eq.clone()),
+            Bound::Included(eq),
+        )
     }
 
+    /// Build from optional start/end bounds.
+    /// Returns `None` only when both bounds are `None`
+    /// (i.e. no constraint could be determined).
     pub(crate) fn from_option_bounds(
-        min: Option<Bound>,
-        max: Option<Bound>,
+        min: Option<CoordBound>,
+        max: Option<CoordBound>,
     ) -> Option<Self> {
         match (min, max) {
             (Some(min), Some(max)) => {
-                Some(Self::Segment(min, max))
+                Some(Self(min, max))
             }
             (Some(min), None) => {
-                Some(Self::Min(min))
+                Some(Self(min, Bound::Unbounded))
             }
             (None, Some(max)) => {
-                Some(Self::Max(max))
+                Some(Self(Bound::Unbounded, max))
             }
             (None, None) => None,
         }
     }
 
     pub(crate) fn from_min_exclusive(
-        min: CoordScalar
+        min: CoordScalar,
     ) -> Self {
-        Self::Min(Bound::exclusive(min))
+        Self(
+            Bound::Excluded(min),
+            Bound::Unbounded,
+        )
     }
 
     pub(crate) fn from_max_exclusive(
         max: CoordScalar,
     ) -> Self {
-        Self::Max(Bound::exclusive(max))
+        Self(
+            Bound::Unbounded,
+            Bound::Excluded(max),
+        )
     }
 
     pub(crate) fn from_min_inclusive(
         min: CoordScalar,
     ) -> Self {
-        Self::Min(Bound::inclusive(min))
+        Self(
+            Bound::Included(min),
+            Bound::Unbounded,
+        )
     }
 
     pub(crate) fn from_max_inclusive(
         max: CoordScalar,
     ) -> Self {
-        Self::Max(Bound::inclusive(max))
+        Self(
+            Bound::Unbounded,
+            Bound::Included(max),
+        )
     }
 
-
-    pub(crate) fn in_range(
-        &self,
-        value: CoordScalar,
-    ) -> bool {
-        match self {
-            Self::Eq(eq) => eq == &value,
-            Self::Min(min) => {
-                &value >= &min.scalar
-            }
-            Self::Max(max) => {
-                &value <= &max.scalar
-            }
-            Self::Segment(min, max) => {
-                min.cmp(
-                    value.clone(),
-                    std::cmp::Ordering::Less,
-                ) && max.cmp(
-                    value.clone(),
-                    std::cmp::Ordering::Greater,
-                )
-            }
-        }
-    }
-
+    /// Build from a Polars comparison operator + scalar.
     pub(crate) fn from_polars_op(
         op: Operator,
         scalar: CoordScalar,
     ) -> Option<Self> {
         match op {
             Operator::Eq => Some(
-                ValueRangePresent::from_equal_case(
-                    scalar,
-                ),
+                Self::from_equal_case(scalar),
             ),
             Operator::Gt => Some(
-                ValueRangePresent::from_min_exclusive(
-                    scalar,
-                ),
+                Self::from_min_exclusive(scalar),
             ),
             Operator::GtEq => Some(
-                ValueRangePresent::from_min_inclusive(
-                    scalar,
-                ),
+                Self::from_min_inclusive(scalar),
             ),
             Operator::Lt => Some(
-                ValueRangePresent::from_max_exclusive(
-                    scalar,
-                ),
+                Self::from_max_exclusive(scalar),
             ),
             Operator::LtEq => Some(
-                ValueRangePresent::from_max_inclusive(
-                    scalar,
-                ),
+                Self::from_max_inclusive(scalar),
             ),
             _ => None,
         }
     }
 
-
+    /// Convert to an index range for an integer-indexed dimension.
     pub(crate) fn index_range_for_index_dim(
         &self,
         dim_len_est: u64,
     ) -> Option<std::ops::Range<u64>> {
-        let to_i128 =
-            |v: &CoordScalar| -> Option<i128> {
-                match v {
-                    CoordScalar::I64(x) => {
-                        Some(*x as i128)
-                    }
-                    CoordScalar::U64(x) => {
-                        Some(*x as i128)
-                    }
-                    CoordScalar::F64(_)
-                    | CoordScalar::DatetimeNs(
-                        _,
-                    )
-                    | CoordScalar::DurationNs(
-                        _,
-                    ) => None,
-                }
-            };
+        let mut start = 0u64;
+        let mut end_exclusive = dim_len_est;
 
-        let clamp_u64 = |x: i128| -> u64 {
-            if x <= 0 {
-                0
-            } else if (x as u128)
-                >= (u64::MAX as u128)
-            {
-                u64::MAX
-            } else {
-                x as u64
+        match self.start_bound() {
+            Bound::Included(s)
+            | Bound::Excluded(s) => {
+                start =
+                    s.as_i128_orderable()? as u64;
             }
-        };
-
-        // Equality: [idx, idx+1)
-        if let Some(eq) = self.equal_case() {
-            let idx = to_i128(&eq)?;
-            if idx < 0 {
-                return Some(0..0);
-            }
-            let start =
-                clamp_u64(idx).min(dim_len_est);
-            let end_exclusive = start
-                .saturating_add(1)
-                .min(dim_len_est);
-            return Some(start..end_exclusive);
+            Bound::Unbounded => {}
         }
-
-        let start = if let Some((v, bk)) =
-            self.to_min_case()
-        {
-            let idx = to_i128(&v)?;
-            let idx = match bk {
-                BoundKind::Inclusive => idx,
-                BoundKind::Exclusive => {
-                    idx.saturating_add(1)
-                }
-            };
-            if idx < 0 {
-                0
-            } else {
-                clamp_u64(idx).min(dim_len_est)
+        match self.end_bound() {
+            Bound::Included(s) => {
+                let v =
+                    s.as_i128_orderable()? as u64;
+                end_exclusive = v
+                    .saturating_add(1)
+                    .min(dim_len_est);
             }
-        } else {
-            0
-        };
-
-        let end_exclusive = if let Some((v, bk)) =
-            self.to_max_case()
-        {
-            let idx = to_i128(&v)?;
-            let end = match bk {
-                BoundKind::Inclusive => {
-                    idx.saturating_add(1)
-                }
-                BoundKind::Exclusive => idx,
-            };
-            if end < 0 {
-                0
-            } else {
-                clamp_u64(end).min(dim_len_est)
+            Bound::Excluded(s) => {
+                end_exclusive =
+                    s.as_i128_orderable()? as u64;
             }
-        } else {
-            dim_len_est
-        };
-
+            Bound::Unbounded => {}
+        }
         Some(start..end_exclusive)
-    }
-
-    pub(crate) fn to_max_case(
-        &self,
-    ) -> Option<(CoordScalar, BoundKind)> {
-        match self {
-            Self::Max(max) => Some((
-                max.scalar.clone(),
-                max.kind,
-            )),
-            Self::Segment(start, end) => Some((
-                end.scalar.clone(),
-                end.kind,
-            )),
-            _ => None,
-        }
-    }
-
-    pub(crate) fn to_min_case(
-        &self,
-    ) -> Option<(CoordScalar, BoundKind)> {
-        match self {
-            Self::Min(min) => Some((
-                min.scalar.clone(),
-                min.kind,
-            )),
-            Self::Segment(start, end) => Some((
-                start.scalar.clone(),
-                start.kind,
-            )),
-            _ => None,
-        }
     }
 }
 pub(crate) type ValueRange =
@@ -544,121 +486,26 @@ pub(crate) trait HasIntersect:
     ) -> Option<Self>;
 }
 
-pub(crate) trait HasEqualCase {
-    fn equal_case(&self) -> Option<CoordScalar>;
-}
-
-impl HasEqualCase for ValueRangePresent {
-    fn equal_case(&self) -> Option<CoordScalar> {
-        if let Self::Eq(eq) = self {
-            return Some(eq.clone());
-        }
-        let min = self.to_min_case();
-        let max = self.to_max_case();
-        if let (
-            Some((min_v, min_k)),
-            Some((max_v, max_k)),
-        ) = (min, max)
-        {
-            if min_v == max_v
-                && matches!(
-                    min_k,
-                    BoundKind::Inclusive
-                )
-                && matches!(
-                    max_k,
-                    BoundKind::Inclusive
-                )
-            {
-                Some(min_v.clone())
-            } else {
-                None
-            }
-        } else {
-            None
-        }
-    }
-}
-
 impl HasIntersect for ValueRangePresent {
     fn intersect(
         &self,
         other_range: Option<Self>,
     ) -> Option<Self> {
-        if let Some(other) = other_range {
-            match (self, other) {
-                (Self::Eq(eq), other) => {
-                    if !other.in_range(eq.clone()) {
-                        return None;
-                    }
-                    Some(ValueRangePresent::from_equal_case(eq.clone()))
-                }
-                (eq_compare, Self::Eq(other_eq)) => {
-                    if !eq_compare.in_range(other_eq.clone()) {
-                        return None;
-                    }
-                    Some(ValueRangePresent::from_equal_case(other_eq))
-                }
-                // If both are Min, construct a segment with the tighter min and unbounded max
-                (Self::Min(min), Self::Min(other_min)) => {
-                    // Min case: pick the tighter (higher) min, and leave max unconstrained (None)
-                    let tighter_min = pick_tighter_min(
-                        Some((min.scalar.clone(), min.kind)),
-                        Some((other_min.scalar.clone(), other_min.kind)),
-                    ).map(|(v, k)| Bound::new(v, k));
-                    // No bound on max
-                    ValueRangePresent::from_option_bounds(tighter_min, None)
-                }
-                // If both are Max, the intersection is the tighter (lower) max, 
-                // but only if both are not unbounded on min (to avoid constructing an invalid segment).
-                (Self::Max(max), Self::Max(other_max)) => {
-                    // Max case: pick the tighter (lower) max, leave min unconstrained (None)
-                    let tighter_max = pick_tighter_max(
-                        Some((max.scalar.clone(), max.kind)),
-                        Some((other_max.scalar.clone(), other_max.kind)),
-                    ).map(|(v, k)| Bound::new(v, k));
-                    // If no max bound remains, the result is unbounded (possibly unexpected), but we return None to indicate empty
-                    if tighter_max.is_none() {
-                        None
-                    } else {
-                        ValueRangePresent::from_option_bounds(None, tighter_max)
-                    }
-                }
-                (Self::Segment(start, end), other) => {
-                    ValueRangePresent::from_option_bounds(
-                        pick_tighter_min(
-                            Some((start.scalar.clone(), start.kind)),
-                            other.to_min_case(),
-                        ).map(|(v, k)| Bound::new(v, k)),
-                        pick_tighter_max(
-                            Some((end.scalar.clone(), end.kind)),
-                            other.to_max_case(),
-                        ).map(|(v, k)| Bound::new(v, k)),
-                    )
-                }
-                (non_segment, Self::Segment(start, end)) => {
-                    ValueRangePresent::from_option_bounds(
-                        pick_tighter_min(non_segment.to_min_case(), Some((start.scalar.clone(), start.kind))).map(|(v, k)| Bound::new(v, k)),
-                        pick_tighter_max(non_segment.to_max_case(), Some((end.scalar.clone(), end.kind))).map(|(v, k)| Bound::new(v, k)),
-                    )
-                }
-                (Self::Min(min), Self::Max(max)) => {
-                    Some(ValueRangePresent::Segment(
-                        min.clone(),
-                        max.clone(),
-                    ))
-                }
-                (Self::Max(max), Self::Min(min)) => {
-                    ValueRangePresent::from_option_bounds(
-                        Some(Bound::new(min.scalar.clone(), min.kind)),
-                        Some(Bound::new(max.scalar.clone(), max.kind)),
-                    )
-                }
-                
-            }
-        } else {
-            Some(self.clone())
-        }
+        let Some(other) = other_range else {
+            return Some(self.clone());
+        };
+        // Intersect = tighter start × tighter end.
+        let new_start = pick_tighter_min_bound(
+            self.0.clone(),
+            other.0.clone(),
+        );
+        let new_end = pick_tighter_max_bound(
+            self.1.clone(),
+            other.1.clone(),
+        );
+        Self::from_option_bounds(
+            new_start, new_end,
+        )
     }
 }
 
@@ -672,12 +519,12 @@ impl HasIntersect for Option<ValueRangePresent> {
                 Some(Some(a.clone()))
             }
             (None, a) => a,
-            (Some(a), Some(b)) => {
-                match b {
-                    Some(b) => Some(a.intersect(Some(b.clone()))),
-                    None => Some(Some(a.clone())),
-                }
-            }
+            (Some(a), Some(b)) => match b {
+                Some(b) => Some(
+                    a.intersect(Some(b.clone())),
+                ),
+                None => Some(Some(a.clone())),
+            },
         }
     }
 }
@@ -699,108 +546,105 @@ impl HasIntersect
     }
 }
 
-
 fn pick_tighter_min_bound(
-    a: Bound,
-    b: Bound,
-) -> Option<Bound> {
-    match a.scalar.partial_cmp(&b.scalar) {
+    a: CoordBound,
+    b: CoordBound,
+) -> Option<CoordBound> {
+    let (a_scalar, a_excl) = match &a {
+        CoordBound::Included(s) => {
+            (s.clone(), false)
+        }
+        CoordBound::Excluded(s) => {
+            (s.clone(), true)
+        }
+        CoordBound::Unbounded => return Some(b),
+    };
+    let (b_scalar, b_excl) = match &b {
+        CoordBound::Included(s) => {
+            (s.clone(), false)
+        }
+        CoordBound::Excluded(s) => {
+            (s.clone(), true)
+        }
+        CoordBound::Unbounded => return Some(a),
+    };
+    match a_scalar.partial_cmp(&b_scalar) {
         Some(std::cmp::Ordering::Less) => Some(b),
-        Some(std::cmp::Ordering::Greater) => Some(a),
+        Some(std::cmp::Ordering::Greater) => {
+            Some(a)
+        }
         Some(std::cmp::Ordering::Equal) => {
-            if a.kind == BoundKind::Exclusive
-                || b.kind == BoundKind::Exclusive
-            {
-                Some(Bound::new(a.scalar.clone(), BoundKind::Exclusive))
+            let excl = a_excl || b_excl;
+            Some(if excl {
+                CoordBound::Excluded(a_scalar)
             } else {
-                Some(Bound::new(a.scalar.clone(), BoundKind::Inclusive))
-            }
-        },
+                CoordBound::Included(a_scalar)
+            })
+        }
         None => None,
     }
 }
 
 fn pick_tighter_max_bound(
-    a: Bound,
-    b: Bound,
-) -> Option<Bound> {
-    match a.scalar.partial_cmp(&b.scalar) {
+    a: CoordBound,
+    b: CoordBound,
+) -> Option<CoordBound> {
+    let (a_scalar, a_excl) = match &a {
+        CoordBound::Included(s) => {
+            (s.clone(), false)
+        }
+        CoordBound::Excluded(s) => {
+            (s.clone(), true)
+        }
+        CoordBound::Unbounded => return Some(b),
+    };
+    let (b_scalar, b_excl) = match &b {
+        CoordBound::Included(s) => {
+            (s.clone(), false)
+        }
+        CoordBound::Excluded(s) => {
+            (s.clone(), true)
+        }
+        CoordBound::Unbounded => return Some(a),
+    };
+    match a_scalar.partial_cmp(&b_scalar) {
         Some(std::cmp::Ordering::Less) => Some(a),
-        Some(std::cmp::Ordering::Greater) => Some(b),
+        Some(std::cmp::Ordering::Greater) => {
+            Some(b)
+        }
         Some(std::cmp::Ordering::Equal) => {
-            if a.kind == BoundKind::Exclusive
-                || b.kind == BoundKind::Exclusive
-            {
-                Some(Bound::new(a.scalar.clone(), BoundKind::Exclusive))
+            let excl = a_excl || b_excl;
+            Some(if excl {
+                CoordBound::Excluded(a_scalar)
             } else {
-                Some(Bound::new(a.scalar.clone(), BoundKind::Inclusive))
-            }
-        },
+                CoordBound::Included(a_scalar)
+            })
+        }
         None => None,
     }
 }
 
-
-
-
-fn pick_tighter_min(
-    a: Option<(CoordScalar, BoundKind)>,
-    b: Option<(CoordScalar, BoundKind)>,
-) -> Option<(CoordScalar, BoundKind)> {
-    match (a, b) {
-        (None, None) => None,
-        (Some(x), None) | (None, Some(x)) => Some(x),
-        (Some((av, ak)), Some((bv, bk))) => {
-            match av.partial_cmp(&bv) {
-                Some(std::cmp::Ordering::Less) => {
-                    Some((bv, bk))
-                }
-                Some(std::cmp::Ordering::Greater) => {
-                    Some((av, ak))
-                }
-                Some(std::cmp::Ordering::Equal) => Some((
-                    av,
-                    if ak == BoundKind::Exclusive
-                        || bk == BoundKind::Exclusive
-                    {
-                        BoundKind::Exclusive
-                    } else {
-                        BoundKind::Inclusive
-                    },
-                )),
-                None => None,
-            }
-        }
+/// Compute (start, end) bounds from a ValueRangePresent using provided lower/upper bound functions.
+pub(crate) fn compute_bounds_from_value_range<
+    FL,
+    FU,
+>(
+    vr: &ValueRangePresent,
+    n: u64,
+    lower: FL,
+    upper: FU,
+) -> Option<(u64, u64)>
+where
+    FL: Fn(&CoordBound) -> Option<u64>,
+    FU: Fn(&CoordBound) -> Option<u64>,
+{
+    let mut start = 0u64;
+    let mut end = n;
+    if !matches!(vr.0, Bound::Unbounded) {
+        start = lower(&vr.0)?;
     }
-}
-
-fn pick_tighter_max(
-    a: Option<(CoordScalar, BoundKind)>,
-    b: Option<(CoordScalar, BoundKind)>,
-) -> Option<(CoordScalar, BoundKind)> {
-    match (a, b) {
-        (None, None) => None,
-        (Some(x), None) | (None, Some(x)) => Some(x),
-        (Some((av, ak)), Some((bv, bk))) => {
-            match av.partial_cmp(&bv) {
-                Some(std::cmp::Ordering::Less) => {
-                    Some((av, ak))
-                }
-                Some(std::cmp::Ordering::Greater) => {
-                    Some((bv, bk))
-                }
-                Some(std::cmp::Ordering::Equal) => Some((
-                    av,
-                    if ak == BoundKind::Exclusive
-                        || bk == BoundKind::Exclusive
-                    {
-                        BoundKind::Exclusive
-                    } else {
-                        BoundKind::Inclusive
-                    },
-                )),
-                None => None,
-            }
-        }
+    if !matches!(vr.1, Bound::Unbounded) {
+        end = upper(&vr.1)?;
     }
+    Some((start, end))
 }

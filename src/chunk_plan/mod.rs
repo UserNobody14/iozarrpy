@@ -29,9 +29,10 @@ pub(crate) use indexing::resolver_traits::ResolutionRequest;
 pub(crate) use indexing::resolver_traits::ResolutionCache;
 pub(crate) use indexing::types::ChunkGridSignature;
 pub(crate) use indexing::types::{
-    ValueRange, HasEqualCase,
+    CoordBound, HasCoordBound, ValueRange,
 };
 pub(crate) use indexing::types::CoordScalar;
 pub(crate) use indexing::types::ValueRangePresent;
+pub(crate) use indexing::types::compute_bounds_from_value_range;
 pub(crate) use exprs::apply_time_encoding;
 use crate::chunk_plan;
