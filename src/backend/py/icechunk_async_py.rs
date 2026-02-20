@@ -19,6 +19,7 @@ use zarrs::array::Array;
 use crate::backend::implementation::{
     FullyCachedIcechunkBackendAsync,
     IcechunkBackendAsync,
+    IcechunkIterator,
     to_fully_cached_icechunk_async,
 };
 use crate::meta::ZarrMeta;
@@ -305,6 +306,53 @@ impl PyIcechunkBackend {
                     .unbind())
             })
         })
+    }
+
+    /// Streaming scan the Icechunk store and return an iterator over DataFrames.
+    ///
+    /// Blocks on async I/O internally, using tokio concurrency for chunk reads.
+    /// Enables memory-efficient streaming when scanning time-chunked data
+    /// (e.g., a single point across a year).
+    ///
+    /// # Arguments
+    /// * `predicate` - Polars expression for filtering
+    /// * `with_columns` - Optional list of columns to include
+    /// * `max_chunks_to_read` - Maximum number of chunks to read (safety limit)
+    /// * `n_rows` - Number of rows to read total
+    /// * `batch_size` - Batch size for reading
+    /// * `max_concurrency` - Maximum concurrent chunk reads per batch
+    #[pyo3(signature = (predicate=None, with_columns=None, max_chunks_to_read=None, n_rows=None, batch_size=None, max_concurrency=None))]
+    fn scan_zarr_streaming_sync<'py>(
+        &self,
+        py: Python<'py>,
+        predicate: Option<&Bound<'_, PyAny>>,
+        with_columns: Option<Vec<String>>,
+        max_chunks_to_read: Option<usize>,
+        n_rows: Option<usize>,
+        batch_size: Option<usize>,
+        max_concurrency: Option<usize>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        use polars::prelude::lit;
+        use pyo3::IntoPyObjectExt;
+
+        let prd = if let Some(predicate) = predicate {
+            extract_expr(predicate)?
+        } else {
+            lit(true)
+        };
+        let with_cols_set: Option<BTreeSet<IStr>> =
+            with_columns.map(|cols| cols.into_iter().map(|c| c.istr()).collect());
+
+        IcechunkIterator::new(
+            self.inner.clone(),
+            prd,
+            with_cols_set,
+            max_chunks_to_read,
+            n_rows,
+            batch_size,
+            max_concurrency,
+        )?
+        .into_bound_py_any(py)
     }
 
     /// Get the schema for the zarr dataset.
