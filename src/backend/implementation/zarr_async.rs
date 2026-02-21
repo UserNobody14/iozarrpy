@@ -83,7 +83,11 @@ pub(crate) async fn scan_zarr_with_backend_async(
             .map(|v| v.istr())
             .collect();
 
-        for idx in group.chunk_indices {
+        for (idx, subset) in group
+            .chunk_indices
+            .into_iter()
+            .zip(group.chunk_subsets)
+        {
             let sem = semaphore.clone();
             let backend = backend.clone();
             let sig = group.sig.clone();
@@ -92,9 +96,6 @@ pub(crate) async fn scan_zarr_with_backend_async(
             let vars = vars.clone();
 
             futs.push(async move {
-                // Acquire permit inside the future - this ensures
-                // permits are only acquired when the future is polled,
-                // enabling proper pipelining instead of batch execution
                 let _permit = sem
                     .acquire_owned()
                     .await
@@ -106,6 +107,7 @@ pub(crate) async fn scan_zarr_with_backend_async(
                     &array_shape,
                     &vars,
                     None,
+                    subset.as_ref(),
                 )
                 .await
             });

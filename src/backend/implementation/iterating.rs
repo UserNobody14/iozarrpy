@@ -6,6 +6,7 @@ use pyo3::PyErr;
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
+use crate::chunk_plan::ChunkSubset;
 use crate::meta::ZarrMeta;
 use crate::scan::chunk_to_df_from_grid_with_backend_sync;
 use crate::shared::HasMetadataBackendSync;
@@ -68,6 +69,7 @@ struct OwnedGridGroup {
     >,
     vars: Vec<IStr>,
     chunk_indices: Vec<Vec<u64>>,
+    chunk_subsets: Vec<Option<ChunkSubset>>,
     array_shape: Vec<u64>,
 }
 
@@ -178,11 +180,11 @@ impl ZarrIteratorInner {
             .collect::<Result<Vec<_>, PyErr>>()?
             .into_iter()
             .map(|group| {
-                // Convert borrowed data to owned data
                 OwnedGridGroup {
                     sig: Arc::new(group.sig.clone()),
                     vars: group.vars.iter().map(|&v| v.clone()).collect(),
                     chunk_indices: group.chunk_indices,
+                    chunk_subsets: group.chunk_subsets,
                     array_shape: group.array_shape,
                 }
             })
@@ -237,27 +239,27 @@ impl ZarrIteratorInner {
             let group = &state.grid_groups
                 [state.current_group_idx];
 
-            // Collect chunk indices to read in this iteration
-            let mut chunks_to_read = Vec::new();
+            let mut chunks_to_read: Vec<(
+                Vec<u64>,
+                Option<ChunkSubset>,
+            )> = Vec::new();
             while state.current_chunk_idx
                 < group.chunk_indices.len()
                 && state.current_batch_rows
                     < self.batch_size
             {
-                chunks_to_read.push(
-                    group.chunk_indices
-                        [state.current_chunk_idx]
-                        .clone(),
-                );
+                let ci = state.current_chunk_idx;
+                chunks_to_read.push((
+                    group.chunk_indices[ci].clone(),
+                    group.chunk_subsets[ci].clone(),
+                ));
                 state.current_chunk_idx += 1;
 
-                // Stop if we have enough chunks for a reasonable batch
                 if chunks_to_read.len() >= 100 {
                     break;
                 }
             }
 
-            // Read chunks in parallel using rayon
             if !chunks_to_read.is_empty() {
                 let vars: Vec<IStr> =
                     group.vars.clone();
@@ -273,7 +275,7 @@ impl ZarrIteratorInner {
 
                 let chunk_dfs: Result<Vec<DataFrame>, PyErr> = chunks_to_read
                     .par_iter()
-                    .map(|idx| {
+                    .map(|(idx, subset)| {
                         chunk_to_df_from_grid_with_backend_sync(
                             backend.as_ref(),
                             idx.clone(),
@@ -281,6 +283,7 @@ impl ZarrIteratorInner {
                             &array_shape,
                             &vars,
                             expanded_with_columns.as_ref(),
+                            subset.as_ref(),
                         )
                     })
                     .collect();

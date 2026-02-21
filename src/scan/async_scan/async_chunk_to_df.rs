@@ -30,7 +30,7 @@ pub(super) fn to_py_err<E: std::fmt::Display>(
 }
 
 use crate::IStr;
-use crate::chunk_plan::ChunkGridSignature;
+use crate::chunk_plan::{ChunkGridSignature, ChunkSubset};
 use crate::errors::BackendError;
 use crate::scan::shared::{
     build_coord_column, build_var_column,
@@ -328,6 +328,8 @@ async fn read_var_chunks<
 ///
 /// This is a convenience wrapper that computes chunk geometry from
 /// the signature and grid, then calls the main function.
+/// An optional `chunk_subset` constrains which elements within the
+/// chunk are included, avoiding unnecessary column-building work.
 pub async fn chunk_to_df_from_grid_with_backend<
     B: ChunkDataSourceAsync,
 >(
@@ -337,6 +339,7 @@ pub async fn chunk_to_df_from_grid_with_backend<
     array_shape: &[u64],
     vars: &[IStr],
     with_columns: Option<&BTreeSet<IStr>>,
+    chunk_subset: Option<&ChunkSubset>,
 ) -> Result<DataFrame, PyErr> {
     let chunk_shape = sig.chunk_shape();
     let dims = sig.dims();
@@ -358,15 +361,13 @@ pub async fn chunk_to_df_from_grid_with_backend<
         checked_chunk_len(chunk_shape)?;
     let strides = compute_strides(chunk_shape);
 
-    // In-bounds mask (handles edge chunks).
-    // Returns KeepMask::All for interior chunks
-    // (O(ndim) check), avoiding O(chunk_len) work.
     let keep = compute_in_bounds_mask(
         chunk_len,
         chunk_shape,
         &origin,
         array_shape,
         &strides,
+        chunk_subset,
     );
 
     // Perform both reads concurrently

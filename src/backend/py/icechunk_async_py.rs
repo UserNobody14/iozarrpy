@@ -773,7 +773,11 @@ where
             .map(|v| v.istr())
             .collect();
 
-        for idx in group.chunk_indices {
+        for (idx, subset) in group
+            .chunk_indices
+            .into_iter()
+            .zip(group.chunk_subsets)
+        {
             let sem = semaphore.clone();
             let backend = backend.clone();
             let sig = group.sig.clone();
@@ -793,6 +797,7 @@ where
                     &array_shape,
                     &vars,
                     None,
+                    subset.as_ref(),
                 )
                 .await
             });

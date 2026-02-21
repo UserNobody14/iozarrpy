@@ -84,7 +84,11 @@ pub fn scan_zarr_with_backend_sync(
             .map(|v| v.istr())
             .collect();
 
-        for idx in group.chunk_indices {
+        for (idx, subset) in group
+            .chunk_indices
+            .into_iter()
+            .zip(group.chunk_subsets)
+        {
             let df =
                 chunk_to_df_from_grid_with_backend(
                     backend,
@@ -93,6 +97,7 @@ pub fn scan_zarr_with_backend_sync(
                     &group.array_shape,
                     &vars,
                     expanded_with_columns.as_ref(),
+                    subset.as_ref(),
                 )?;
             dfs.push(df);
         }
