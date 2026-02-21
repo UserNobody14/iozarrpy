@@ -88,6 +88,14 @@ def scan_zarr(
                 n_rows=n_rows,
                 batch_size=batch_size,
             )
+        elif isinstance(backend, IcechunkBackend):
+            yield from backend.scan_zarr_streaming_sync(
+                predicate=predicate,
+                with_columns=with_columns,
+                max_chunks_to_read=max_chunks_to_read,
+                n_rows=n_rows,
+                batch_size=batch_size,
+            )
         else:
             # Build the new predicate:
             new_predicate = pl.col(with_columns) if with_columns else pl.all()

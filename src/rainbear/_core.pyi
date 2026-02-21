@@ -425,6 +425,34 @@ class IcechunkBackend:
         """
         ...
 
+    def scan_zarr_streaming_sync(
+        self,
+        predicate: pl.Expr | None = None,
+        with_columns: list[str] | None = None,
+        max_chunks_to_read: int | None = None,
+        n_rows: int | None = None,
+        batch_size: int | None = None,
+        max_concurrency: int | None = None,
+    ) -> Iterator[pl.DataFrame]:
+        """Streaming scan the Icechunk store and return an iterator over DataFrames.
+        
+        Blocks on async I/O internally, using tokio concurrency for chunk reads.
+        Enables memory-efficient streaming when scanning time-chunked data
+        (e.g., a single point across a year).
+        
+        Args:
+            predicate: Polars expression for filtering
+            with_columns: Optional list of columns to include
+            max_chunks_to_read: Maximum number of chunks to read (safety limit)
+            n_rows: Number of rows to read total
+            batch_size: Batch size for reading
+            max_concurrency: Maximum concurrent chunk reads per batch
+        
+        Returns:
+            An iterator over DataFrames
+        """
+        ...
+
     def selected_chunks_debug(
         self,
         predicate: pl.Expr
