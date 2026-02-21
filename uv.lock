@@ -2582,7 +2582,7 @@ dev = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "polars", specifier = "==1.37.1" }]
+requires-dist = [{ name = "polars", specifier = ">=1.37.1" }]
 
 [package.metadata.requires-dev]
 build = [
