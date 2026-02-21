@@ -7,32 +7,35 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use futures::stream::{FuturesUnordered, StreamExt};
+use futures::stream::{
+    FuturesUnordered, StreamExt,
+};
 use polars::prelude::*;
 use pyo3::PyErr;
 use pyo3::prelude::*;
 use tokio::sync::Semaphore;
 
+use crate::IStr;
 use crate::meta::ZarrMeta;
 use crate::scan::async_scan::chunk_to_df_from_grid_with_backend;
 use crate::shared::ChunkedExpressionCompilerAsync;
+use crate::shared::HasMetadataBackendAsync;
 use crate::shared::{
     combine_chunk_dataframes,
     expand_projection_to_flat_paths,
     restructure_to_structs,
 };
-use crate::IStr;
 
-use super::{
-    FullyCachedIcechunkBackendAsync,
-};
+use super::FullyCachedIcechunkBackendAsync;
 
 const DEFAULT_MAX_CONCURRENCY: usize = 32;
 const DEFAULT_BATCH_SIZE: usize = 10_000;
 
 /// Owned version of ConsolidatedGridGroup for storage in iterator state
 struct OwnedGridGroup {
-    sig: Arc<crate::chunk_plan::ChunkGridSignature>,
+    sig: Arc<
+        crate::chunk_plan::ChunkGridSignature,
+    >,
     vars: Vec<IStr>,
     chunk_indices: Vec<Vec<u64>>,
     array_shape: Vec<u64>,
@@ -76,7 +79,9 @@ pub struct IcechunkIterator {
 
 impl IcechunkIterator {
     pub(crate) fn new(
-        backend: Arc<FullyCachedIcechunkBackendAsync>,
+        backend: Arc<
+            FullyCachedIcechunkBackendAsync,
+        >,
         expr: Expr,
         with_columns: Option<BTreeSet<IStr>>,
         max_chunks_to_read: Option<usize>,
@@ -100,25 +105,30 @@ impl IcechunkIterator {
             with_columns,
             max_chunks_to_read,
             num_rows,
-            batch_size: batch_size.unwrap_or(DEFAULT_BATCH_SIZE),
+            batch_size: batch_size
+                .unwrap_or(DEFAULT_BATCH_SIZE),
             max_concurrency: max_concurrency
                 .filter(|&v| v > 0)
-                .unwrap_or(DEFAULT_MAX_CONCURRENCY),
+                .unwrap_or(
+                    DEFAULT_MAX_CONCURRENCY,
+                ),
             runtime,
             state: None,
         })
     }
 
-    fn initialize(&mut self) -> Result<(), PyErr> {
+    fn initialize(
+        &mut self,
+    ) -> Result<(), PyErr> {
         let backend = self.backend.clone();
         let expr = self.expr.clone();
-        let with_columns = self.with_columns.clone();
-        let max_chunks_to_read = self.max_chunks_to_read;
+        let with_columns =
+            self.with_columns.clone();
+        let max_chunks_to_read =
+            self.max_chunks_to_read;
 
         let (grid_groups, meta, expanded_with_columns) = self.runtime.block_on(async {
-            let meta = backend.metadata().await.map_err(|e| {
-                PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string())
-            })?;
+            let meta = backend.metadata().await?;
 
             let expanded_with_columns =
                 with_columns.as_ref().map(|cols| expand_projection_to_flat_paths(cols, &meta));
@@ -175,26 +185,38 @@ impl IcechunkIterator {
         Ok(())
     }
 
-    fn next_batch(&mut self) -> Result<Option<DataFrame>, PyErr> {
+    fn next_batch(
+        &mut self,
+    ) -> Result<Option<DataFrame>, PyErr> {
         let state = self
             .state
             .as_mut()
             .ok_or_else(|| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>("Iterator not initialized"))?;
 
-        if let Some(limit) = state.num_rows_limit {
+        if let Some(limit) = state.num_rows_limit
+        {
             if state.total_rows_yielded >= limit {
                 return Ok(None);
             }
         }
 
-        while state.current_group_idx < state.grid_groups.len() {
-            let group = &state.grid_groups[state.current_group_idx];
+        while state.current_group_idx
+            < state.grid_groups.len()
+        {
+            let group = &state.grid_groups
+                [state.current_group_idx];
 
             let mut chunks_to_read = Vec::new();
-            while state.current_chunk_idx < group.chunk_indices.len()
-                && state.current_batch_rows < self.batch_size
+            while state.current_chunk_idx
+                < group.chunk_indices.len()
+                && state.current_batch_rows
+                    < self.batch_size
             {
-                chunks_to_read.push(group.chunk_indices[state.current_chunk_idx].clone());
+                chunks_to_read.push(
+                    group.chunk_indices
+                        [state.current_chunk_idx]
+                        .clone(),
+                );
                 state.current_chunk_idx += 1;
 
                 if chunks_to_read.len() >= 100 {
@@ -204,11 +226,16 @@ impl IcechunkIterator {
 
             if !chunks_to_read.is_empty() {
                 let vars = group.vars.clone();
-                let backend = self.backend.clone();
+                let backend =
+                    self.backend.clone();
                 let sig = group.sig.clone();
-                let array_shape = group.array_shape.clone();
-                let expanded_with_columns = state.expanded_with_columns.clone();
-                let max_concurrency = self.max_concurrency;
+                let array_shape =
+                    group.array_shape.clone();
+                let expanded_with_columns = state
+                    .expanded_with_columns
+                    .clone();
+                let max_concurrency =
+                    self.max_concurrency;
 
                 let chunk_dfs: Result<Vec<DataFrame>, PyErr> = self.runtime.block_on(async {
                     let semaphore = Arc::new(Semaphore::new(max_concurrency));
@@ -244,33 +271,57 @@ impl IcechunkIterator {
                 });
 
                 for df in chunk_dfs? {
-                    state.current_batch_rows += df.height();
+                    state.current_batch_rows +=
+                        df.height();
                     state.current_batch.push(df);
                 }
             }
 
-            if state.current_chunk_idx >= group.chunk_indices.len() {
+            if state.current_chunk_idx
+                >= group.chunk_indices.len()
+            {
                 state.current_group_idx += 1;
                 state.current_chunk_idx = 0;
             }
 
-            if state.current_batch_rows >= self.batch_size {
+            if state.current_batch_rows
+                >= self.batch_size
+            {
                 break;
             }
         }
 
         if !state.current_batch.is_empty() {
-            let batch_dfs = std::mem::take(&mut state.current_batch);
+            let batch_dfs = std::mem::take(
+                &mut state.current_batch,
+            );
             state.current_batch_rows = 0;
 
-            let combined = if batch_dfs.is_empty() {
-                let keys: Vec<IStr> = state.meta.path_to_array.keys().cloned().collect();
-                let planning_meta = state.meta.planning_meta();
-                DataFrame::empty_with_schema(&planning_meta.tidy_schema(Some(keys.as_slice())))
+            let combined = if batch_dfs.is_empty()
+            {
+                let keys: Vec<IStr> = state
+                    .meta
+                    .path_to_array
+                    .keys()
+                    .cloned()
+                    .collect();
+                let planning_meta =
+                    state.meta.planning_meta();
+                DataFrame::empty_with_schema(
+                    &planning_meta.tidy_schema(
+                        Some(keys.as_slice()),
+                    ),
+                )
             } else if batch_dfs.len() == 1 {
-                batch_dfs.into_iter().next().unwrap()
+                batch_dfs
+                    .into_iter()
+                    .next()
+                    .unwrap()
             } else {
-                combine_chunk_dataframes(batch_dfs, &state.meta)?
+                combine_chunk_dataframes(
+                    batch_dfs,
+                    &state.meta,
+                )?
             };
 
             let result = combined
@@ -284,8 +335,13 @@ impl IcechunkIterator {
                     ))
                 })?;
 
-            let result = if let Some(limit) = state.num_rows_limit {
-                let remaining = limit.saturating_sub(state.total_rows_yielded);
+            let result = if let Some(limit) =
+                state.num_rows_limit
+            {
+                let remaining = limit
+                    .saturating_sub(
+                        state.total_rows_yielded,
+                    );
                 if remaining < result.height() {
                     result.slice(0, remaining)
                 } else {
@@ -295,13 +351,18 @@ impl IcechunkIterator {
                 result
             };
 
-            state.total_rows_yielded += result.height();
+            state.total_rows_yielded +=
+                result.height();
 
-            let result = if state.meta.is_hierarchical() {
-                restructure_to_structs(&result, &state.meta)?
-            } else {
-                result
-            };
+            let result =
+                if state.meta.is_hierarchical() {
+                    restructure_to_structs(
+                        &result,
+                        &state.meta,
+                    )?
+                } else {
+                    result
+                };
 
             Ok(Some(result))
         } else {
@@ -312,11 +373,15 @@ impl IcechunkIterator {
 
 #[pymethods]
 impl IcechunkIterator {
-    fn __iter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
+    fn __iter__(
+        slf: PyRef<'_, Self>,
+    ) -> PyRef<'_, Self> {
         slf
     }
 
-    fn __next__(mut slf: PyRefMut<'_, Self>) -> PyResult<Option<Py<PyAny>>> {
+    fn __next__(
+        mut slf: PyRefMut<'_, Self>,
+    ) -> PyResult<Option<Py<PyAny>>> {
         if slf.state.is_none() {
             slf.initialize()?;
         }
@@ -324,8 +389,13 @@ impl IcechunkIterator {
         match slf.next_batch()? {
             Some(df) => {
                 let py = slf.py();
-                let py_df = pyo3_polars::PyDataFrame(df);
-                Ok(Some(py_df.into_pyobject(py)?.unbind()))
+                let py_df =
+                    pyo3_polars::PyDataFrame(df);
+                Ok(Some(
+                    py_df
+                        .into_pyobject(py)?
+                        .unbind(),
+                ))
             }
             None => Ok(None),
         }
