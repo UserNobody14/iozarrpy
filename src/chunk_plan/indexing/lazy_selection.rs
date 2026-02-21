@@ -1,7 +1,7 @@
 //! Lazy selection types that defer value-to-index resolution.
 //!
 //! These types mirror the concrete selection types in `selection.rs` but store
-//! `ValueRange` constraints instead of resolved `IndexRange`s, enabling batched
+//! `ValueRange` constraints instead of resolved `std::ops::Range<u64>`s, enabling batched
 //! resolution.
 
 use std::collections::BTreeMap;
@@ -11,7 +11,7 @@ use smallvec::SmallVec;
 
 use super::grouped_selection::ArraySelectionType;
 use super::selection::Emptyable;
-use super::types::ValueRange;
+use super::types::{HasIntersect, ValueRange};
 use crate::IStr;
 use std::ops::Range;
 
@@ -42,8 +42,8 @@ impl LazyDimConstraint {
     pub(crate) fn is_empty(&self) -> bool {
         matches!(self, LazyDimConstraint::Empty)
             || matches!(self, LazyDimConstraint::Resolved(r) if r.is_empty())
-            || matches!(self, LazyDimConstraint::Unresolved(vr) if vr.empty)
-            || matches!(self, LazyDimConstraint::UnresolvedInterpolation(vr) if vr.empty)
+            || matches!(self, LazyDimConstraint::Unresolved(vr) if vr.is_none())
+            || matches!(self, LazyDimConstraint::UnresolvedInterpolation(vr) if vr.as_ref().as_ref().is_none())
             || matches!(self, LazyDimConstraint::UnresolvedInterpolationPoints(pts) if pts.is_empty())
     }
 }
@@ -333,8 +333,8 @@ impl SetOperations for LazyDimConstraint {
                 }
             }
             (LazyDimConstraint::Unresolved(a), LazyDimConstraint::Unresolved(b)) => {
-                let vr = a.intersect(b);
-                if vr.empty {
+                let vr = a.intersect(Some(b.clone())).flatten();
+                if vr.is_none() {
                     LazyDimConstraint::Empty
                 } else {
                     LazyDimConstraint::Unresolved(vr)
@@ -345,21 +345,28 @@ impl SetOperations for LazyDimConstraint {
                 LazyDimConstraint::UnresolvedInterpolation(a),
                 LazyDimConstraint::UnresolvedInterpolation(b),
             ) => {
-                let vr = a.intersect(b);
-                if vr.empty {
-                    LazyDimConstraint::Empty
+                let vr0 = a.intersect(Some(b.clone()));
+                if let Some(vr1) = vr0 {
+                    if let Some(vr) = vr1.as_ref().as_ref().map(|o| o.clone()) {
+                        LazyDimConstraint::UnresolvedInterpolation(Arc::new(Some(vr)))
+                    } else {
+                        LazyDimConstraint::Empty
+                    }
                 } else {
-                    LazyDimConstraint::UnresolvedInterpolation(Arc::new(vr))
+                    LazyDimConstraint::Empty
                 }
             }
             (LazyDimConstraint::UnresolvedInterpolation(a), LazyDimConstraint::Unresolved(b))
             | (LazyDimConstraint::Unresolved(b), LazyDimConstraint::UnresolvedInterpolation(a)) => {
-                let vr = a.intersect(b);
-                if vr.empty {
-                    LazyDimConstraint::Empty
+                let vr = a.intersect(Some(b.clone().into()));
+                if let Some(vr) = vr {
+                    if let Some(vr) = vr.as_ref().as_ref().map(|o| o.clone()) {
+                        LazyDimConstraint::UnresolvedInterpolation(Arc::new(Some(vr)))
+                    } else {
+                        LazyDimConstraint::Empty
+                    }
                 } else {
-                    // Keep as interpolation to preserve the expansion behavior
-                    LazyDimConstraint::UnresolvedInterpolation(Arc::new(vr))
+                    LazyDimConstraint::Empty
                 }
             }
             // Mixed resolved/unresolved - can't intersect without resolution

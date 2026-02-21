@@ -18,6 +18,7 @@ pub(crate) use exprs::compile_expr;
 pub(crate) use indexing::SyncCoordResolver;
 pub(crate) use indexing::AsyncCoordResolver;
 pub(crate) use indexing::GroupedChunkPlan;
+pub(crate) use indexing::lazy_selection::LazyDatasetSelection;
 pub(crate) use chunk_plan::indexing::resolver_traits::HashMapCache;
 pub(crate) use indexing::lazy_materialize::{
     MergedCache, collect_requests_with_meta,
@@ -27,9 +28,10 @@ pub(crate) use indexing::selection_to_chunks::selection_to_grouped_chunk_plan_un
 pub(crate) use indexing::resolver_traits::ResolutionRequest;
 pub(crate) use indexing::resolver_traits::ResolutionCache;
 pub(crate) use indexing::types::ChunkGridSignature;
-pub(crate) use indexing::types::IndexRange;
-pub(crate) use indexing::types::ValueRange;
+pub(crate) use indexing::types::{
+    CoordBound, HasCoordBound, ValueRange,
+};
 pub(crate) use indexing::types::CoordScalar;
+pub(crate) use indexing::types::compute_bounds_from_value_range;
 pub(crate) use exprs::apply_time_encoding;
-pub(crate) use indexing::types::BoundKind;
 use crate::chunk_plan;

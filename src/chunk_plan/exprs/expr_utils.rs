@@ -4,8 +4,9 @@ use super::literals::{
     strip_wrappers,
 };
 use crate::chunk_plan::exprs::compile_ctx::LazyCompileCtx;
+use crate::chunk_plan::indexing::lazy_selection::{LazyDatasetSelection, lazy_dataset_all_for_vars};
 use crate::chunk_plan::indexing::types::{
-    BoundKind, ValueRange,
+    ValueRange, ValueRangePresent,
 };
 use crate::chunk_plan::prelude::*;
 use crate::{IStr, IntoIStr};
@@ -56,38 +57,15 @@ pub(super) fn try_expr_to_value_range_lazy(
         ctx.meta.arrays.get(&col).and_then(|a| {
             a.time_encoding.as_ref()
         });
-    let scalar =
-        literal_to_scalar(lit, time_encoding)?;
+    let Ok(scalar) =
+        literal_to_scalar(lit, time_encoding)
+    else {
+        return None;
+    };
 
-    let mut vr = ValueRange::default();
-    match op_eff {
-        Operator::Eq => vr.eq = Some(scalar),
-        Operator::Gt => {
-            vr.min = Some((
-                scalar,
-                BoundKind::Exclusive,
-            ))
-        }
-        Operator::GtEq => {
-            vr.min = Some((
-                scalar,
-                BoundKind::Inclusive,
-            ))
-        }
-        Operator::Lt => {
-            vr.max = Some((
-                scalar,
-                BoundKind::Exclusive,
-            ))
-        }
-        Operator::LtEq => {
-            vr.max = Some((
-                scalar,
-                BoundKind::Inclusive,
-            ))
-        }
-        _ => return None,
-    }
+    let vr = ValueRangePresent::from_polars_op(
+        op_eff, scalar,
+    );
 
     Some((col, vr))
 }
@@ -298,4 +276,22 @@ pub(super) fn series_values_scalar_lazy(
     }
 
     Ok(out)
+}
+
+/// Returns a Sel for the variables referenced in an expression.
+pub(super) fn all_for_referenced_vars_lazy(
+    expr: &Expr,
+    ctx: &LazyCompileCtx<'_>,
+) -> LazyDatasetSelection {
+    let mut refs = Vec::new();
+    super::compile_node::collect_column_refs(
+        expr, &mut refs,
+    );
+    refs.sort();
+    refs.dedup();
+    if refs.is_empty() {
+        LazyDatasetSelection::NoSelectionMade
+    } else {
+        lazy_dataset_all_for_vars(refs, ctx.meta)
+    }
 }

@@ -5,7 +5,6 @@
 //! - Lazy selection types and materialization
 //! - Chunk plan computation from selections
 
-pub mod index_ranges;
 pub mod plan;
 pub mod selection;
 pub mod selection_to_chunks;
@@ -27,9 +26,7 @@ pub(crate) use resolver_traits::{
 };
 
 // Core types re-exports
-pub(crate) use plan::{
-    ConsolidatedGridGroup, GroupedChunkPlan,
-};
+pub(crate) use plan::GroupedChunkPlan;
 pub(crate) use selection::{
     DatasetSelection, Emptyable,
 };

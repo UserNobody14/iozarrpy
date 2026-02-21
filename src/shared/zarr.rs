@@ -1,4 +1,4 @@
-use crate::{IStr, PlannerStats};
+use crate::IStr;
 use std::collections::BTreeMap;
 use tokio::sync::RwLock;
 use zarrs::storage::{
@@ -47,8 +47,6 @@ pub struct ZarrBackendSync {
     cached_meta: parking_lot::RwLock<
         Option<Arc<ZarrMeta>>,
     >,
-    /// Planner stats
-    stats: parking_lot::RwLock<PlannerStats>,
 }
 
 // Normalize path: if it doesn't start with '/', add it
@@ -78,9 +76,6 @@ impl ZarrBackendSync {
                 ),
             cached_meta: parking_lot::RwLock::new(
                 None,
-            ),
-            stats: parking_lot::RwLock::new(
-                PlannerStats::default(),
             ),
         })
     }
@@ -208,7 +203,6 @@ pub struct ZarrBackendAsync {
     >,
     /// Cached ZarrMeta (once loaded)
     cached_meta: RwLock<Option<Arc<ZarrMeta>>>,
-    stats: RwLock<PlannerStats>,
 }
 
 impl HasAsyncStore for ZarrBackendAsync {
@@ -234,9 +228,6 @@ impl ZarrBackendAsync {
                 BTreeMap::new(),
             ),
             cached_meta: RwLock::new(None),
-            stats: RwLock::new(
-                PlannerStats::default(),
-            ),
         })
     }
 }

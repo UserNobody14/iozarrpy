@@ -10,6 +10,7 @@ target/
 
 # Test output datasets
 tests/output-datasets/
+tests/output-datasets-v2/
 .coverage
 
 

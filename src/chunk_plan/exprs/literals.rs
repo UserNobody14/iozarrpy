@@ -1,5 +1,6 @@
 use crate::chunk_plan::indexing::types::CoordScalar;
 use crate::chunk_plan::prelude::*;
+use crate::errors::BackendError;
 use crate::{IStr, IntoIStr};
 
 pub(crate) fn apply_time_encoding(
@@ -96,7 +97,7 @@ pub(super) fn literal_anyvalue(
 pub(super) fn literal_to_scalar(
     lit: &LiteralValue,
     time_encoding: Option<&TimeEncoding>,
-) -> Option<CoordScalar> {
+) -> Result<CoordScalar, BackendError> {
     let parse_temporal_from_str = |s: &str| -> Option<
         CoordScalar,
     > {
@@ -188,8 +189,11 @@ pub(super) fn literal_to_scalar(
                 let v = rest
                     .trim()
                     .parse::<i64>()
-                    .ok()?;
-                return Some(CoordScalar::I64(v));
+                    .or_else(|_| Err(BackendError::UnsupportedPolarsExpression(format!(
+                        "unsupported literal: {:?}",
+                        lit
+                    ))))?;
+                return Ok(CoordScalar::I64(v));
             }
             if let Some(rest) =
                 s.strip_prefix("dyn float:")
@@ -197,8 +201,11 @@ pub(super) fn literal_to_scalar(
                 let v = rest
                     .trim()
                     .parse::<f64>()
-                    .ok()?;
-                return Some(CoordScalar::F64(v));
+                    .or_else(|_| Err(BackendError::UnsupportedPolarsExpression(format!(
+                        "unsupported literal: {:?}",
+                        lit
+                    ))))?;
+                return Ok(CoordScalar::F64(v));
             }
             if let Some(rest) =
                 s.strip_prefix("dyn bool:")
@@ -206,118 +213,145 @@ pub(super) fn literal_to_scalar(
                 let v = rest
                     .trim()
                     .parse::<bool>()
-                    .ok()?;
-                return Some(CoordScalar::I64(
+                    .or_else(|_| Err(BackendError::UnsupportedPolarsExpression(format!(
+                        "unsupported literal: {:?}",
+                        lit
+                    ))))?;
+                return Ok(CoordScalar::I64(
                     i64::from(v),
                 ));
             }
 
-            parse_temporal_from_str(s)
+            parse_temporal_from_str(s).ok_or_else(|| BackendError::UnsupportedPolarsExpression(format!(
+                "unsupported literal: {:?}",
+                lit
+            )))
         }
         _ => {
-            let parsed = match literal_anyvalue(
-                lit,
-            )? {
-                AnyValue::Int64(v) => {
-                    Some(CoordScalar::I64(v))
-                }
-                AnyValue::Int32(v) => Some(
-                    CoordScalar::I64(v as i64),
-                ),
-                AnyValue::Int16(v) => Some(
-                    CoordScalar::I64(v as i64),
-                ),
-                AnyValue::Int8(v) => Some(
-                    CoordScalar::I64(v as i64),
-                ),
-                AnyValue::UInt64(v) => {
-                    Some(CoordScalar::U64(v))
-                }
-                AnyValue::UInt32(v) => Some(
-                    CoordScalar::U64(v as u64),
-                ),
-                AnyValue::UInt16(v) => Some(
-                    CoordScalar::U64(v as u64),
-                ),
-                AnyValue::UInt8(v) => Some(
-                    CoordScalar::U64(v as u64),
-                ),
-                AnyValue::Float64(v) => {
-                    Some(CoordScalar::F64(v))
-                }
-                AnyValue::Float32(v) => Some(
-                    CoordScalar::F64(v as f64),
-                ),
-                AnyValue::Datetime(
-                    value,
-                    time_unit,
-                    _,
-                ) => {
-                    let ns = match time_unit {
-                        polars::prelude::TimeUnit::Nanoseconds => value,
-                        polars::prelude::TimeUnit::Microseconds => value * 1_000,
-                        polars::prelude::TimeUnit::Milliseconds => value * 1_000_000,
-                    };
-                    let _ = time_encoding;
-                    Some(CoordScalar::DatetimeNs(
-                        ns,
-                    ))
-                }
-                AnyValue::DatetimeOwned(
-                    value,
-                    time_unit,
-                    _,
-                ) => {
-                    let ns = match time_unit {
-                        polars::prelude::TimeUnit::Nanoseconds => value,
-                        polars::prelude::TimeUnit::Microseconds => value * 1_000,
-                        polars::prelude::TimeUnit::Milliseconds => value * 1_000_000,
-                    };
-                    let _ = time_encoding;
-                    Some(CoordScalar::DatetimeNs(
-                        ns,
-                    ))
-                }
-                AnyValue::Date(days) => {
-                    let ns = days as i64
-                        * 86400
-                        * 1_000_000_000;
-                    let _ = time_encoding;
-                    Some(CoordScalar::DatetimeNs(
-                        ns,
-                    ))
-                }
-                AnyValue::Duration(
-                    value,
-                    time_unit,
-                ) => {
-                    let ns = match time_unit {
-                        polars::prelude::TimeUnit::Nanoseconds => value,
-                        polars::prelude::TimeUnit::Microseconds => value * 1_000,
-                        polars::prelude::TimeUnit::Milliseconds => value * 1_000_000,
-                    };
-                    let _ = time_encoding;
-                    Some(CoordScalar::DurationNs(
-                        ns,
-                    ))
-                }
-                other => {
-                    if cfg!(debug_assertions) {
-                        eprintln!(
-                            "chunk_plan: unsupported AnyValue for planning: {other:?}"
-                        );
+            let anyval = literal_anyvalue(lit);
+            if let Some(anyval) = anyval {
+                let parsed = match anyval {
+                    AnyValue::Int64(v) => {
+                        Some(CoordScalar::I64(v))
                     }
-                    None
-                }
-            };
-
-            // Last-ditch: parse the debug formatting of the literal itself, which is what our
-            // error messages expose (and what Python tends to show for datetime/timedelta literals).
-            parsed.or_else(|| {
-                parse_temporal_from_str(&format!(
-                    "{lit:?}"
-                ))
-            })
+                    AnyValue::Int32(v) => {
+                        Some(CoordScalar::I64(
+                            v as i64,
+                        ))
+                    }
+                    AnyValue::Int16(v) => {
+                        Some(CoordScalar::I64(
+                            v as i64,
+                        ))
+                    }
+                    AnyValue::Int8(v) => {
+                        Some(CoordScalar::I64(
+                            v as i64,
+                        ))
+                    }
+                    AnyValue::UInt64(v) => {
+                        Some(CoordScalar::U64(v))
+                    }
+                    AnyValue::UInt32(v) => {
+                        Some(CoordScalar::U64(
+                            v as u64,
+                        ))
+                    }
+                    AnyValue::UInt16(v) => {
+                        Some(CoordScalar::U64(
+                            v as u64,
+                        ))
+                    }
+                    AnyValue::UInt8(v) => {
+                        Some(CoordScalar::U64(
+                            v as u64,
+                        ))
+                    }
+                    AnyValue::Float64(v) => {
+                        Some(CoordScalar::F64(v))
+                    }
+                    AnyValue::Float32(v) => {
+                        Some(CoordScalar::F64(
+                            v as f64,
+                        ))
+                    }
+                    AnyValue::Datetime(
+                        value,
+                        time_unit,
+                        _,
+                    ) => {
+                        let ns = match time_unit {
+                            polars::prelude::TimeUnit::Nanoseconds => value,
+                            polars::prelude::TimeUnit::Microseconds => value * 1_000,
+                            polars::prelude::TimeUnit::Milliseconds => value * 1_000_000,
+                        };
+                        let _ = time_encoding;
+                        Some(CoordScalar::DatetimeNs(
+                            ns,
+                        ))
+                    }
+                    AnyValue::DatetimeOwned(
+                        value,
+                        time_unit,
+                        _,
+                    ) => {
+                        let ns = match time_unit {
+                            polars::prelude::TimeUnit::Nanoseconds => value,
+                            polars::prelude::TimeUnit::Microseconds => value * 1_000,
+                            polars::prelude::TimeUnit::Milliseconds => value * 1_000_000,
+                        };
+                        let _ = time_encoding;
+                        Some(CoordScalar::DatetimeNs(
+                            ns,
+                        ))
+                    }
+                    AnyValue::Date(days) => {
+                        let ns = days as i64
+                            * 86400
+                            * 1_000_000_000;
+                        let _ = time_encoding;
+                        Some(CoordScalar::DatetimeNs(
+                            ns,
+                        ))
+                    }
+                    AnyValue::Duration(
+                        value,
+                        time_unit,
+                    ) => {
+                        let ns = match time_unit {
+                            polars::prelude::TimeUnit::Nanoseconds => value,
+                            polars::prelude::TimeUnit::Microseconds => value * 1_000,
+                            polars::prelude::TimeUnit::Milliseconds => value * 1_000_000,
+                        };
+                        let _ = time_encoding;
+                        Some(CoordScalar::DurationNs(
+                            ns,
+                        ))
+                    }
+                    other => {
+                        if cfg!(debug_assertions)
+                        {
+                            eprintln!(
+                                "chunk_plan: unsupported AnyValue for planning: {other:?}"
+                            );
+                        }
+                        Err(
+                            BackendError::UnsupportedPolarsExpression(format!(
+                                "unsupported AnyValue for planning: {other:?}"
+                            ))
+                        )?
+                    }
+                };
+                parsed.ok_or_else(|| BackendError::UnsupportedPolarsExpression(format!(
+                    "unsupported literal: {:?}",
+                    lit
+                )))
+            } else {
+                Err(BackendError::UnsupportedPolarsExpression(format!(
+                    "unsupported literal: {:?}",
+                    lit
+                )))
+            }
         }
     }
 }
