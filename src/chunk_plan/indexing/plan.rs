@@ -8,6 +8,7 @@ use zarrs::array::ChunkGrid;
 use crate::IStr;
 use crate::chunk_plan::indexing::selection::ArraySubsetList;
 use crate::chunk_plan::indexing::types::ChunkGridSignature;
+use crate::errors::BackendResult;
 
 // =============================================================================
 // Chunk Subset
@@ -27,10 +28,9 @@ impl ChunkSubset {
         &self,
         chunk_shape: &[u64],
     ) -> bool {
-        self.ranges
-            .iter()
-            .zip(chunk_shape)
-            .all(|(r, &s)| r.start == 0 && r.end >= s)
+        self.ranges.iter().zip(chunk_shape).all(
+            |(r, &s)| r.start == 0 && r.end >= s,
+        )
     }
 }
 
@@ -47,17 +47,19 @@ fn compute_chunk_subset(
 ) -> Option<ChunkSubset> {
     let ndim = chunk_idx.len();
 
-    let chunk_start: SmallVec<[u64; 4]> = chunk_idx
-        .iter()
-        .zip(chunk_shape)
-        .map(|(i, s)| i * s)
-        .collect();
-    let chunk_end: SmallVec<[u64; 4]> = chunk_start
-        .iter()
-        .zip(chunk_shape)
-        .zip(array_shape)
-        .map(|((s, cs), a)| (s + cs).min(*a))
-        .collect();
+    let chunk_start: SmallVec<[u64; 4]> =
+        chunk_idx
+            .iter()
+            .zip(chunk_shape)
+            .map(|(i, s)| i * s)
+            .collect();
+    let chunk_end: SmallVec<[u64; 4]> =
+        chunk_start
+            .iter()
+            .zip(chunk_shape)
+            .zip(array_shape)
+            .map(|((s, cs), a)| (s + cs).min(*a))
+            .collect();
 
     let mut bbox_start: SmallVec<[u64; 4]> =
         chunk_end.clone();
@@ -67,13 +69,14 @@ fn compute_chunk_subset(
     for subset in subsets.subsets_iter() {
         let ranges = subset.to_ranges();
         for d in 0..ndim {
-            let inter_start =
-                ranges[d].start.max(chunk_start[d]);
+            let inter_start = ranges[d]
+                .start
+                .max(chunk_start[d]);
             let inter_end =
                 ranges[d].end.min(chunk_end[d]);
             if inter_start < inter_end {
-                bbox_start[d] =
-                    bbox_start[d].min(inter_start);
+                bbox_start[d] = bbox_start[d]
+                    .min(inter_start);
                 bbox_end[d] =
                     bbox_end[d].max(inter_end);
             }
@@ -85,7 +88,9 @@ fn compute_chunk_subset(
             .iter()
             .zip(bbox_end.iter())
             .zip(chunk_start.iter())
-            .map(|((s, e), cs)| (s - cs)..(e - cs))
+            .map(|((s, e), cs)| {
+                (s - cs)..(e - cs)
+            })
             .collect();
 
     let actual_chunk_shape: SmallVec<[u64; 4]> =
@@ -235,7 +240,7 @@ impl GroupedChunkPlan {
     /// array subsets within each grid group.
     pub fn total_unique_chunks(
         &self,
-    ) -> Result<usize, String> {
+    ) -> BackendResult<usize> {
         let mut total = 0;
         for (_, _, subsets, chunkgrid) in
             self.iter_grids()
@@ -244,12 +249,9 @@ impl GroupedChunkPlan {
                 BTreeSet::new();
             for subset in subsets.subsets_iter() {
                 let indices = chunkgrid
-                    .chunks_in_array_subset(subset)
-                    .map_err(|e| {
-                        format!(
-                        "chunk grid traversal error: {e}"
-                    )
-                    })?;
+                    .chunks_in_array_subset(
+                        subset,
+                    )?;
                 if let Some(indices) = indices {
                     for idx in indices.indices() {
                         seen.insert(idx.to_vec());

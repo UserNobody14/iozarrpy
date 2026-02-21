@@ -21,6 +21,7 @@ pub use open_sync::{
     open_store_from_object_store,
 };
 
+use crate::errors::BackendResult;
 /// Input type for store parameters that can be either a URL string or an ObjectStore instance.
 #[derive(Clone)]
 pub enum StoreInput {
@@ -58,7 +59,7 @@ impl StoreInput {
     /// Open as an async store.
     pub fn open_async(
         self,
-    ) -> Result<AsyncOpenedStore, String> {
+    ) -> BackendResult<AsyncOpenedStore> {
         match self {
             StoreInput::Url(url) => open_store_async(&url),
             StoreInput::ObjectStore { store, prefix } => {
@@ -72,7 +73,7 @@ impl StoreInput {
     /// Open as a sync store.
     pub fn open_sync(
         self,
-    ) -> Result<OpenedStore, String> {
+    ) -> BackendResult<OpenedStore> {
         match self {
             StoreInput::Url(url) => {
                 open_store(&url)

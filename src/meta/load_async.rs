@@ -5,6 +5,7 @@ use zarrs::array::{Array, ArrayShardedExt};
 use zarrs::hierarchy::NodeMetadata;
 use zarrs::storage::AsyncReadableWritableListableStorage;
 
+use crate::errors::BackendResult;
 use crate::meta::dims::{
     default_dims, dims_for_array, leaf_name,
 };
@@ -24,7 +25,7 @@ use crate::{IStr, IntoIStr};
 /// Load unified metadata that supports both flat and hierarchical zarr stores.
 pub async fn load_zarr_meta_from_opened_async(
     opened: &AsyncOpenedStore,
-) -> Result<ZarrMeta, String> {
+) -> BackendResult<ZarrMeta> {
     let store = opened.store.clone();
     let root_path = opened.root.clone();
     let root_path_str: &str = root_path.as_ref();
@@ -33,12 +34,8 @@ pub async fn load_zarr_meta_from_opened_async(
         store.clone(),
         &root_path,
     )
-    .await
-    .map_err(to_string_err)?;
-    let nodes = group
-        .async_traverse()
-        .await
-        .map_err(to_string_err)?;
+    .await?;
+    let nodes = group.async_traverse().await?;
 
     // First pass: collect all arrays and identify group structure
     let mut all_arrays: BTreeMap<
@@ -82,8 +79,7 @@ pub async fn load_zarr_meta_from_opened_async(
             store.clone(),
             path_str,
             array_md.clone(),
-        )
-        .map_err(to_string_err)?;
+        )?;
 
         let shape: std::sync::Arc<[u64]> =
             array.shape().into();
@@ -314,31 +310,21 @@ fn build_node_tree(
     node
 }
 
-fn to_string_err<E: std::fmt::Display>(
-    e: E,
-) -> String {
-    e.to_string()
-}
-
 /// Load unified metadata from a raw async store and root path.
 ///
 /// This is useful for backends like Icechunk that don't use `AsyncOpenedStore`.
 pub async fn load_zarr_meta_from_store_async(
     store: &AsyncReadableWritableListableStorage,
     root_path: &str,
-) -> Result<ZarrMeta, String> {
+) -> BackendResult<ZarrMeta> {
     let store = store.clone();
 
     let group = zarrs::group::Group::async_open(
         store.clone(),
         root_path,
     )
-    .await
-    .map_err(to_string_err)?;
-    let nodes = group
-        .async_traverse()
-        .await
-        .map_err(to_string_err)?;
+    .await?;
+    let nodes = group.async_traverse().await?;
 
     // First pass: collect all arrays and identify group structure
     let mut all_arrays: BTreeMap<
@@ -382,8 +368,7 @@ pub async fn load_zarr_meta_from_store_async(
             store.clone(),
             path_str,
             array_md.clone(),
-        )
-        .map_err(to_string_err)?;
+        )?;
 
         let shape: std::sync::Arc<[u64]> =
             array.shape().into();

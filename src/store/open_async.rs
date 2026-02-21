@@ -13,6 +13,7 @@ use zarrs_object_store::object_store::ObjectStore;
 
 use crate::IStr;
 use crate::errors::BackendError;
+use crate::errors::BackendResult;
 use crate::reader::ShardedCacheAsync;
 use crate::shared::normalize_path;
 use crate::store::adapters::TokioSpawnBlocking;
@@ -118,20 +119,22 @@ pub fn open_store_from_object_store_async(
 /// For local filesystem paths, this wraps the sync filesystem store with a spawn_blocking adapter.
 pub fn open_store_async(
     zarr_url: &str,
-) -> Result<AsyncOpenedStore, String> {
+) -> BackendResult<AsyncOpenedStore> {
     if !zarr_url.contains("://") {
         return open_filesystem_store_async(
             zarr_url,
         );
     }
 
-    let url = Url::parse(zarr_url)
-        .map_err(|e| e.to_string())?;
+    let url = Url::parse(zarr_url)?;
 
     if url.scheme() == "file" {
         let path =
             url.to_file_path().map_err(|_| {
-                "invalid file:// URL".to_string()
+                BackendError::Other(
+                    "invalid file:// URL"
+                        .to_string(),
+                )
             })?;
         let path =
             path.to_string_lossy().to_string();
@@ -141,8 +144,7 @@ pub fn open_store_async(
     }
 
     let (store, prefix) =
-        object_store::parse_url(&url)
-            .map_err(|e| e.to_string())?;
+        object_store::parse_url(&url)?;
     let async_store: AsyncReadableWritableListableStorage =
         Arc::new(AsyncObjectStore::new(store));
 
@@ -160,13 +162,12 @@ pub fn open_store_async(
 
 fn open_filesystem_store_async(
     path: &str,
-) -> Result<AsyncOpenedStore, String> {
+) -> BackendResult<AsyncOpenedStore> {
     let store_path: PathBuf = path.into();
     let store =
         zarrs::filesystem::FilesystemStore::new(
             &store_path,
-        )
-        .map_err(|e| e.to_string())?;
+        )?;
     let async_store: AsyncReadableWritableListableStorage =
         Arc::new(SyncToAsyncStorageAdapter::new(
             Arc::new(store)

@@ -6,6 +6,7 @@ use pyo3::PyErr;
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
+use crate::IStr;
 use crate::chunk_plan::ChunkSubset;
 use crate::meta::ZarrMeta;
 use crate::scan::chunk_to_df_from_grid_with_backend_sync;
@@ -17,7 +18,6 @@ use crate::shared::{
     expand_projection_to_flat_paths,
     restructure_to_structs,
 };
-use crate::IStr;
 
 /// Version of scan zarr sync that returns an iterator
 ///
@@ -120,8 +120,6 @@ impl ZarrIteratorInner {
     fn initialize(
         &mut self,
     ) -> Result<(), PyErr> {
-        
-
         // Get metadata from backend
         let meta = self.backend.metadata()?;
         // Expand struct column names to flat paths for chunk reading
@@ -146,13 +144,7 @@ impl ZarrIteratorInner {
             self.max_chunks_to_read
         {
             let total_chunks = grouped_plan
-                .total_unique_chunks()
-                .map_err(|e| {
-                    PyErr::new::<
-                        pyo3::exceptions::PyValueError,
-                        _,
-                    >(e)
-                })?;
+                .total_unique_chunks()?;
             if total_chunks > max_chunks {
                 return Err(PyErr::new::<
                     pyo3::exceptions::PyRuntimeError,
@@ -250,8 +242,10 @@ impl ZarrIteratorInner {
             {
                 let ci = state.current_chunk_idx;
                 chunks_to_read.push((
-                    group.chunk_indices[ci].clone(),
-                    group.chunk_subsets[ci].clone(),
+                    group.chunk_indices[ci]
+                        .clone(),
+                    group.chunk_subsets[ci]
+                        .clone(),
                 ));
                 state.current_chunk_idx += 1;
 

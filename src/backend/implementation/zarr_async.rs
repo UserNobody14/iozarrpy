@@ -40,14 +40,8 @@ pub(crate) async fn scan_zarr_with_backend_async(
 
     // Check max_chunks_to_read limit before doing any I/O
     if let Some(max_chunks) = max_chunks_to_read {
-        let total_chunks = grouped_plan
-            .total_unique_chunks()
-            .map_err(|e| {
-                PyErr::new::<
-                    pyo3::exceptions::PyValueError,
-                    _,
-                >(e)
-            })?;
+        let total_chunks =
+            grouped_plan.total_unique_chunks()?;
         if total_chunks > max_chunks {
             return Err(PyErr::new::<
                 pyo3::exceptions::PyRuntimeError,

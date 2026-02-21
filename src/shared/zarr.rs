@@ -17,7 +17,9 @@ use super::traits::{
     HasMetadataBackendCacheSync,
     HasMetadataBackendSync, HasStore,
 };
-use crate::errors::BackendError;
+use crate::errors::{
+    BackendError, BackendResult,
+};
 use crate::meta::{
     ZarrMeta, load_zarr_meta_from_opened,
     load_zarr_meta_from_opened_async,
@@ -63,11 +65,8 @@ pub(crate) fn normalize_path(
 impl ZarrBackendSync {
     pub fn new(
         store: StoreInput,
-    ) -> Result<Self, BackendError> {
-        let opened =
-            store.open_sync().map_err(|e| {
-                BackendError::Other(e.to_string())
-            })?;
+    ) -> BackendResult<Self> {
+        let opened = store.open_sync()?;
         Ok(Self {
             store: Arc::new(opened),
             opened_arrays:
@@ -217,11 +216,8 @@ impl HasAsyncStore for ZarrBackendAsync {
 impl ZarrBackendAsync {
     pub fn new(
         store: StoreInput,
-    ) -> Result<Self, BackendError> {
-        let opened =
-            store.open_async().map_err(|e| {
-                BackendError::Other(e.to_string())
-            })?;
+    ) -> BackendResult<Self> {
+        let opened = store.open_async()?;
         Ok(Self {
             store: Arc::new(opened),
             opened_arrays: RwLock::new(
@@ -238,7 +234,7 @@ impl HasMetadataBackendAsync<ZarrMeta>
 {
     async fn metadata(
         &self,
-    ) -> Result<Arc<ZarrMeta>, BackendError> {
+    ) -> BackendResult<Arc<ZarrMeta>> {
         // Check if already cached
         {
             let cached =

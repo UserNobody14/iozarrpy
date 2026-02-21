@@ -20,6 +20,8 @@ pub enum BackendError {
     MetadataNotLoaded,
     /// Other error.
     Other(String),
+    // /// Incompatible dimensionality error.
+    // ZarrError(ZarrErrors),
 }
 
 impl Display for BackendError {
@@ -98,3 +100,85 @@ impl From<BackendError> for PyErr {
         }
     }
 }
+
+// Auto-convert zarr errors to backend errors
+impl From<zarrs::array::ArrayCreateError>
+    for BackendError
+{
+    fn from(
+        error: zarrs::array::ArrayCreateError,
+    ) -> BackendError {
+        BackendError::Other(error.to_string())
+    }
+}
+
+impl From<zarrs::group::GroupCreateError>
+    for BackendError
+{
+    fn from(
+        error: zarrs::group::GroupCreateError,
+    ) -> BackendError {
+        BackendError::Other(error.to_string())
+    }
+}
+
+impl From<zarrs::hierarchy::NodeCreateError>
+    for BackendError
+{
+    fn from(
+        error: zarrs::hierarchy::NodeCreateError,
+    ) -> BackendError {
+        BackendError::Other(error.to_string())
+    }
+}
+
+impl From<zarrs::array::IncompatibleDimensionalityError>
+    for BackendError
+{
+    fn from(
+        error: zarrs::array::IncompatibleDimensionalityError,
+    ) -> BackendError {
+        BackendError::Other(error.to_string())
+    }
+}
+
+impl From<zarrs::array::ArrayError>
+    for BackendError
+{
+    fn from(
+        error: zarrs::array::ArrayError,
+    ) -> BackendError {
+        BackendError::Other(error.to_string())
+    }
+}
+
+impl From<zarrs::filesystem::FilesystemStoreCreateError>
+    for BackendError
+{
+    fn from(
+        error: zarrs::filesystem::FilesystemStoreCreateError,
+    ) -> BackendError {
+        BackendError::Other(error.to_string())
+    }
+}
+
+impl From<zarrs_object_store::object_store::Error>
+    for BackendError
+{
+    fn from(
+        error: zarrs_object_store::object_store::Error,
+    ) -> BackendError {
+        BackendError::Other(error.to_string())
+    }
+}
+
+impl From<url::ParseError> for BackendError {
+    fn from(
+        error: url::ParseError,
+    ) -> BackendError {
+        BackendError::Other(error.to_string())
+    }
+}
+
+pub type BackendResult<T> =
+    Result<T, BackendError>;

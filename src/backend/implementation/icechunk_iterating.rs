@@ -15,9 +15,9 @@ use pyo3::PyErr;
 use pyo3::prelude::*;
 use tokio::sync::Semaphore;
 
+use crate::IStr;
 use crate::chunk_plan::ChunkSubset;
 use crate::errors::BackendError;
-use crate::IStr;
 use crate::meta::ZarrMeta;
 use crate::scan::async_scan::chunk_to_df_from_grid_with_backend;
 use crate::shared::ChunkedExpressionCompilerAsync;
@@ -141,9 +141,8 @@ impl IcechunkIterator {
             )?;
 
             if let Some(max_chunks) = max_chunks_to_read {
-                let total_chunks = grouped_plan.total_unique_chunks().map_err(|e| {
-                    PyErr::new::<pyo3::exceptions::PyValueError, _>(e)
-                })?;
+                let total_chunks =
+                    grouped_plan.total_unique_chunks()?;
                 if total_chunks > max_chunks {
                     return Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
                         "max_chunks_to_read exceeded: {} chunks needed, limit is {}",
@@ -210,14 +209,21 @@ impl IcechunkIterator {
             let group = &state.grid_groups
                 [state.current_group_idx];
 
-            let mut chunks_to_read: Vec<(Vec<u64>, Option<ChunkSubset>)> = Vec::new();
-            while state.current_chunk_idx < group.chunk_indices.len()
-                && state.current_batch_rows < self.batch_size
+            let mut chunks_to_read: Vec<(
+                Vec<u64>,
+                Option<ChunkSubset>,
+            )> = Vec::new();
+            while state.current_chunk_idx
+                < group.chunk_indices.len()
+                && state.current_batch_rows
+                    < self.batch_size
             {
                 let ci = state.current_chunk_idx;
                 chunks_to_read.push((
-                    group.chunk_indices[ci].clone(),
-                    group.chunk_subsets[ci].clone(),
+                    group.chunk_indices[ci]
+                        .clone(),
+                    group.chunk_subsets[ci]
+                        .clone(),
                 ));
                 state.current_chunk_idx += 1;
 

@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
+use crate::errors::BackendResult;
 use zarrs::array::Array;
 use zarrs::array::ArrayShardedExt;
 use zarrs::hierarchy::NodeMetadata;
@@ -24,7 +25,7 @@ use crate::{IStr, IntoIStr};
 /// Load unified metadata that supports both flat and hierarchical zarr stores (sync).
 pub fn load_zarr_meta_from_opened(
     opened: &OpenedStore,
-) -> Result<ZarrMeta, String> {
+) -> BackendResult<ZarrMeta> {
     let store = opened.store.clone();
     let root_path = opened.root.clone();
     let root_path_str: &str = root_path.as_ref();
@@ -32,11 +33,8 @@ pub fn load_zarr_meta_from_opened(
     let group = zarrs::group::Group::open(
         store.clone(),
         &root_path,
-    )
-    .map_err(to_string_err)?;
-    let nodes = group
-        .traverse()
-        .map_err(to_string_err)?;
+    )?;
+    let nodes = group.traverse()?;
 
     // First pass: collect all arrays and identify group structure
     let mut all_arrays: BTreeMap<
@@ -80,8 +78,7 @@ pub fn load_zarr_meta_from_opened(
             store.clone(),
             path_str,
             array_md.clone(),
-        )
-        .map_err(to_string_err)?;
+        )?;
         let shape: std::sync::Arc<[u64]> =
             array.shape().into();
         let dims = dims_for_array(&array)

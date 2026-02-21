@@ -18,8 +18,7 @@ use zarrs::array::Array;
 
 use crate::backend::implementation::{
     FullyCachedIcechunkBackendAsync,
-    IcechunkBackendAsync,
-    IcechunkIterator,
+    IcechunkBackendAsync, IcechunkIterator,
     to_fully_cached_icechunk_async,
 };
 use crate::meta::ZarrMeta;
@@ -335,13 +334,19 @@ impl PyIcechunkBackend {
         use polars::prelude::lit;
         use pyo3::IntoPyObjectExt;
 
-        let prd = if let Some(predicate) = predicate {
-            extract_expr(predicate)?
-        } else {
-            lit(true)
-        };
-        let with_cols_set: Option<BTreeSet<IStr>> =
-            with_columns.map(|cols| cols.into_iter().map(|c| c.istr()).collect());
+        let prd =
+            if let Some(predicate) = predicate {
+                extract_expr(predicate)?
+            } else {
+                lit(true)
+            };
+        let with_cols_set: Option<
+            BTreeSet<IStr>,
+        > = with_columns.map(|cols| {
+            cols.into_iter()
+                .map(|c| c.istr())
+                .collect()
+        });
 
         IcechunkIterator::new(
             self.inner.clone(),
@@ -730,14 +735,8 @@ where
 
     // Check max_chunks_to_read limit before doing any I/O
     if let Some(max_chunks) = max_chunks_to_read {
-        let total_chunks = grouped_plan
-            .total_unique_chunks()
-            .map_err(|e| {
-                PyErr::new::<
-                    pyo3::exceptions::PyValueError,
-                    _,
-                >(e)
-            })?;
+        let total_chunks =
+            grouped_plan.total_unique_chunks()?;
         if total_chunks > max_chunks {
             return Err(PyErr::new::<
                 pyo3::exceptions::PyRuntimeError,

@@ -6,6 +6,9 @@ use zarrs::array::{
 };
 use zarrs::plugin::ZarrVersion;
 
+use crate::errors::{
+    BackendError, BackendResult,
+};
 use crate::reader::ColumnData;
 
 // Re-export the cache type for use in backends
@@ -22,7 +25,7 @@ pub(crate) fn retrieve_chunk(
     array: &Array<dyn zarrs::storage::ReadableWritableListableStorageTraits>,
     cache: &ArrayShardedReadableExtCache,
     chunk: &[u64],
-) -> Result<ColumnData, String> {
+) -> BackendResult<ColumnData> {
     let idv = array
         .data_type()
         .name(ZarrVersion::V3)
@@ -39,86 +42,80 @@ pub(crate) fn retrieve_chunk(
                 .retrieve_subchunk_opt::<Vec<bool>>(
                     cache, chunk, &options,
                 )
-                .map_err(to_string_err)?,
+                ?,
         )),
         "int8" => Ok(ColumnData::I8(
             array
                 .retrieve_subchunk_opt::<Vec<i8>>(
                     cache, chunk, &options,
                 )
-                .map_err(to_string_err)?,
+                ?,
         )),
         "int16" => Ok(ColumnData::I16(
             array
                 .retrieve_subchunk_opt::<Vec<i16>>(
                     cache, chunk, &options,
                 )
-                .map_err(to_string_err)?,
+                ?,
         )),
         "int32" => Ok(ColumnData::I32(
             array
                 .retrieve_subchunk_opt::<Vec<i32>>(
                     cache, chunk, &options,
                 )
-                .map_err(to_string_err)?,
+                ?,
         )),
         "int64" => Ok(ColumnData::I64(
             array
                 .retrieve_subchunk_opt::<Vec<i64>>(
                     cache, chunk, &options,
                 )
-                .map_err(to_string_err)?,
+                ?,
         )),
         "uint8" => Ok(ColumnData::U8(
             array
                 .retrieve_subchunk_opt::<Vec<u8>>(
                     cache, chunk, &options,
                 )
-                .map_err(to_string_err)?,
+                ?,
         )),
         "uint16" => Ok(ColumnData::U16(
             array
                 .retrieve_subchunk_opt::<Vec<u16>>(
                     cache, chunk, &options,
                 )
-                .map_err(to_string_err)?,
+                ?,
         )),
         "uint32" => Ok(ColumnData::U32(
             array
                 .retrieve_subchunk_opt::<Vec<u32>>(
                     cache, chunk, &options,
                 )
-                .map_err(to_string_err)?,
+                ?,
         )),
         "uint64" => Ok(ColumnData::U64(
             array
                 .retrieve_subchunk_opt::<Vec<u64>>(
                     cache, chunk, &options,
                 )
-                .map_err(to_string_err)?,
+                ?,
         )),
         "float32" => Ok(ColumnData::F32(
             array
                 .retrieve_subchunk_opt::<Vec<f32>>(
                     cache, chunk, &options,
                 )
-                .map_err(to_string_err)?,
+                ?,
         )),
         "float64" => Ok(ColumnData::F64(
             array
                 .retrieve_subchunk_opt::<Vec<f64>>(
                     cache, chunk, &options,
                 )
-                .map_err(to_string_err)?,
+                ?,
         )),
-        other => Err(format!(
+        other => Err(BackendError::Other(format!(
             "unsupported zarr dtype: {other}"
-        )),
+        ))),
     }
-}
-
-fn to_string_err<E: std::fmt::Display>(
-    e: E,
-) -> String {
-    e.to_string()
 }
