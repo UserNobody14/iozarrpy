@@ -4,7 +4,6 @@ mod structural;
 mod traits;
 mod zarr;
 
-use crate::errors::BackendError;
 pub(crate) use stats::PlannerStats;
 
 // Re-export commonly used traits
