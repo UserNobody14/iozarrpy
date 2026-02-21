@@ -1,6 +1,4 @@
 /// Errors for the rainbear library.
-mod backend;
+pub mod backend;
 
-pub(crate) use backend::{
-    BackendError, BackendResult,
-};
+pub use backend::*;

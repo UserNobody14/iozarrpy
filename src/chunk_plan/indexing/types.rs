@@ -1,9 +1,13 @@
+use std::fmt::Display;
 use std::hash::{Hash, Hasher};
 use std::ops::{Bound, RangeBounds};
 
 use smallvec::SmallVec;
 
 use crate::IStr;
+use crate::errors::{
+    BackendError, BackendResult,
+};
 use polars::prelude::Operator;
 
 /// Chunk grid signature - dimensions + chunk shape for grouping.
@@ -68,6 +72,22 @@ impl From<&[IStr]> for ChunkGridSignature {
                 .cloned()
                 .collect::<SmallVec<[IStr; 4]>>(),
         )
+    }
+}
+
+impl Display for ChunkGridSignature {
+    fn fmt(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
+        write!(f, "ChunkGridSignature(")?;
+        write!(f, "dims: {:?}", self.dims)?;
+        write!(
+            f,
+            "chunk_shape: {:?}",
+            self.chunk_shape
+        )?;
+        write!(f, ")")
     }
 }
 
@@ -420,24 +440,24 @@ impl ValueRangePresent {
     pub(crate) fn from_polars_op(
         op: Operator,
         scalar: CoordScalar,
-    ) -> Option<Self> {
+    ) -> BackendResult<Self> {
         match op {
-            Operator::Eq => Some(
+            Operator::Eq => Ok(
                 Self::from_equal_case(scalar),
             ),
-            Operator::Gt => Some(
+            Operator::Gt => Ok(
                 Self::from_min_exclusive(scalar),
             ),
-            Operator::GtEq => Some(
+            Operator::GtEq => Ok(
                 Self::from_min_inclusive(scalar),
             ),
-            Operator::Lt => Some(
+            Operator::Lt => Ok(
                 Self::from_max_exclusive(scalar),
             ),
-            Operator::LtEq => Some(
+            Operator::LtEq => Ok(
                 Self::from_max_inclusive(scalar),
             ),
-            _ => None,
+            _ => Err(BackendError::UnsupportedOperator { op }),
         }
     }
 

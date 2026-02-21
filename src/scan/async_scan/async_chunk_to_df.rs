@@ -10,9 +10,10 @@ pub(crate) use futures::stream::{
     FuturesUnordered, StreamExt,
 };
 pub(crate) use polars::prelude::*;
-pub(crate) use pyo3::prelude::*;
-pub(crate) use pyo3_polars::error::PyPolarsErr;
 
+use crate::errors::{
+    BackendError, BackendResult,
+};
 pub(crate) use crate::meta::{
     ZarrDatasetMeta, ZarrMeta,
 };
@@ -21,17 +22,10 @@ pub(crate) use crate::reader::{
     compute_strides,
 };
 
-pub(super) fn to_py_err<E: std::fmt::Display>(
-    e: E,
-) -> PyErr {
-    PyErr::new::<pyo3::exceptions::PyValueError, _>(
-        e.to_string(),
-    )
-}
-
 use crate::IStr;
-use crate::chunk_plan::{ChunkGridSignature, ChunkSubset};
-use crate::errors::BackendError;
+use crate::chunk_plan::{
+    ChunkGridSignature, ChunkSubset,
+};
 use crate::scan::shared::{
     build_coord_column, build_var_column,
     compute_actual_chunk_shape,
@@ -139,9 +133,8 @@ async fn read_coord_chunks<
     origin: &[u64],
     chunk_shape: &[u64],
     with_columns: Option<&BTreeSet<IStr>>,
-) -> Result<
+) -> BackendResult<
     std::collections::BTreeMap<IStr, ColumnData>,
-    PyErr,
 > {
     let mut coord_reads = FuturesUnordered::new();
 
@@ -194,17 +187,13 @@ async fn read_coord_chunks<
     while let Some((name, expected_len, res)) =
         coord_reads.next().await
     {
-        let coord = res.map_err(to_py_err)?;
+        let coord = res?;
         if coord.len() != expected_len {
-            return Err(PyErr::new::<
-                pyo3::exceptions::PyValueError,
-                _,
-            >(format!(
-                "coord '{}' length mismatch: expected {}, got {}",
-                name,
-                expected_len,
-                coord.len()
-            )));
+            return Err(BackendError::CoordLengthMismatch {
+                name: name.clone(),
+                expected_len: expected_len as u64,
+                coord_len: coord.len() as u64,
+            });
         }
         coord_slices.insert(name, coord);
     }
@@ -223,7 +212,7 @@ async fn read_var_chunks<
     dims: &[IStr],
     vars: &[IStr],
     with_columns: Option<&BTreeSet<IStr>>,
-) -> Result<
+) -> BackendResult<
     Vec<(
         IStr,
         ColumnData,
@@ -231,7 +220,6 @@ async fn read_var_chunks<
         Vec<u64>,
         Vec<u64>,
     )>,
-    PyErr,
 > {
     let mut var_reads = FuturesUnordered::new();
 
@@ -251,15 +239,11 @@ async fn read_var_chunks<
         }
 
         let var_meta =
-            meta.arrays.get(name).ok_or_else(|| {
-                PyErr::new::<
-                    pyo3::exceptions::PyValueError,
-                    _,
-                >(format!(
-                    "unknown variable: {}",
-                    name
-                ))
-            })?;
+            meta.arrays.get(name).ok_or(
+                BackendError::UnknownVariable {
+                    name: name.clone(),
+                },
+            )?;
 
         let name = name.clone();
         let var_meta = var_meta.clone();
@@ -299,10 +283,9 @@ async fn read_var_chunks<
                     &var_meta.path,
                     &var_chunk_indices,
                 )
-                .await
-                .map_err(to_py_err)?;
+                .await?;
 
-            Ok::<_, PyErr>((
+            Ok::<_, BackendError>((
                 name,
                 data,
                 var_dims,
@@ -340,7 +323,7 @@ pub async fn chunk_to_df_from_grid_with_backend<
     vars: &[IStr],
     with_columns: Option<&BTreeSet<IStr>>,
     chunk_subset: Option<&ChunkSubset>,
-) -> Result<DataFrame, PyErr> {
+) -> BackendResult<DataFrame> {
     let chunk_shape = sig.chunk_shape();
     let dims = sig.dims();
 
@@ -351,10 +334,7 @@ pub async fn chunk_to_df_from_grid_with_backend<
         .map(|(i, s)| i * s)
         .collect();
 
-    let meta = backend
-        .metadata()
-        .await
-        .map_err(to_py_err)?;
+    let meta = backend.metadata().await?;
     let planning_meta = meta.planning_meta();
 
     let chunk_len =
@@ -447,6 +427,5 @@ pub async fn chunk_to_df_from_grid_with_backend<
         cols.push(col);
     }
 
-    Ok(DataFrame::new(height, cols)
-        .map_err(PyPolarsErr::from)?)
+    Ok(DataFrame::new(height, cols)?)
 }

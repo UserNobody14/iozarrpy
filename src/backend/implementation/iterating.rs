@@ -159,28 +159,28 @@ impl ZarrIteratorInner {
         // Collect all grid groups upfront and convert to owned data
         // We need to own the data rather than borrow it because GroupedChunkPlan
         // will be dropped after this function returns
-        let grid_groups: Vec<OwnedGridGroup> = grouped_plan
-            .iter_consolidated_chunks()
-            .map(|result| {
-                result.map_err(|e| {
-                    PyErr::new::<
-                        pyo3::exceptions::PyValueError,
-                        _,
-                    >(e)
+        let grid_groups: Vec<OwnedGridGroup> =
+            grouped_plan
+                .iter_consolidated_chunks()
+                .collect::<Result<Vec<_>, _>>()?
+                .into_iter()
+                .map(|group| OwnedGridGroup {
+                    sig: Arc::new(
+                        group.sig.clone(),
+                    ),
+                    vars: group
+                        .vars
+                        .iter()
+                        .map(|&v| v.clone())
+                        .collect(),
+                    chunk_indices: group
+                        .chunk_indices,
+                    chunk_subsets: group
+                        .chunk_subsets,
+                    array_shape: group
+                        .array_shape,
                 })
-            })
-            .collect::<Result<Vec<_>, PyErr>>()?
-            .into_iter()
-            .map(|group| {
-                OwnedGridGroup {
-                    sig: Arc::new(group.sig.clone()),
-                    vars: group.vars.iter().map(|&v| v.clone()).collect(),
-                    chunk_indices: group.chunk_indices,
-                    chunk_subsets: group.chunk_subsets,
-                    array_shape: group.array_shape,
-                }
-            })
-            .collect();
+                .collect();
 
         self.state = Some(IteratorState {
             grid_groups,
@@ -267,7 +267,7 @@ impl ZarrIteratorInner {
                     .expanded_with_columns
                     .clone();
 
-                let chunk_dfs: Result<Vec<DataFrame>, PyErr> = chunks_to_read
+                let dfs: Vec<DataFrame> = chunks_to_read
                     .par_iter()
                     .map(|(idx, subset)| {
                         chunk_to_df_from_grid_with_backend_sync(
@@ -280,9 +280,7 @@ impl ZarrIteratorInner {
                             subset.as_ref(),
                         )
                     })
-                    .collect();
-
-                let dfs = chunk_dfs?;
+                    .collect::<Result<Vec<_>, _>>()?;
 
                 // Add to batch and count rows
                 for df in dfs {

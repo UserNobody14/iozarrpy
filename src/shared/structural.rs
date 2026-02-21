@@ -1,10 +1,9 @@
 use polars::prelude::*;
-use pyo3::prelude::*;
 use std::collections::BTreeSet;
 
+use crate::errors::BackendResult;
 use crate::meta::{ZarrMeta, ZarrNode};
 use crate::{IStr, IntoIStr};
-
 /// Combine chunk DataFrames, handling heterogeneous schemas.
 ///
 /// Strategy:
@@ -14,8 +13,7 @@ use crate::{IStr, IntoIStr};
 pub fn combine_chunk_dataframes(
     mut dfs: Vec<DataFrame>,
     meta: &ZarrMeta,
-) -> Result<DataFrame, PyErr> {
-    use pyo3_polars::error::PyPolarsErr;
+) -> BackendResult<DataFrame> {
     use std::collections::BTreeMap;
 
     // Get dimension column names
@@ -58,11 +56,9 @@ pub fn combine_chunk_dataframes(
         let mut acc = first;
         for df in iter {
             // Reorder columns to match the first DataFrame
-            let reordered = df
-                .select(col_order.as_slice())
-                .map_err(PyPolarsErr::from)?;
-            acc.vstack_mut(&reordered)
-                .map_err(PyPolarsErr::from)?;
+            let reordered =
+                df.select(col_order.as_slice())?;
+            acc.vstack_mut(&reordered)?;
         }
         vstacked.push(acc);
     }
@@ -110,34 +106,25 @@ pub fn combine_chunk_dataframes(
 
     if shared_coords.is_empty() {
         // No shared coordinates - fall back to diagonal concat
-        return polars::functions::concat_df_diagonal(
+        return Ok(polars::functions::concat_df_diagonal(
             &vstacked,
-        )
-        .map_err(PyPolarsErr::from)
-        .map_err(|e| {
-            PyErr::new::<
-                pyo3::exceptions::PyValueError,
-                _,
-            >(e.to_string())
-        });
+        )?);
     }
 
     // Join on shared coordinates
     // Start with the first DF and successively join others
     let mut result = vstacked.remove(0);
     for df in vstacked {
-        result = result
-            .join(
-                &df,
-                shared_coords.as_slice(),
-                shared_coords.as_slice(),
-                JoinArgs::new(JoinType::Full)
-                    .with_coalesce(
+        result = result.join(
+            &df,
+            shared_coords.as_slice(),
+            shared_coords.as_slice(),
+            JoinArgs::new(JoinType::Full)
+                .with_coalesce(
                     JoinCoalesce::CoalesceColumns,
                 ),
-                None,
-            )
-            .map_err(PyPolarsErr::from)?;
+            None,
+        )?;
     }
 
     Ok(result)
@@ -150,9 +137,7 @@ pub fn combine_chunk_dataframes(
 pub fn restructure_to_structs(
     df: &DataFrame,
     meta: &ZarrMeta,
-) -> Result<DataFrame, PyErr> {
-    use pyo3_polars::error::PyPolarsErr;
-
+) -> BackendResult<DataFrame> {
     let mut result_columns: Vec<Column> =
         Vec::new();
     let mut processed_paths: BTreeSet<String> =
@@ -196,14 +181,10 @@ pub fn restructure_to_structs(
         }
     }
 
-    DataFrame::new(df.height(), result_columns)
-        .map_err(PyPolarsErr::from)
-        .map_err(|e| {
-            PyErr::new::<
-                pyo3::exceptions::PyValueError,
-                _,
-            >(e.to_string())
-        })
+    Ok(DataFrame::new(
+        df.height(),
+        result_columns,
+    )?)
 }
 
 /// Build a struct column for a zarr node (group).
@@ -212,9 +193,7 @@ fn build_struct_column_for_node(
     node: &crate::meta::ZarrNode,
     prefix: &str,
     processed_paths: &mut BTreeSet<String>,
-) -> Result<Option<Column>, PyErr> {
-    use pyo3_polars::error::PyPolarsErr;
-
+) -> BackendResult<Option<Column>> {
     let mut fields: Vec<Column> = Vec::new();
 
     // Add data variable columns as struct fields
@@ -268,14 +247,7 @@ fn build_struct_column_for_node(
             prefix.into(),
             df.height(),
             &fields,
-        )
-        .map_err(PyPolarsErr::from)
-        .map_err(|e| {
-            PyErr::new::<
-                pyo3::exceptions::PyValueError,
-                _,
-            >(e.to_string())
-        })?;
+        )?;
 
     Ok(Some(struct_series.into_column()))
 }

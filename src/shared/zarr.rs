@@ -105,10 +105,7 @@ impl HasMetadataBackendSync<ZarrMeta>
         // Load and cache metadata
         let meta = load_zarr_meta_from_opened(
             &self.store,
-        )
-        .map_err(|e| {
-            BackendError::Other(e.to_string())
-        })?;
+        )?;
         let meta_arc = Arc::new(meta);
 
         *self.cached_meta.write() =
@@ -171,12 +168,7 @@ impl ChunkedDataBackendSync for ZarrBackendSync {
             &opened.array,
             &opened.cache,
             chunk_idx,
-        )
-        .map_err(|e| {
-            BackendError::ChunkReadFailed(
-                e.to_string(),
-            )
-        })?;
+        )?;
 
         Ok(chunk)
     }
@@ -249,10 +241,7 @@ impl HasMetadataBackendAsync<ZarrMeta>
             load_zarr_meta_from_opened_async(
                 &self.store,
             )
-            .await
-            .map_err(|e| {
-                BackendError::Other(e.to_string())
-            })?;
+            .await?;
         let meta_arc = Arc::new(meta);
 
         *self.cached_meta.write().await =
@@ -331,12 +320,7 @@ impl ChunkedDataBackendAsync
             opened.cache.as_ref(),
             chunk_idx,
         )
-        .await
-        .map_err(|e| {
-            BackendError::ChunkReadFailed(
-                e.to_string(),
-            )
-        })?;
+        .await?;
 
         Ok(chunk)
     }

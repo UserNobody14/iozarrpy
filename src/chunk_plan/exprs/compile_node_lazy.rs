@@ -3,6 +3,8 @@
 //! This module mirrors `compile_node.rs` but produces lazy selections that store
 //! `ValueRange` constraints instead of resolved index ranges.
 
+use snafu::ResultExt;
+
 use super::compile_ctx::LazyCompileCtx;
 use super::compile_node::{
     collect_column_refs, extract_struct_field_path,
@@ -528,15 +530,7 @@ fn compile_cmp_to_lazy_selection(
 
     let vr = ValueRangePresent::from_polars_op(
         op, scalar,
-    )
-    .ok_or_else(|| {
-        BackendError::UnsupportedPolarsExpression(
-            format!(
-                "unsupported operator: {:?}",
-                op
-            ),
-        )
-    })?;
+    )?;
 
     compile_value_range_to_lazy_selection(
         col,
@@ -602,10 +596,9 @@ fn compile_struct_field_cmp(
         let key = unified
             .normalize_array_path(array_path.as_ref())
             .ok_or_else(|| {
-                BackendError::UnsupportedPolarsExpression(format!(
-                    "struct field path '{}' not found in metadata",
-                    array_path
-                ))
+                BackendError::StructFieldNotFound {
+                    path: array_path.clone()
+                }
             })?;
         unified.path_to_array.get(&key)
     } else {
@@ -619,15 +612,7 @@ fn compile_struct_field_cmp(
 
     let vr = ValueRangePresent::from_polars_op(
         op, scalar,
-    )
-    .ok_or_else(|| {
-        BackendError::UnsupportedPolarsExpression(
-            format!(
-                "unsupported operator: {:?}",
-                op
-            ),
-        )
-    })?;
+    )?;
 
     // For struct fields, we need to find which dimensions apply
     // If the array is a dimension array, constrain that dimension
@@ -679,12 +664,9 @@ fn compile_boolean_function_lazy(
         BooleanFunction::Not => {
             let [arg] = input else {
                 return Err(
-                    BackendError::UnsupportedPolarsExpression(
-                        format!(
-                            "unsupported boolean function: {:?}",
-                            bf
-                        ),
-                    ),
+                    BackendError::UnsupportedBooleanFunction {
+                        function: bf.clone()
+                    }
                 );
             };
             if let Expr::Literal(lit) =
@@ -721,12 +703,9 @@ fn compile_boolean_function_lazy(
         | BooleanFunction::IsNotNull => {
             let [arg] = input else {
                 return Err(
-                    BackendError::UnsupportedPolarsExpression(
-                        format!(
-                            "unsupported boolean function: {:?}",
-                            bf
-                        ),
-                    ),
+                    BackendError::UnsupportedBooleanFunction {
+                        function: bf.clone()
+                    }
                 );
             };
             if let Expr::Literal(lit) =
@@ -790,12 +769,14 @@ fn compile_is_between_lazy(
     ctx: &mut LazyCompileCtx<'_>,
 ) -> LazyResult {
     if input.len() < 3 {
-        return Err(BackendError::UnsupportedPolarsExpression(
-            format!(
-                "unsupported is_between expression: {:?}",
-                input
+        return Err(
+            BackendError::compile_polars(
+                format!(
+                    "unsupported is_between expression: {:?}",
+                    input
+                ),
             ),
-        ));
+        );
     }
     let expr = &input[0];
     let low = &input[1];
@@ -840,12 +821,14 @@ fn compile_is_in_lazy(
     use polars::prelude::Scalar;
 
     if input.len() < 2 {
-        return Err(BackendError::UnsupportedPolarsExpression(
-            format!(
-                "unsupported is_in expression: {:?}",
-                input
+        return Err(
+            BackendError::compile_polars(
+                format!(
+                    "unsupported is_in expression: {:?}",
+                    input
+                ),
             ),
-        ));
+        );
     }
     let expr = &input[0];
     let list = &input[1];
@@ -883,7 +866,7 @@ fn compile_is_in_lazy(
                 AnyValue::List(series) => {
                     if series.len() > 4096 {
                         return Err(
-                            BackendError::CompileError(
+                            BackendError::compile_polars(
                                 format!(
                                     "list literal is too long: {:?}",
                                     series
@@ -904,7 +887,7 @@ fn compile_is_in_lazy(
                 AnyValue::Array(series, _) => {
                     if series.len() > 4096 {
                         return Err(
-                            BackendError::CompileError(
+                            BackendError::compile_polars(
                                 format!(
                                     "array literal is too long: {:?}",
                                     series
@@ -1033,14 +1016,10 @@ fn compile_selector_lazy(
             ))
         }
         Selector::Matches(pattern) => {
-            let re = Regex::new(pattern.as_str()).map_err(
-                |e| {
-                    BackendError::CompileError(format!(
-                        "invalid regex pattern '{}': {}",
-                        pattern, e
-                    ))
-                },
-            )?;
+            let re = Regex::new(pattern.as_str())
+                .context(crate::errors::backend::RegexSnafu {
+                    pattern: pattern.clone(),
+                })?;
             let matching_vars: Vec<IStr> = ctx
                 .meta
                 .data_vars
@@ -1151,7 +1130,7 @@ fn interpolate_selection_nd_lazy(
             continue;
         };
 
-        let Ok(values) =
+        let Some(values) =
             series_values_scalar_lazy(s)
         else {
             return Ok(Sel::NoSelectionMade);
@@ -1202,7 +1181,7 @@ fn interpolate_selection_nd_lazy(
                     .map(|n| -> Result<IStr, BackendError> {
                         let Expr::Column(name) = strip_wrappers(n) else {
                             return Err(
-                                BackendError::CompileError(
+                                BackendError::compile_polars(
                                     format!(
                                         "source_values must be an Expr::Function with FunctionExpr::AsStruct containing variable names: {:?}",
                                         source_values
@@ -1215,7 +1194,7 @@ fn interpolate_selection_nd_lazy(
                     .collect::<Result<Vec<IStr>, BackendError>>()?,
                 _ => {
                     return Err(
-                        BackendError::CompileError(
+                        BackendError::compile_polars(
                             format!(
                                 "source_values must be an Expr::Function with FunctionExpr::AsStruct containing variable names: {:?}",
                                 source_values
@@ -1231,7 +1210,7 @@ fn interpolate_selection_nd_lazy(
             .collect::<Vec<_>>(),
         _ => {
             return Err(
-                BackendError::CompileError(
+                BackendError::compile_polars(
                     format!(
                         "source_values must be an Expr::Field containing variable names: {:?}",
                         source_values

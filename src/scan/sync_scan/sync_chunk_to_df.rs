@@ -4,8 +4,12 @@
 //! using a generic backend interface that can work with any implementation.
 
 use crate::IStr;
-use crate::chunk_plan::{ChunkGridSignature, ChunkSubset};
-use crate::errors::BackendError;
+use crate::chunk_plan::{
+    ChunkGridSignature, ChunkSubset,
+};
+use crate::errors::{
+    BackendError, BackendResult,
+};
 use crate::meta::{ZarrDatasetMeta, ZarrMeta};
 use crate::reader::{
     ColumnData, checked_chunk_len,
@@ -15,17 +19,8 @@ use crate::shared::{
     ChunkDataSourceSync, ChunkedDataBackendSync,
 };
 use polars::prelude::*;
-use pyo3::prelude::*;
-use pyo3_polars::error::PyPolarsErr;
-use std::collections::BTreeSet;
 
-fn to_py_err<E: std::fmt::Display>(
-    e: E,
-) -> PyErr {
-    PyErr::new::<pyo3::exceptions::PyValueError, _>(
-        e.to_string(),
-    )
-}
+use std::collections::BTreeSet;
 
 use crate::scan::shared::{
     build_coord_column, build_var_column,
@@ -125,9 +120,8 @@ fn read_coord_chunks<B: ChunkDataSourceSync>(
     origin: &[u64],
     chunk_shape: &[u64],
     with_columns: Option<&BTreeSet<IStr>>,
-) -> Result<
+) -> BackendResult<
     std::collections::BTreeMap<IStr, ColumnData>,
-    PyErr,
 > {
     let mut coord_slices: std::collections::BTreeMap<
         IStr,
@@ -167,19 +161,14 @@ fn read_coord_chunks<B: ChunkDataSourceSync>(
             coord_chunk_shape,
             dim_start,
             dim_len,
-        )
-        .map_err(to_py_err)?;
+        )?;
 
         if data.len() != dim_len as usize {
-            return Err(PyErr::new::<
-                pyo3::exceptions::PyValueError,
-                _,
-            >(format!(
-                "coord '{}' length mismatch: expected {}, got {}",
-                dim_name,
-                dim_len,
-                data.len()
-            )));
+            return Err(BackendError::CoordLengthMismatch {
+                name: dim_name.clone(),
+                expected_len: dim_len,
+                coord_len: data.len() as u64,
+            });
         }
         coord_slices
             .insert(dim_name.clone(), data);
@@ -197,7 +186,7 @@ fn read_var_chunks<B: ChunkDataSourceSync>(
     dims: &[IStr],
     vars: &[IStr],
     with_columns: Option<&BTreeSet<IStr>>,
-) -> Result<
+) -> BackendResult<
     Vec<(
         IStr,
         ColumnData,
@@ -205,7 +194,6 @@ fn read_var_chunks<B: ChunkDataSourceSync>(
         Vec<u64>,
         Vec<u64>,
     )>,
-    PyErr,
 > {
     let mut var_chunks = Vec::new();
 
@@ -225,15 +213,11 @@ fn read_var_chunks<B: ChunkDataSourceSync>(
         }
 
         let var_meta =
-            meta.arrays.get(name).ok_or_else(|| {
-                PyErr::new::<
-                    pyo3::exceptions::PyValueError,
-                    _,
-                >(format!(
-                    "unknown variable: {}",
-                    name
-                ))
-            })?;
+            meta.arrays.get(name).ok_or(
+                BackendError::UnknownVariable {
+                    name: name.clone(),
+                },
+            )?;
 
         let var_dims: Vec<IStr> = var_meta
             .dims
@@ -261,12 +245,10 @@ fn read_var_chunks<B: ChunkDataSourceSync>(
             );
 
         // Read the chunk using the full path from metadata
-        let data = backend
-            .read_chunk_sync(
-                &name,
-                &var_chunk_indices,
-            )
-            .map_err(to_py_err)?;
+        let data = backend.read_chunk_sync(
+            &name,
+            &var_chunk_indices,
+        )?;
 
         var_chunks.push((
             name.clone(),
@@ -298,7 +280,7 @@ pub fn chunk_to_df_from_grid_with_backend<
     vars: &[IStr],
     with_columns: Option<&BTreeSet<IStr>>,
     chunk_subset: Option<&ChunkSubset>,
-) -> Result<DataFrame, PyErr> {
+) -> BackendResult<DataFrame> {
     let chunk_shape = sig.chunk_shape();
     let dims = sig.dims();
 
@@ -309,8 +291,7 @@ pub fn chunk_to_df_from_grid_with_backend<
         .map(|(i, s)| i * s)
         .collect();
 
-    let meta =
-        backend.metadata().map_err(to_py_err)?;
+    let meta = backend.metadata()?;
     let planning_meta = meta.planning_meta();
 
     let chunk_len =
@@ -403,6 +384,5 @@ pub fn chunk_to_df_from_grid_with_backend<
         cols.push(col);
     }
 
-    Ok(DataFrame::new(height, cols)
-        .map_err(PyPolarsErr::from)?)
+    Ok(DataFrame::new(height, cols)?)
 }

@@ -50,12 +50,7 @@ impl AsyncOpenedStore {
         } else {
             Array::async_open(strtraits, &norm)
                 .await
-        }
-        .map_err(|e| {
-            BackendError::ArrayOpenFailed(
-                e.to_string(),
-            )
-        })?;
+        }?;
         let array_arc = Arc::new(array);
         let cache = ShardedCacheAsync::new(
             array_arc.as_ref(),
@@ -131,10 +126,9 @@ pub fn open_store_async(
     if url.scheme() == "file" {
         let path =
             url.to_file_path().map_err(|_| {
-                BackendError::Other(
-                    "invalid file:// URL"
-                        .to_string(),
-                )
+                BackendError::InvalidFileUrl {
+                    url: zarr_url.to_string(),
+                }
             })?;
         let path =
             path.to_string_lossy().to_string();

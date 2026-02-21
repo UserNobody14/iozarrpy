@@ -35,4 +35,6 @@ pub(crate) use indexing::types::{
 pub(crate) use indexing::types::CoordScalar;
 pub(crate) use indexing::types::compute_bounds_from_value_range;
 pub(crate) use exprs::apply_time_encoding;
+pub(crate) use indexing::resolver_traits::ResolutionError;
+
 use crate::chunk_plan;

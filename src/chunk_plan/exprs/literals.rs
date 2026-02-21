@@ -189,10 +189,8 @@ pub(super) fn literal_to_scalar(
                 let v = rest
                     .trim()
                     .parse::<i64>()
-                    .or_else(|_| Err(BackendError::UnsupportedPolarsExpression(format!(
-                        "unsupported literal: {:?}",
-                        lit
-                    ))))?;
+                    .or_else(|_| Err(BackendError::UnsupportedLiteral { lit: lit.clone() }
+                        ))?;
                 return Ok(CoordScalar::I64(v));
             }
             if let Some(rest) =
@@ -201,10 +199,8 @@ pub(super) fn literal_to_scalar(
                 let v = rest
                     .trim()
                     .parse::<f64>()
-                    .or_else(|_| Err(BackendError::UnsupportedPolarsExpression(format!(
-                        "unsupported literal: {:?}",
-                        lit
-                    ))))?;
+                    .or_else(|_| Err(BackendError::UnsupportedLiteral { lit: lit.clone() }
+                        ))?;
                 return Ok(CoordScalar::F64(v));
             }
             if let Some(rest) =
@@ -213,19 +209,15 @@ pub(super) fn literal_to_scalar(
                 let v = rest
                     .trim()
                     .parse::<bool>()
-                    .or_else(|_| Err(BackendError::UnsupportedPolarsExpression(format!(
-                        "unsupported literal: {:?}",
-                        lit
-                    ))))?;
+                    .or_else(|_| Err(BackendError::UnsupportedLiteral { lit: lit.clone() }
+                    ))?;
                 return Ok(CoordScalar::I64(
                     i64::from(v),
                 ));
             }
 
-            parse_temporal_from_str(s).ok_or_else(|| BackendError::UnsupportedPolarsExpression(format!(
-                "unsupported literal: {:?}",
-                lit
-            )))
+            parse_temporal_from_str(s).ok_or_else(|| BackendError::UnsupportedLiteral { lit: lit.clone() }                
+            )
         }
         _ => {
             let anyval = literal_anyvalue(lit);
@@ -335,22 +327,14 @@ pub(super) fn literal_to_scalar(
                                 "chunk_plan: unsupported AnyValue for planning: {other:?}"
                             );
                         }
-                        Err(
-                            BackendError::UnsupportedPolarsExpression(format!(
-                                "unsupported AnyValue for planning: {other:?}"
-                            ))
-                        )?
+                        Err(BackendError::UnsupportedLiteral { lit: lit.clone() })?
                     }
                 };
-                parsed.ok_or_else(|| BackendError::UnsupportedPolarsExpression(format!(
-                    "unsupported literal: {:?}",
-                    lit
-                )))
+                parsed.ok_or_else(|| BackendError::UnsupportedLiteral { lit: lit.clone() }                    
+                )
             } else {
-                Err(BackendError::UnsupportedPolarsExpression(format!(
-                    "unsupported literal: {:?}",
-                    lit
-                )))
+                Err(BackendError::UnsupportedLiteral { lit: lit.clone() }                    
+                )
             }
         }
     }

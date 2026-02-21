@@ -66,12 +66,7 @@ pub fn scan_zarr_with_backend_sync(
     for group in
         grouped_plan.iter_consolidated_chunks()
     {
-        let group = group.map_err(|e| {
-            PyErr::new::<
-                pyo3::exceptions::PyValueError,
-                _,
-            >(e)
-        })?;
+        let group = group?;
         let vars: Vec<IStr> = group
             .vars
             .iter()
@@ -118,7 +113,9 @@ pub fn scan_zarr_with_backend_sync(
 
     // For hierarchical data, convert flat path columns to struct columns
     if meta.is_hierarchical() {
-        restructure_to_structs(&result, &meta)
+        Ok(restructure_to_structs(
+            &result, &meta,
+        )?)
     } else {
         Ok(result)
     }

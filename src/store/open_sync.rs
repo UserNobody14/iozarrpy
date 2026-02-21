@@ -21,6 +21,7 @@ use crate::shared::normalize_path;
 use crate::errors::BackendResult;
 use crate::store::adapters::TokioBlockOn;
 use crate::store::array::OpenedArraySync;
+use snafu::ResultExt;
 
 pub struct OpenedStore {
     pub store: ReadableWritableListableStorage,
@@ -50,12 +51,7 @@ impl OpenedStore {
             )
         } else {
             Array::open(strtraits, &norm)
-        }
-        .map_err(|e| {
-            BackendError::ArrayOpenFailed(
-                e.to_string(),
-            )
-        })?;
+        }?;
         let array_arc = Arc::new(array);
         let cache = ShardedCacheSync::new(
             array_arc.as_ref(),
@@ -87,9 +83,12 @@ pub fn open_store_from_object_store(
     }
     let async_store: AsyncReadableWritableListableStorage =
         Arc::new(AsyncObjectStore::new(store));
-    let rt = Arc::new(Runtime::new().map_err(|e| {
-        BackendError::Other(format!("failed to create tokio runtime: {e}"))
-    })?);
+    let rt = Arc::new(Runtime::new().context(
+        crate::errors::backend::CreateTokioRuntimeForSyncStoreSnafu {
+            store: prefix.clone().unwrap_or_default(),
+            prefix: prefix.clone().unwrap_or_default(),
+        }
+    )?);
     let sync_store =
         AsyncToSyncStorageAdapter::new(
             async_store,
@@ -130,10 +129,9 @@ pub fn open_store(
     if url.scheme() == "file" {
         let path =
             url.to_file_path().map_err(|_| {
-                BackendError::Other(
-                    "invalid file:// URL"
-                        .to_string(),
-                )
+                BackendError::InvalidFileUrl {
+                    url: zarr_url.to_string(),
+                }
             })?;
         let path =
             path.to_string_lossy().to_string();
@@ -145,9 +143,12 @@ pub fn open_store(
 
     let async_store: AsyncReadableWritableListableStorage =
         Arc::new(AsyncObjectStore::new(store));
-    let rt = Arc::new(Runtime::new().map_err(|e| {
-        BackendError::Other(format!("failed to create tokio runtime: {e}"))
-    })?);
+    let rt = Arc::new(Runtime::new().context(
+        crate::errors::backend::CreateTokioRuntimeForSyncStoreSnafu {
+            prefix: prefix.clone(),
+            store: zarr_url.to_string(),
+        }
+    )?);
     let sync_store =
         AsyncToSyncStorageAdapter::new(
             async_store,

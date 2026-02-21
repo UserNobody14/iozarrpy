@@ -114,7 +114,7 @@ pub(crate) fn retrieve_chunk(
                 )
                 ?,
         )),
-        other => Err(BackendError::Other(format!(
+        other => Err(BackendError::other(format!(
             "unsupported zarr dtype: {other}"
         ))),
     }

@@ -8,7 +8,9 @@ use zarrs::array::ChunkGrid;
 use crate::IStr;
 use crate::chunk_plan::indexing::selection::ArraySubsetList;
 use crate::chunk_plan::indexing::types::ChunkGridSignature;
-use crate::errors::BackendResult;
+use crate::errors::{
+    BackendError, BackendResult,
+};
 
 // =============================================================================
 // Chunk Subset
@@ -273,9 +275,8 @@ impl GroupedChunkPlan {
     pub fn iter_consolidated_chunks(
         &self,
     ) -> impl Iterator<
-        Item = Result<
+        Item = BackendResult<
             ConsolidatedGridGroup<'_>,
-            String,
         >,
     > + '_ {
         self.by_grid.iter().map(
@@ -285,8 +286,9 @@ impl GroupedChunkPlan {
                 let chunkgrid = self
                     .get_chunk_grid(sig.as_ref())
                     .ok_or_else(|| {
-                        "missing chunk grid for signature"
-                            .to_string()
+                        BackendError::MissingChunkGrid {
+                            sig: sig.as_ref().clone(),
+                        }
                     })?;
                 let array_shape =
                     chunkgrid.array_shape().to_vec();
@@ -300,12 +302,7 @@ impl GroupedChunkPlan {
                     let indices = chunkgrid
                         .chunks_in_array_subset(
                             subset,
-                        )
-                        .map_err(|e| {
-                            format!(
-                            "chunk grid traversal error: {e}"
-                        )
-                        })?;
+                        )?;
                     if let Some(indices) = indices
                     {
                         for idx in

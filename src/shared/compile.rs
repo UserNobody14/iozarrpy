@@ -196,13 +196,7 @@ fn finish_compile_with_resolved_cache(
         lazy_selection,
         &legacy_meta,
         &merged,
-    )
-    .map_err(|e| {
-        BackendError::CompileError(format!(
-            "materialization failed: {}",
-            e
-        ))
-    })?;
+    )?;
     let stats = PlannerStats { coord_reads: 0 };
     let grouped_plan =
         selection_to_grouped_chunk_plan_unified_from_meta(&selection, meta)?;

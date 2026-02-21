@@ -153,12 +153,7 @@ impl IcechunkIterator {
 
             let grid_groups: Vec<OwnedGridGroup> = grouped_plan
                 .iter_consolidated_chunks()
-                .map(|result| {
-                    result.map_err(|e| {
-                        PyErr::new::<pyo3::exceptions::PyValueError, _>(e)
-                    })
-                })
-                .collect::<Result<Vec<_>, PyErr>>()?
+                .collect::<Result<Vec<_>, _>>()?
                 .into_iter()
                 .map(|group| OwnedGridGroup {
                     sig: Arc::new(group.sig.clone()),

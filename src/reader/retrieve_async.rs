@@ -127,15 +127,9 @@ pub(crate) async fn retrieve_chunk_async(
                 ?,
         )),
         other => {
-            Err(BackendError::Other(format!(
+            Err(BackendError::other(format!(
                 "unsupported zarr dtype: {other}"
             )))
         }
     }
-}
-
-fn to_string_err<E: std::fmt::Display>(
-    e: E,
-) -> String {
-    e.to_string()
 }
