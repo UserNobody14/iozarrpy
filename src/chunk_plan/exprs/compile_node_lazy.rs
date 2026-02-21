@@ -49,10 +49,10 @@ pub(crate) fn compile_expr(
     let expr: &Expr =
         std::borrow::Borrow::borrow(&expr);
     match expr {
-        Expr::AnonymousAgg { .. } => {
-            return Err(BackendError::UnsupportedPolarsExpression(
-                "AnonymousAgg is not supported".to_string(),
-            ));
+        Expr::Display { inputs, fmt_str } => {
+            panic!(
+                "Display expression not supported"
+            );
         }
         Expr::Alias(inner, _) => {
             compile_expr(inner.as_ref(), ctx)

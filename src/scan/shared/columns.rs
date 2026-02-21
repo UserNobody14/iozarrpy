@@ -5,6 +5,7 @@ pub(crate) use polars::prelude::*;
 pub(crate) use std::collections::BTreeSet;
 
 use crate::IStr;
+use crate::chunk_plan::ChunkSubset;
 
 /// Represents which flat indices in a chunk are in-bounds.
 ///
@@ -232,17 +233,19 @@ pub(crate) fn build_coord_column(
     }
 }
 
-/// Compute the in-bounds mask for edge chunk handling.
+/// Compute the in-bounds mask for edge chunk handling,
+/// optionally constrained by a chunk-local subset.
 ///
-/// For interior chunks (all elements in-bounds), returns
-/// `KeepMask::All` in O(ndim) without iterating over elements.
-/// Only edge chunks pay the O(chunk_len × ndim) cost.
+/// For interior chunks with no subset, returns `KeepMask::All`
+/// in O(ndim) without iterating over elements.
+/// Edge chunks or subsetted chunks pay O(chunk_len × ndim).
 pub(crate) fn compute_in_bounds_mask(
     chunk_len: usize,
     chunk_shape: &[u64],
     origin: &[u64],
     array_shape: &[u64],
     strides: &[u64],
+    chunk_subset: Option<&ChunkSubset>,
 ) -> KeepMask {
     // O(ndim) check: is every dimension fully in-bounds?
     let is_interior = chunk_shape
@@ -251,11 +254,10 @@ pub(crate) fn compute_in_bounds_mask(
         .zip(array_shape.iter())
         .all(|((cs, o), a)| o + cs <= *a);
 
-    if is_interior {
+    if is_interior && chunk_subset.is_none() {
         return KeepMask::All(chunk_len);
     }
 
-    // Edge chunk: compute sparse mask
     let mut keep: Vec<usize> =
         Vec::with_capacity(chunk_len);
     for row in 0..chunk_len {
@@ -263,10 +265,20 @@ pub(crate) fn compute_in_bounds_mask(
         for d in 0..chunk_shape.len() {
             let local = (row as u64 / strides[d])
                 % chunk_shape[d];
-            let global = origin[d] + local;
-            if global >= array_shape[d] {
-                ok = false;
-                break;
+            if !is_interior {
+                let global = origin[d] + local;
+                if global >= array_shape[d] {
+                    ok = false;
+                    break;
+                }
+            }
+            if let Some(sub) = chunk_subset {
+                if local < sub.ranges[d].start
+                    || local >= sub.ranges[d].end
+                {
+                    ok = false;
+                    break;
+                }
             }
         }
         if ok {

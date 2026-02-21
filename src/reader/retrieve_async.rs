@@ -1,8 +1,11 @@
-use zarrs::array::codec::CodecOptions;
+use std::borrow::Cow;
+
 use zarrs::array::{
     Array, AsyncArrayShardedReadableExt,
     AsyncArrayShardedReadableExtCache,
+    CodecOptions,
 };
+use zarrs::plugin::ZarrVersion;
 
 use crate::reader::ColumnData;
 
@@ -15,18 +18,26 @@ pub(crate) use zarrs::array::AsyncArrayShardedReadableExtCache as ShardedCacheAs
 /// For sharded arrays, the cache stores shard indexes to avoid
 /// repeated retrieval and decoding.
 ///
-/// The chunk indices should be inner chunk indices (from inner_chunk_grid).
+/// The chunk indices should be inner chunk indices (from subchunk_grid).
 pub(crate) async fn retrieve_chunk_async(
     array: &Array<dyn zarrs::storage::AsyncReadableWritableListableStorageTraits>,
     cache: &AsyncArrayShardedReadableExtCache,
     chunk: &[u64],
 ) -> Result<ColumnData, String> {
-    let id = array.data_type().identifier();
+    let idv = array
+        .data_type()
+        .name(ZarrVersion::V3)
+        .map(|s| s.to_owned())
+        .unwrap_or_else(|| {
+            Cow::Borrowed("binary")
+        })
+        .into_owned();
+    let id = idv.as_str();
     let options = CodecOptions::default();
     match id {
         "bool" => Ok(ColumnData::Bool(
             array
-                .async_retrieve_inner_chunk_opt::<Vec<bool>>(
+                .async_retrieve_subchunk_opt::<Vec<bool>>(
                     cache, chunk, &options,
                 )
                 .await
@@ -34,7 +45,7 @@ pub(crate) async fn retrieve_chunk_async(
         )),
         "int8" => Ok(ColumnData::I8(
             array
-                .async_retrieve_inner_chunk_opt::<Vec<i8>>(
+                .async_retrieve_subchunk_opt::<Vec<i8>>(
                     cache, chunk, &options,
                 )
                 .await
@@ -42,7 +53,7 @@ pub(crate) async fn retrieve_chunk_async(
         )),
         "int16" => Ok(ColumnData::I16(
             array
-                .async_retrieve_inner_chunk_opt::<Vec<i16>>(
+                .async_retrieve_subchunk_opt::<Vec<i16>>(
                     cache, chunk, &options,
                 )
                 .await
@@ -50,7 +61,7 @@ pub(crate) async fn retrieve_chunk_async(
         )),
         "int32" => Ok(ColumnData::I32(
             array
-                .async_retrieve_inner_chunk_opt::<Vec<i32>>(
+                .async_retrieve_subchunk_opt::<Vec<i32>>(
                     cache, chunk, &options,
                 )
                 .await
@@ -58,7 +69,7 @@ pub(crate) async fn retrieve_chunk_async(
         )),
         "int64" => Ok(ColumnData::I64(
             array
-                .async_retrieve_inner_chunk_opt::<Vec<i64>>(
+                .async_retrieve_subchunk_opt::<Vec<i64>>(
                     cache, chunk, &options,
                 )
                 .await
@@ -66,7 +77,7 @@ pub(crate) async fn retrieve_chunk_async(
         )),
         "uint8" => Ok(ColumnData::U8(
             array
-                .async_retrieve_inner_chunk_opt::<Vec<u8>>(
+                .async_retrieve_subchunk_opt::<Vec<u8>>(
                     cache, chunk, &options,
                 )
                 .await
@@ -74,7 +85,7 @@ pub(crate) async fn retrieve_chunk_async(
         )),
         "uint16" => Ok(ColumnData::U16(
             array
-                .async_retrieve_inner_chunk_opt::<Vec<u16>>(
+                .async_retrieve_subchunk_opt::<Vec<u16>>(
                     cache, chunk, &options,
                 )
                 .await
@@ -82,7 +93,7 @@ pub(crate) async fn retrieve_chunk_async(
         )),
         "uint32" => Ok(ColumnData::U32(
             array
-                .async_retrieve_inner_chunk_opt::<Vec<u32>>(
+                .async_retrieve_subchunk_opt::<Vec<u32>>(
                     cache, chunk, &options,
                 )
                 .await
@@ -90,7 +101,7 @@ pub(crate) async fn retrieve_chunk_async(
         )),
         "uint64" => Ok(ColumnData::U64(
             array
-                .async_retrieve_inner_chunk_opt::<Vec<u64>>(
+                .async_retrieve_subchunk_opt::<Vec<u64>>(
                     cache, chunk, &options,
                 )
                 .await
@@ -98,7 +109,7 @@ pub(crate) async fn retrieve_chunk_async(
         )),
         "float32" => Ok(ColumnData::F32(
             array
-                .async_retrieve_inner_chunk_opt::<Vec<f32>>(
+                .async_retrieve_subchunk_opt::<Vec<f32>>(
                     cache, chunk, &options,
                 )
                 .await
@@ -106,7 +117,7 @@ pub(crate) async fn retrieve_chunk_async(
         )),
         "float64" => Ok(ColumnData::F64(
             array
-                .async_retrieve_inner_chunk_opt::<Vec<f64>>(
+                .async_retrieve_subchunk_opt::<Vec<f64>>(
                     cache, chunk, &options,
                 )
                 .await

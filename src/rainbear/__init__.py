@@ -88,10 +88,18 @@ def scan_zarr(
                 n_rows=n_rows,
                 batch_size=batch_size,
             )
+        elif isinstance(backend, IcechunkBackend):
+            yield from backend.scan_zarr_streaming_sync(
+                predicate=predicate,
+                with_columns=with_columns,
+                max_chunks_to_read=max_chunks_to_read,
+                n_rows=n_rows,
+                batch_size=batch_size,
+            )
         else:
             # Build the new predicate:
             new_predicate = pl.col(with_columns) if with_columns else pl.all()
-            new_predicate = new_predicate.filter(predicate) if predicate else new_predicate
+            new_predicate = new_predicate.filter(predicate) if predicate is not None else new_predicate
             # Run blocking async scan
             df = asyncio.run(backend.scan_zarr_async(
                 predicate=new_predicate,
