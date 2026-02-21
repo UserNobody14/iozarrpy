@@ -41,10 +41,6 @@ jobs:
             target: x86
           - runner: ubuntu-22.04
             target: aarch64
-          - runner: ubuntu-22.04
-            target: armv7
-          - runner: ubuntu-22.04
-            target: ppc64le
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
@@ -59,7 +55,6 @@ jobs:
           manylinux: auto
           before-script-linux: |
             export CFLAGS_aarch64_unknown_linux_gnu="-march=armv8-a"
-            export CFLAGS_armv7_unknown_linux_gnueabihf="-march=armv7-a -mfpu=vfpv3-d16"
       - name: Build free-threaded wheels
         uses: PyO3/maturin-action@v1
         with:
@@ -69,7 +64,6 @@ jobs:
           manylinux: auto
           before-script-linux: |
             export CFLAGS_aarch64_unknown_linux_gnu="-march=armv8-a"
-            export CFLAGS_armv7_unknown_linux_gnueabihf="-march=armv7-a -mfpu=vfpv3-d16"
       - name: Upload wheels
         uses: actions/upload-artifact@v5
         with:
@@ -87,8 +81,6 @@ jobs:
             target: x86
           - runner: ubuntu-22.04
             target: aarch64
-          - runner: ubuntu-22.04
-            target: armv7
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
@@ -103,7 +95,6 @@ jobs:
           manylinux: musllinux_1_2
           before-script-linux: |
             export CFLAGS_aarch64_unknown_linux_gnu="-march=armv8-a"
-            export CFLAGS_armv7_unknown_linux_gnueabihf="-march=armv7-a -mfpu=vfpv3-d16"
       - name: Build free-threaded wheels
         uses: PyO3/maturin-action@v1
         with:
@@ -113,7 +104,6 @@ jobs:
           manylinux: musllinux_1_2
           before-script-linux: |
             export CFLAGS_aarch64_unknown_linux_gnu="-march=armv8-a"
-            export CFLAGS_armv7_unknown_linux_gnueabihf="-march=armv7-a -mfpu=vfpv3-d16"
       - name: Upload wheels
         uses: actions/upload-artifact@v5
         with:

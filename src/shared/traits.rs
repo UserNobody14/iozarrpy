@@ -11,7 +11,6 @@ use std::fmt::Display;
 use std::sync::{Arc, RwLock as StdRwLock};
 
 use ambassador::{Delegate, delegatable_trait};
-use pyo3::PyErr;
 use tokio::sync::RwLock;
 use zarrs::storage::{
     AsyncReadableWritableListableStorage,
@@ -21,14 +20,6 @@ use zarrs::storage::{
 use crate::IStr;
 use crate::errors::BackendError;
 use crate::reader::ColumnData;
-use crate::shared::PlannerStats;
-
-#[delegatable_trait]
-pub trait HasStats {
-    /// Designates a backend with statistics tracking about which items it runs.
-    /// Tracks coordinate array reads, var array reads, total reads, etc.
-    fn stats(&self) -> Arc<PlannerStats>;
-}
 
 /// Synchronous chunked data backend trait.
 ///
@@ -123,27 +114,15 @@ pub trait HasAsyncStore {
     target = "backend",
     where = "BACKEND: HasStore"
 )]
-#[delegate(
-    HasStats,
-    target = "backend",
-    where = "BACKEND: HasStats"
-)]
 pub struct ChunkedDataCacheSync<
     BACKEND: ChunkedDataBackendSync,
 > {
     backend: BACKEND,
     chunk_cache:
         MokaCache<(IStr, Vec<u64>), ColumnData>,
-    stats: RwLock<PlannerStats>,
 }
 
 /// Async cache for chunked data
-#[derive(Delegate)]
-#[delegate(
-    HasStats,
-    target = "backend",
-    where = "BACKEND: HasStats"
-)]
 pub struct ChunkedDataCacheAsync<
     BACKEND: ChunkedDataBackendAsync,
 > {
@@ -152,7 +131,6 @@ pub struct ChunkedDataCacheAsync<
         (IStr, Vec<u64>),
         ColumnData,
     >,
-    stats: RwLock<PlannerStats>,
 }
 
 /// Sync cache for metadata - delegates chunked data and store traits to backend
@@ -200,9 +178,6 @@ impl<BACKEND: ChunkedDataBackendSync>
             chunk_cache: MokaCache::new(
                 max_entries,
             ),
-            stats: RwLock::new(
-                PlannerStats::default(),
-            ),
         }
     }
 }
@@ -218,9 +193,6 @@ impl<BACKEND: ChunkedDataBackendAsync>
             backend,
             chunk_cache: MokaFutureCache::new(
                 max_entries,
-            ),
-            stats: RwLock::new(
-                PlannerStats::default(),
             ),
         }
     }
