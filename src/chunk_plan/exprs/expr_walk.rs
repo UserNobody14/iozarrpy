@@ -20,8 +20,10 @@ pub fn walk_expr(
     visitor(expr);
     let expr = strip_wrappers(expr);
     match expr {
-        Expr::AnonymousAgg { .. } => {
-            // Not supported for recursive walking; visitor already saw the node.
+        Expr::Display { .. } => {
+            panic!(
+                "Display expression not supported"
+            );
         }
         Expr::Alias(inner, _)
         | Expr::KeepName(inner)

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use smallvec::SmallVec;
-use zarrs::array_subset::ArraySubset;
+use zarrs::array::ArraySubset;
 
 use crate::IStr;
 

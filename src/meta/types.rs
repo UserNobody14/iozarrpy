@@ -2,10 +2,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Display;
 use std::sync::Arc;
 
-use crate::reader::compute_strides;
 use polars::prelude::{
-    DataType as PlDataType, Field, NamedFrom,
-    Schema, TimeUnit,
+    DataType as PlDataType, Field, Schema,
+    TimeUnit,
 };
 use smallvec::SmallVec;
 use zarrs::array::ChunkGrid;
@@ -134,138 +133,12 @@ impl DimensionAnalysis {
             );
         }
     }
-
-    /// Map a node's local dims to output dim positions.
-    /// For each output dim, returns Some(index) if the node has that dim, None otherwise.
-    pub fn node_dim_positions(
-        &self,
-        node_path: &str,
-    ) -> Vec<Option<usize>> {
-        let empty = Vec::new();
-        let local_dims = self
-            .node_dims
-            .get(&node_path.istr())
-            .unwrap_or(&empty);
-        self.all_dims
-            .iter()
-            .map(|out_dim| {
-                local_dims
-                    .iter()
-                    .position(|nd| nd == out_dim)
-            })
-            .collect()
-    }
-
-    /// Check if node shares any dims with root
-    pub fn shares_dims_with_root(
-        &self,
-        node_path: &str,
-    ) -> bool {
-        let empty = Vec::new();
-        let local_dims = self
-            .node_dims
-            .get(&node_path.istr())
-            .unwrap_or(&empty);
-        local_dims
-            .iter()
-            .any(|d| self.root_dims.contains(d))
-    }
-
-    /// Get the total number of elements for the combined output grid
-    pub fn total_elements(&self) -> u64 {
-        self.all_dims
-            .iter()
-            .map(|d| {
-                self.dim_lengths
-                    .get(d)
-                    .copied()
-                    .unwrap_or(1)
-            })
-            .product()
-    }
-
-    /// Get the shape of the combined output grid
-    pub fn output_shape(&self) -> Vec<u64> {
-        self.all_dims
-            .iter()
-            .map(|d| {
-                self.dim_lengths
-                    .get(d)
-                    .copied()
-                    .unwrap_or(1)
-            })
-            .collect()
-    }
-
-    /// Compute strides for row-major indexing of the output grid
-    pub fn output_strides(&self) -> Vec<u64> {
-        let shape = self.output_shape();
-        compute_strides(&shape)
-    }
-
-    /// Compute the index into a source array given an output row index.
-    ///
-    /// This handles broadcasting: when the source array has fewer dimensions than
-    /// the output, the extra output dimensions are ignored (broadcast/repeated).
-    ///
-    /// # Arguments
-    /// * `output_row` - Row index in the output DataFrame
-    /// * `source_dims` - Dimension names for source array (e.g., ["y", "x"])
-    /// * `source_shape` - Shape of the source array
-    ///
-    /// # Returns
-    /// Index into the source array's flat buffer
-    pub fn compute_source_index(
-        &self,
-        output_row: u64,
-        source_dims: &[IStr],
-        source_shape: &[u64],
-    ) -> u64 {
-        let output_shape = self.output_shape();
-        let output_strides =
-            compute_strides(&output_shape);
-        let source_strides =
-            compute_strides(source_shape);
-
-        let mut source_idx: u64 = 0;
-
-        for (src_d, src_dim) in
-            source_dims.iter().enumerate()
-        {
-            // Find this source dimension in the output dimensions
-            if let Some(out_d) = self
-                .all_dims
-                .iter()
-                .position(|od| od == src_dim)
-            {
-                // Extract coordinate for this dimension from output row
-                let coord = (output_row
-                    / output_strides[out_d])
-                    % output_shape[out_d];
-                if src_d < source_strides.len() {
-                    source_idx += coord
-                        * source_strides[src_d];
-                }
-            }
-            // If source dim not in output dims, it's an error in metadata
-        }
-
-        source_idx
-    }
 }
 
 impl ZarrMeta {
     /// True if there are any child groups
     pub fn is_hierarchical(&self) -> bool {
         !self.root.children.is_empty()
-    }
-
-    /// Get array meta by exact path (no normalization).
-    pub fn array(
-        &self,
-        path: &str,
-    ) -> Option<&ZarrArrayMeta> {
-        self.path_to_array.get(&path.istr())
     }
 
     /// Normalize a user path to a canonical key in path_to_array.
@@ -509,36 +382,6 @@ impl ZarrNode {
             local_dims: Vec::new(),
             data_vars: Vec::new(),
         }
-    }
-
-    /// Recursively iterate over all arrays in this node and descendants
-    pub fn all_arrays(
-        &self,
-    ) -> Box<
-        dyn Iterator<
-                Item = (&IStr, &ZarrArrayMeta),
-            > + '_,
-    > {
-        let local = self.arrays.iter();
-        let children_iter = self
-            .children
-            .values()
-            .flat_map(|c| c.all_arrays());
-        Box::new(local.chain(children_iter))
-    }
-
-    /// Recursively iterate over all nodes (including self)
-    pub fn all_nodes(
-        &self,
-    ) -> Box<dyn Iterator<Item = &ZarrNode> + '_>
-    {
-        Box::new(
-            std::iter::once(self).chain(
-                self.children
-                    .values()
-                    .flat_map(|c| c.all_nodes()),
-            ),
-        )
     }
 }
 

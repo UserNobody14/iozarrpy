@@ -17,8 +17,8 @@ pub(crate) fn collect_column_refs(
     out: &mut Vec<IStr>,
 ) {
     walk_expr(expr, &mut |e| match e {
-        Expr::AnonymousAgg { .. } => panic!(
-            "AnonymousAgg is not supported"
+        Expr::Display { .. } => panic!(
+            "Display expression not supported"
         ),
         Expr::Column(name) => {
             out.push(name.istr())
@@ -109,56 +109,5 @@ pub(crate) fn extract_struct_field_path(
             extract_struct_field_path(inner)
         }
         _ => None,
-    }
-}
-
-/// Collects column references including struct field paths.
-/// Returns tuples of (struct_column, field_name) for struct field accesses.
-pub(crate) fn collect_struct_field_refs(
-    expr: &Expr,
-    out: &mut Vec<(IStr, IStr)>,
-) {
-    if let Some(path) =
-        extract_struct_field_path(expr)
-    {
-        out.push(path);
-        return;
-    }
-
-    match expr {
-        Expr::Alias(inner, _)
-        | Expr::KeepName(inner)
-        | Expr::Cast { expr: inner, .. }
-        | Expr::Sort { expr: inner, .. } => {
-            collect_struct_field_refs(inner, out)
-        }
-        Expr::BinaryExpr {
-            left, right, ..
-        } => {
-            collect_struct_field_refs(left, out);
-            collect_struct_field_refs(right, out);
-        }
-        Expr::Function { input, .. }
-        | Expr::AnonymousFunction {
-            input, ..
-        } => {
-            for i in input {
-                collect_struct_field_refs(i, out);
-            }
-        }
-        Expr::Ternary {
-            predicate,
-            truthy,
-            falsy,
-        } => {
-            collect_struct_field_refs(
-                predicate, out,
-            );
-            collect_struct_field_refs(
-                truthy, out,
-            );
-            collect_struct_field_refs(falsy, out);
-        }
-        _ => {}
     }
 }
