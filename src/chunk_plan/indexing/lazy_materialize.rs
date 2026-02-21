@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::ops::Range;
 use std::sync::Arc;
 
-use zarrs::array_subset::ArraySubset;
+use zarrs::array::ArraySubset;
 
 use super::grouped_selection::GroupedSelection;
 use super::lazy_selection::{

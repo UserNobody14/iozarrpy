@@ -91,14 +91,14 @@ pub fn load_zarr_meta_from_opened(
         let time_encoding =
             extract_time_encoding(&array);
         let polars_dtype = zarr_dtype_to_polars(
-            array.data_type().identifier(),
+            array.data_type(),
             time_encoding.as_ref(),
         );
 
         // Extract inner chunk shape (for sharded arrays) or regular chunk shape
         let zero_idx: Vec<u64> =
             vec![0u64; array.dimensionality()];
-        let inner_grid = array.inner_chunk_grid();
+        let inner_grid = array.subchunk_grid();
         let chunk_shape: std::sync::Arc<[u64]> =
             inner_grid
                 .chunk_shape_u64(&zero_idx)
@@ -129,7 +129,7 @@ pub fn load_zarr_meta_from_opened(
             shape,
             chunk_shape,
             chunk_grid: array
-                .inner_chunk_grid()
+                .subchunk_grid()
                 .into(),
             dims,
             polars_dtype,

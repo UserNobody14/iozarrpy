@@ -28,7 +28,7 @@ pyo3 = { version = "0.27.2", features = ["abi3-py39"] }
 # deserialization can decode to the wrong FunctionExpr variants (feature-gated enum variant index drift).
 #
 # This list is mirrored from Polars' `polars-python` crate for the `py-1.37.1` tag.
-polars = { git = "https://github.com/UserNobody14/polars.git", branch = "137-1-work", features = [
+polars = { git = "https://github.com/pola-rs/polars.git", rev = "099564e917b41845217e49e0e3c47cb22b7e8484", features = [
     "abs",
     "approx_unique",
     "array_any_all",
@@ -98,8 +98,8 @@ polars = { git = "https://github.com/UserNobody14/polars.git", branch = "137-1-w
 # `FfiPlugin` lives behind `polars-lazy/ffi_plugin` (which enables the correct downstream
 # `polars-expr`/`polars-plan` feature chain). Add it directly so the Expr pickle/bincode
 # layout matches Python Polars when FFI plugins are present.
-polars-lazy = { git = "https://github.com/UserNobody14/polars.git", branch = "137-1-work", features = ["ffi_plugin"] }
-pyo3-polars = { git = "https://github.com/UserNobody14/polars.git", branch = "137-1-work", features = [
+polars-lazy = { git = "https://github.com/pola-rs/polars.git", rev = "099564e917b41845217e49e0e3c47cb22b7e8484", features = ["ffi_plugin"] }
+pyo3-polars = { git = "https://github.com/pola-rs/polars.git", rev = "099564e917b41845217e49e0e3c47cb22b7e8484", features = [
     "object",
     "dtype-extension",
     "derive",
@@ -108,7 +108,7 @@ pyo3-polars = { git = "https://github.com/UserNobody14/polars.git", branch = "13
 ] }
 tokio = { version = "1.45.1", features = ["rt-multi-thread", "macros", "sync", "parking_lot"] }
 url = "2.5.4"
-zarrs = { version = "0.23.0-beta.3", features = ["async", "sharding"] }
+zarrs = { version = "0.23.2", features = ["async", "sharding"] }
 zarrs_object_store = { version = "0.6.1", features = [
     "aws",
     "azure",
@@ -117,8 +117,7 @@ zarrs_object_store = { version = "0.6.1", features = [
     "fs",
 ] }
 zarrs_icechunk = "0.4"
-# Temporary until polars supports chrono > 0.4.41
-icechunk = "=0.3.21"
+icechunk = "0.3.22"
 serde_json = "1.0.145"
 chrono = { version = "0.4.42", features = ["clock", "std", "serde"] }
 futures = "0.3.31"
