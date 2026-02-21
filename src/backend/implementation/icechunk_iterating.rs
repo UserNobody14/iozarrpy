@@ -14,6 +14,7 @@ use pyo3::prelude::*;
 use tokio::sync::Semaphore;
 
 use crate::chunk_plan::ChunkSubset;
+use crate::errors::BackendError;
 use crate::meta::ZarrMeta;
 use crate::scan::async_scan::chunk_to_df_from_grid_with_backend;
 use crate::shared::ChunkedExpressionCompilerAsync;
@@ -118,7 +119,7 @@ impl IcechunkIterator {
         let max_chunks_to_read = self.max_chunks_to_read;
 
         let (grid_groups, meta, expanded_with_columns) = self.runtime.block_on(async {
-            let meta = backend.metadata().await.map_err(|e| {
+            let meta = backend.metadata().await.map_err(|e: BackendError| {
                 PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string())
             })?;
 
@@ -126,7 +127,7 @@ impl IcechunkIterator {
                 with_columns.as_ref().map(|cols| expand_projection_to_flat_paths(cols, &meta));
 
             let (grouped_plan, _stats) = backend.compile_expression_async(&expr).await.map_err(
-                |e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()),
+                |e: BackendError| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()),
             )?;
 
             if let Some(max_chunks) = max_chunks_to_read {
