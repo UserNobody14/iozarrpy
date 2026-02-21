@@ -13,7 +13,11 @@ on:
     tags:
       - '*'
   workflow_dispatch:
-
+    inputs:
+      ref:
+        description: 'Git ref (branch or PR) to run against'
+        required: false
+        default: ''
 
 
 
