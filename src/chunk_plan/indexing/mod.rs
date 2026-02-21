@@ -27,6 +27,7 @@ pub(crate) use resolver_traits::{
 
 // Core types re-exports
 pub(crate) use plan::GroupedChunkPlan;
+pub use plan::ChunkSubset;
 pub(crate) use selection::{
     DatasetSelection, Emptyable,
 };

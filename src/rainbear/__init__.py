@@ -99,7 +99,7 @@ def scan_zarr(
         else:
             # Build the new predicate:
             new_predicate = pl.col(with_columns) if with_columns else pl.all()
-            new_predicate = new_predicate.filter(predicate) if predicate else new_predicate
+            new_predicate = new_predicate.filter(predicate) if predicate is not None else new_predicate
             # Run blocking async scan
             df = asyncio.run(backend.scan_zarr_async(
                 predicate=new_predicate,

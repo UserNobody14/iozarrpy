@@ -15,6 +15,8 @@ use pyo3::PyErr;
 use pyo3::prelude::*;
 use tokio::sync::Semaphore;
 
+use crate::chunk_plan::ChunkSubset;
+use crate::errors::BackendError;
 use crate::IStr;
 use crate::meta::ZarrMeta;
 use crate::scan::async_scan::chunk_to_df_from_grid_with_backend;
@@ -38,6 +40,7 @@ struct OwnedGridGroup {
     >,
     vars: Vec<IStr>,
     chunk_indices: Vec<Vec<u64>>,
+    chunk_subsets: Vec<Option<ChunkSubset>>,
     array_shape: Vec<u64>,
 }
 
@@ -134,7 +137,7 @@ impl IcechunkIterator {
                 with_columns.as_ref().map(|cols| expand_projection_to_flat_paths(cols, &meta));
 
             let (grouped_plan, _stats) = backend.compile_expression_async(&expr).await.map_err(
-                |e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()),
+                |e: BackendError| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()),
             )?;
 
             if let Some(max_chunks) = max_chunks_to_read {
@@ -162,6 +165,7 @@ impl IcechunkIterator {
                     sig: Arc::new(group.sig.clone()),
                     vars: group.vars.iter().map(|&v| v.clone()).collect(),
                     chunk_indices: group.chunk_indices,
+                    chunk_subsets: group.chunk_subsets,
                     array_shape: group.array_shape,
                 })
                 .collect();
@@ -206,17 +210,15 @@ impl IcechunkIterator {
             let group = &state.grid_groups
                 [state.current_group_idx];
 
-            let mut chunks_to_read = Vec::new();
-            while state.current_chunk_idx
-                < group.chunk_indices.len()
-                && state.current_batch_rows
-                    < self.batch_size
+            let mut chunks_to_read: Vec<(Vec<u64>, Option<ChunkSubset>)> = Vec::new();
+            while state.current_chunk_idx < group.chunk_indices.len()
+                && state.current_batch_rows < self.batch_size
             {
-                chunks_to_read.push(
-                    group.chunk_indices
-                        [state.current_chunk_idx]
-                        .clone(),
-                );
+                let ci = state.current_chunk_idx;
+                chunks_to_read.push((
+                    group.chunk_indices[ci].clone(),
+                    group.chunk_subsets[ci].clone(),
+                ));
                 state.current_chunk_idx += 1;
 
                 if chunks_to_read.len() >= 100 {
@@ -241,7 +243,7 @@ impl IcechunkIterator {
                     let semaphore = Arc::new(Semaphore::new(max_concurrency));
                     let mut futs = FuturesUnordered::new();
 
-                    for idx in chunks_to_read {
+                    for (idx, subset) in chunks_to_read {
                         let sem = semaphore.clone();
                         let backend = backend.clone();
                         let sig = sig.clone();
@@ -258,6 +260,7 @@ impl IcechunkIterator {
                                 &array_shape,
                                 &vars,
                                 expanded.as_ref(),
+                                subset.as_ref(),
                             )
                             .await
                         });
