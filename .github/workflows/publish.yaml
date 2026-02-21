@@ -40,10 +40,13 @@ jobs:
         platform:
           - runner: ubuntu-22.04
             target: x86_64
+            manylinux: auto
           - runner: ubuntu-22.04
             target: x86
+            manylinux: auto
           - runner: ubuntu-22.04
             target: aarch64
+            manylinux: manylinux_2_28
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
@@ -59,18 +62,14 @@ jobs:
           target: ${{ matrix.platform.target }}
           args: --release --out dist
           sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
-          manylinux: auto
-          before-script-linux: |
-            export CFLAGS_aarch64_unknown_linux_gnu="-march=armv8-a -D__ARM_ARCH=8"
+          manylinux: ${{ matrix.platform.manylinux }}
       - name: Build free-threaded wheels
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.platform.target }}
           args: --release --out dist -i python3.14t
           sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
-          manylinux: auto
-          before-script-linux: |
-            export CFLAGS_aarch64_unknown_linux_gnu="-march=armv8-a -D__ARM_ARCH=8"
+          manylinux: ${{ matrix.platform.manylinux }}
       - name: Upload wheels
         uses: actions/upload-artifact@v5
         with:
@@ -104,8 +103,6 @@ jobs:
           args: --release --out dist
           sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
           manylinux: musllinux_1_2
-          before-script-linux: |
-            export CFLAGS_aarch64_unknown_linux_gnu="-march=armv8-a -D__ARM_ARCH=8"
       - name: Build free-threaded wheels
         uses: PyO3/maturin-action@v1
         with:
@@ -113,8 +110,6 @@ jobs:
           args: --release --out dist -i python3.14t
           sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
           manylinux: musllinux_1_2
-          before-script-linux: |
-            export CFLAGS_aarch64_unknown_linux_gnu="-march=armv8-a -D__ARM_ARCH=8"
       - name: Upload wheels
         uses: actions/upload-artifact@v5
         with:
