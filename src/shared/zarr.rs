@@ -21,8 +21,7 @@ use crate::errors::{
     BackendError, BackendResult,
 };
 use crate::meta::{
-    ZarrMeta,
-    load_zarr_meta_from_opened,
+    ZarrMeta, load_zarr_meta_from_opened,
     load_zarr_meta_from_opened_async,
 };
 use crate::reader::{

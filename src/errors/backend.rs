@@ -1,11 +1,18 @@
-use std::{fmt::Debug};
+use std::fmt::Debug;
 
+use polars::prelude::{
+    BooleanFunction, Expr, LiteralValue, Operator,
+};
 use pyo3::PyErr;
-use snafu::prelude::*;
 use snafu::Backtrace;
-use polars::prelude::{Expr, LiteralValue, Operator, BooleanFunction};
+use snafu::prelude::*;
 
-use crate::{IStr, chunk_plan::{ChunkGridSignature, ResolutionError}};
+use crate::{
+    IStr,
+    chunk_plan::{
+        ChunkGridSignature, ResolutionError,
+    },
+};
 /// Error type for backend operations.
 #[derive(Debug, Snafu)]
 pub enum BackendError {
@@ -207,18 +214,23 @@ pub enum BackendError {
      },
 }
 
-
 impl BackendError {
     pub fn other(msg: String) -> BackendError {
         BackendError::Other { msg }
     }
-    pub fn compile_polars(msg: String) -> BackendError {
+    pub fn compile_polars(
+        msg: String,
+    ) -> BackendError {
         BackendError::CompileError { msg }
     }
-    pub fn coord_not_found(msg: String) -> BackendError {
+    pub fn coord_not_found(
+        msg: String,
+    ) -> BackendError {
         BackendError::CoordNotFound { msg }
     }
-    pub fn array_open_failed(msg: String) -> BackendError {
+    pub fn array_open_failed(
+        msg: String,
+    ) -> BackendError {
         BackendError::ArrayOpenFailed { msg }
     }
 }
@@ -238,11 +250,13 @@ impl From<BackendError> for PyErr {
             _ => PyErr::new::<
                 pyo3::exceptions::PyValueError,
                 _,
-            >(format!("{}", snafu::Report::from_error(error))),
+            >(format!(
+                "{}",
+                snafu::Report::from_error(error)
+            )),
         }
     }
 }
-
 
 pub type BackendResult<T> =
     Result<T, BackendError>;

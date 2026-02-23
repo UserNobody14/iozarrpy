@@ -57,15 +57,11 @@ pub fn combine_chunk_dataframes(
         let mut acc = first;
         for df in iter {
             // Reorder columns to match the first DataFrame
-            let reordered =
-                df.select(col_order.as_slice())
-                .context(
-                    PolarsSnafu 
-                )?;
+            let reordered = df
+                .select(col_order.as_slice())
+                .context(PolarsSnafu)?;
             acc.vstack_mut(&reordered)
-            .context(
-                PolarsSnafu 
-            )?;
+                .context(PolarsSnafu)?;
         }
         vstacked.push(acc);
     }
@@ -116,7 +112,7 @@ pub fn combine_chunk_dataframes(
         return Ok(polars::functions::concat_df_diagonal(
             &vstacked,
         ).context(
-            PolarsSnafu 
+            PolarsSnafu
         )?);
     }
 
@@ -124,18 +120,18 @@ pub fn combine_chunk_dataframes(
     // Start with the first DF and successively join others
     let mut result = vstacked.remove(0);
     for df in vstacked {
-        result = result.join(
-            &df,
-            shared_coords.as_slice(),
-            shared_coords.as_slice(),
-            JoinArgs::new(JoinType::Full)
-                .with_coalesce(
+        result = result
+            .join(
+                &df,
+                shared_coords.as_slice(),
+                shared_coords.as_slice(),
+                JoinArgs::new(JoinType::Full)
+                    .with_coalesce(
                     JoinCoalesce::CoalesceColumns,
                 ),
-            None,
-        ).context(
-            PolarsSnafu 
-        )?;
+                None,
+            )
+            .context(PolarsSnafu)?;
     }
 
     Ok(result)
@@ -195,9 +191,8 @@ pub fn restructure_to_structs(
     Ok(DataFrame::new(
         df.height(),
         result_columns,
-    ).context(
-        PolarsSnafu 
-    )?)
+    )
+    .context(PolarsSnafu)?)
 }
 
 /// Build a struct column for a zarr node (group).
@@ -260,9 +255,8 @@ fn build_struct_column_for_node(
             prefix.into(),
             df.height(),
             &fields,
-        ).context(
-            PolarsSnafu 
-        )?;
+        )
+        .context(PolarsSnafu)?;
 
     Ok(Some(struct_series.into_column()))
 }
@@ -311,7 +305,9 @@ pub fn expand_projection_to_flat_paths(
         }
 
         // Check if it's already a flat path that exists
-        if meta.array_by_path_contains(col.clone()) {
+        if meta
+            .array_by_path_contains(col.clone())
+        {
             expanded.insert(col.clone());
             continue;
         }
@@ -330,10 +326,8 @@ pub fn expand_projection_to_flat_paths(
 
         // Try to match partial paths like "level_1/level_2"
         // that might reference nested groups
-        if let Some(paths) =
-            meta.find_paths_matching_prefix(
-                col_str
-            )
+        if let Some(paths) = meta
+            .find_paths_matching_prefix(col_str)
         {
             for p in paths {
                 expanded.insert(p);
@@ -378,4 +372,3 @@ fn collect_all_paths_from_node(
         );
     }
 }
-
