@@ -31,7 +31,7 @@ pub(crate) use indexing::resolver_traits::ResolutionCache;
 pub(crate) use indexing::types::ChunkGridSignature;
 pub use indexing::ChunkSubset;
 pub(crate) use indexing::types::{
-    CoordBound, HasCoordBound, ValueRange,
+    CoordBound, HasCoordBound, ValueRangePresent,
 };
 pub(crate) use indexing::types::CoordScalar;
 pub(crate) use indexing::types::compute_bounds_from_value_range;

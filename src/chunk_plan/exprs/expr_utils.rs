@@ -5,17 +5,15 @@ use super::literals::{
 };
 use crate::chunk_plan::exprs::compile_ctx::LazyCompileCtx;
 use crate::chunk_plan::indexing::lazy_selection::{LazyDatasetSelection, lazy_dataset_all_for_vars};
-use crate::chunk_plan::indexing::types::{
-    ValueRange, ValueRangePresent,
-};
+use crate::chunk_plan::indexing::types::ValueRangePresent;
 use crate::chunk_plan::prelude::*;
 use crate::{IStr, IntoIStr};
 
-/// Try to extract a column name and ValueRange from a comparison expression.
+/// Try to extract a column name and value range from a comparison expression.
 pub(super) fn try_expr_to_value_range_lazy(
     expr: &Expr,
     ctx: &LazyCompileCtx<'_>,
-) -> Option<(IStr, ValueRange)> {
+) -> Option<(IStr, ValueRangePresent)> {
     let expr = strip_wrappers(expr);
     let Expr::BinaryExpr { left, op, right } =
         expr
@@ -66,7 +64,7 @@ pub(super) fn try_expr_to_value_range_lazy(
     let vr = ValueRangePresent::from_polars_op(
         op_eff, scalar,
     )
-    .ok();
+    .ok()?;
 
     Some((col, vr))
 }

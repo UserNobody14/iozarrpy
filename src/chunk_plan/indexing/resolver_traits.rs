@@ -6,8 +6,8 @@
 
 use std::collections::HashMap;
 
-use super::types::ValueRange;
-use crate::{IStr, IntoIStr};
+use super::types::ValueRangePresent;
+use crate::IStr;
 
 /// A request to resolve a value range to an index range for a specific dimension.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -15,29 +15,28 @@ pub(crate) struct ResolutionRequest {
     /// The dimension name (interned for efficiency).
     pub(crate) dim: IStr,
     /// The value range to resolve.
-    pub(crate) value_range: ValueRange,
+    pub(crate) value_range: ValueRangePresent,
 }
 
 impl ResolutionRequest {
     /// Create a new resolution request.
     pub(crate) fn new(
-        dim: &str,
-        value_range: ValueRange,
+        dim: &IStr,
+        value_range: ValueRangePresent,
     ) -> Self {
         Self {
-            dim: dim.istr(),
+            dim: dim.clone(),
             value_range,
         }
     }
 }
 
-/// Cache of resolved requests.
-///
-/// This is returned by resolvers after batch resolution and is used during
-/// materialization to look up resolved index ranges.
+/// Resolution data for all requested coordinates
 pub(crate) trait ResolutionCache:
     std::fmt::Debug
 {
+    ///
+
     /// Get the resolved index range for a request.
     ///
     /// Returns:
@@ -49,6 +48,12 @@ pub(crate) trait ResolutionCache:
         &self,
         request: &ResolutionRequest,
     ) -> Option<Option<std::ops::Range<u64>>>;
+
+    fn insert(
+        &mut self,
+        request: ResolutionRequest,
+        result: Option<std::ops::Range<u64>>,
+    );
 }
 
 /// A simple HashMap-based resolution cache.
@@ -65,21 +70,6 @@ impl HashMapCache {
     pub(crate) fn new() -> Self {
         Self::default()
     }
-
-    /// Insert a resolved result into the cache.
-    pub(crate) fn insert(
-        &mut self,
-        request: ResolutionRequest,
-        result: Option<std::ops::Range<u64>>,
-    ) {
-        self.cache.insert(request, result);
-    }
-
-    /// Get the number of cached entries.
-    #[allow(dead_code)]
-    pub(crate) fn len(&self) -> usize {
-        self.cache.len()
-    }
 }
 
 impl ResolutionCache for HashMapCache {
@@ -89,6 +79,14 @@ impl ResolutionCache for HashMapCache {
     ) -> Option<Option<std::ops::Range<u64>>>
     {
         self.cache.get(request).cloned()
+    }
+    /// Insert a resolved result into the cache.
+    fn insert(
+        &mut self,
+        request: ResolutionRequest,
+        result: Option<std::ops::Range<u64>>,
+    ) {
+        self.cache.insert(request, result);
     }
 }
 

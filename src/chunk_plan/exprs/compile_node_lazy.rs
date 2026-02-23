@@ -27,15 +27,12 @@ use crate::chunk_plan::indexing::lazy_selection::{
     lazy_dataset_all_for_vars,
     lazy_dataset_for_vars_with_selection,
 };
-use crate::chunk_plan::indexing::types::{
-    ValueRange, ValueRangePresent, HasIntersect,
-};
+use crate::chunk_plan::indexing::types::ValueRangePresent;
 use crate::chunk_plan::prelude::*;
 use crate::{IStr, IntoIStr};
 use crate::errors::BackendError;
 
 use super::expr_utils::expr_to_col_name;
-use std::sync::Arc;
 
 type LazyResult = Result<Sel, BackendError>;
 
@@ -195,7 +192,9 @@ pub(crate) fn compile_expr(
                         ),
                     ) {
                         if col_a == col_b {
-                            let vr = vr_a.intersect(Some(vr_b)).flatten();
+                            let Some(vr) = vr_a.intersect(&vr_b) else {
+                                return Ok(Sel::Empty);
+                            };
                             return compile_value_range_to_lazy_selection(&col_a, &vr, ctx);
                         }
                     }
@@ -532,49 +531,35 @@ fn compile_cmp_to_lazy_selection(
     )?;
 
     compile_value_range_to_lazy_selection(
-        col,
-        &Some(vr),
-        ctx,
+        col, &vr, ctx,
     )
 }
 
 /// Compile a value range to a lazy selection.
 fn compile_value_range_to_lazy_selection(
     col: &str,
-    vrr: &ValueRange,
+    vr: &ValueRangePresent,
     ctx: &LazyCompileCtx<'_>,
 ) -> LazyResult {
-    if let Some(vr) = vrr {
-        // Check if this is a dimension
-        let dim_idx = ctx.dim_index(col);
-        if dim_idx.is_none() {
-            // Not a dimension: skip pushdown and let runtime filtering handle it.
-            return Ok(Sel::NoSelectionMade);
-        }
-
-        // Create a lazy constraint with the unresolved value range
-        let constraint =
-            LazyDimConstraint::Unresolved(Some(
-                vr.clone(),
-            ));
-        let rect = LazyHyperRectangle::all()
-            .with_dim(col.istr(), constraint);
-        let sel =
-            LazyArraySelection::from_rectangle(
-                rect,
-            );
-
-        Ok(lazy_dataset_for_vars_with_selection(
-            ctx.meta
-                .all_array_paths()
-                .iter()
-                .cloned(),
-            ctx.meta,
-            sel,
-        ))
-    } else {
-        Ok(Sel::Empty)
+    if ctx.dim_index(col).is_none() {
+        return Ok(Sel::NoSelectionMade);
     }
+
+    let constraint =
+        LazyDimConstraint::Unresolved(vr.clone());
+    let rect = LazyHyperRectangle::all()
+        .with_dim(col.istr(), constraint);
+    let sel =
+        LazyArraySelection::from_rectangle(rect);
+
+    Ok(lazy_dataset_for_vars_with_selection(
+        ctx.meta
+            .all_array_paths()
+            .iter()
+            .cloned(),
+        ctx.meta,
+        sel,
+    ))
 }
 
 /// Compile a struct field comparison to a lazy selection.
@@ -622,7 +607,7 @@ fn compile_struct_field_cmp(
                 // This is a 1D coordinate-like array, apply constraint to its dimension
                 let constraint =
                     LazyDimConstraint::Unresolved(
-                        Some(vr.clone()),
+                        vr.clone(),
                     );
                 let rect =
                     LazyHyperRectangle::all()
@@ -1158,7 +1143,7 @@ fn interpolate_selection_nd_lazy(
         // Create a special constraint that holds all the interpolation target values
         constraints.insert(
             dim_name,
-            LazyDimConstraint::UnresolvedInterpolationPoints(Arc::new(interp_values)),
+            LazyDimConstraint::InterpolationPoints(interp_values.into()),
         );
     }
 

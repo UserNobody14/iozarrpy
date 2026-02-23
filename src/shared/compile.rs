@@ -32,11 +32,14 @@ fn group_requests_by_dimension(
     requests: Vec<ResolutionRequest>,
 ) -> BTreeMap<
     IStr,
-    Vec<(ResolutionRequest, ValueRange)>,
+    Vec<(ResolutionRequest, ValueRangePresent)>,
 > {
     let mut by_dim: BTreeMap<
         IStr,
-        Vec<(ResolutionRequest, ValueRange)>,
+        Vec<(
+            ResolutionRequest,
+            ValueRangePresent,
+        )>,
     > = BTreeMap::new();
     for req in requests {
         by_dim
@@ -136,6 +139,93 @@ fn monotonic_ord_matches(
             Some(Ord::Greater | Ord::Equal),
         ) => true,
         _ => false,
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Shared pure functions for coordinate resolution (used by both sync and async)
+// -----------------------------------------------------------------------------
+
+/// Pre-computed metadata for resolving a single dimension's coordinate array.
+struct DimResolutionCtx {
+    n: u64,
+    chunk_size: u64,
+    time_enc: Option<crate::meta::TimeEncoding>,
+    array_path: IStr,
+}
+
+impl DimResolutionCtx {
+    fn from_meta(
+        dim: &IStr,
+        meta: &ZarrMeta,
+    ) -> Option<Self> {
+        let coord_meta =
+            meta.array_by_path(dim.clone())?;
+        if coord_meta.shape.len() != 1 {
+            return None;
+        }
+        let n = coord_meta.shape[0];
+        Some(Self {
+            n,
+            chunk_size: coord_meta
+                .chunk_shape
+                .first()
+                .copied()
+                .unwrap_or(n),
+            time_enc: coord_meta
+                .time_encoding
+                .clone(),
+            array_path: coord_meta.path.clone(),
+        })
+    }
+}
+
+/// Determine monotonicity direction from pre-fetched sample values.
+fn check_monotonic_from_samples(
+    first: &CoordScalar,
+    last: &CoordScalar,
+    samples: &[CoordScalar],
+) -> Option<Ord> {
+    let dir = match first.partial_cmp(last) {
+        Some(Ord::Less | Ord::Equal) => Ord::Less,
+        Some(Ord::Greater) => Ord::Greater,
+        None => return None,
+    };
+
+    let mut prev = None;
+    for v in samples {
+        if let Some(p) = prev {
+            if !monotonic_ord_matches(
+                dir,
+                CoordScalar::partial_cmp(p, v),
+            ) {
+                return None;
+            }
+        }
+        prev = Some(v);
+    }
+    Some(dir)
+}
+
+/// Generic binary search: `go_right_fn` returns true when `lo` should advance.
+/// Used for both lower-bound and upper-bound searches.
+#[inline(always)]
+fn should_go_right(
+    target: &CoordScalar,
+    v: &CoordScalar,
+    dir: Ord,
+    strict: bool,
+    is_upper: bool,
+) -> bool {
+    let cmp = v.partial_cmp(target);
+    if is_upper {
+        upper_bound_should_go_right(
+            dir, strict, cmp,
+        )
+    } else {
+        !lower_bound_should_go_left(
+            dir, strict, cmp,
+        )
     }
 }
 
@@ -357,7 +447,7 @@ trait ResolveDimension {
         dim: &IStr,
         reqs: Vec<(
             ResolutionRequest,
-            ValueRange,
+            ValueRangePresent,
         )>,
     ) -> Vec<(
         ResolutionRequest,
@@ -374,54 +464,6 @@ trait ResolveDimension {
             &crate::meta::TimeEncoding,
         >,
     ) -> Option<CoordScalar>;
-
-    async fn check_monotonic(
-        &self,
-        dim: &IStr,
-        n: u64,
-        chunk_size: u64,
-        time_enc: Option<
-            &crate::meta::TimeEncoding,
-        >,
-    ) -> Option<Ord>;
-
-    async fn lower_bound(
-        &self,
-        dim: &IStr,
-        target: &CoordScalar,
-        strict: bool,
-        dir: Ord,
-        n: u64,
-        chunk_size: u64,
-        time_enc: Option<
-            &crate::meta::TimeEncoding,
-        >,
-    ) -> Option<u64>;
-
-    async fn upper_bound(
-        &self,
-        dim: &IStr,
-        target: &CoordScalar,
-        strict: bool,
-        dir: Ord,
-        n: u64,
-        chunk_size: u64,
-        time_enc: Option<
-            &crate::meta::TimeEncoding,
-        >,
-    ) -> Option<u64>;
-
-    async fn resolve_range(
-        &self,
-        dim: &IStr,
-        vr: &ValueRange,
-        dir: Ord,
-        n: u64,
-        chunk_size: u64,
-        time_enc: Option<
-            &crate::meta::TimeEncoding,
-        >,
-    ) -> Option<std::ops::Range<u64>>;
 }
 
 trait ResolveDimensionSync {
@@ -430,7 +472,7 @@ trait ResolveDimensionSync {
         dim: &IStr,
         reqs: Vec<(
             ResolutionRequest,
-            ValueRange,
+            ValueRangePresent,
         )>,
     ) -> Vec<(
         ResolutionRequest,
@@ -447,54 +489,6 @@ trait ResolveDimensionSync {
             &crate::meta::TimeEncoding,
         >,
     ) -> Option<CoordScalar>;
-
-    fn check_monotonic_sync(
-        &self,
-        dim: &IStr,
-        n: u64,
-        chunk_size: u64,
-        time_enc: Option<
-            &crate::meta::TimeEncoding,
-        >,
-    ) -> Option<Ord>;
-
-    fn lower_bound_sync(
-        &self,
-        dim: &IStr,
-        target: &CoordScalar,
-        strict: bool,
-        dir: Ord,
-        n: u64,
-        chunk_size: u64,
-        time_enc: Option<
-            &crate::meta::TimeEncoding,
-        >,
-    ) -> Option<u64>;
-
-    fn upper_bound_sync(
-        &self,
-        dim: &IStr,
-        target: &CoordScalar,
-        strict: bool,
-        dir: Ord,
-        n: u64,
-        chunk_size: u64,
-        time_enc: Option<
-            &crate::meta::TimeEncoding,
-        >,
-    ) -> Option<u64>;
-
-    fn resolve_range_sync(
-        &self,
-        dim: &IStr,
-        vr: &ValueRange,
-        dir: Ord,
-        n: u64,
-        chunk_size: u64,
-        time_enc: Option<
-            &crate::meta::TimeEncoding,
-        >,
-    ) -> Option<std::ops::Range<u64>>;
 }
 
 impl<
@@ -508,103 +502,131 @@ impl<
         dim: &IStr,
         reqs: Vec<(
             ResolutionRequest,
-            ValueRange,
+            ValueRangePresent,
         )>,
     ) -> Vec<(
         ResolutionRequest,
         Option<std::ops::Range<u64>>,
     )> {
-        // Get coordinate array metadata
-        let coord_meta = match self
-            .metadata()
-            .await
-            .ok()
-            .and_then(|meta| {
-                meta.array_by_path(dim.clone())
-                    .cloned()
-            }) {
-            Some(m) => m,
-            None => {
-                return reqs
-                    .into_iter()
-                    .map(|(req, _)| (req, None))
-                    .collect();
-            }
-        };
-
-        if coord_meta.shape.len() != 1 {
-            return reqs
-                .into_iter()
-                .map(|(req, _)| (req, None))
-                .collect();
-        }
-
-        let n = coord_meta.shape[0];
-        if n == 0 {
-            return reqs
-                .into_iter()
-                .map(|(req, _)| (req, Some(0..0)))
-                .collect();
-        }
-
-        let chunk_size = coord_meta
-            .chunk_shape
-            .first()
-            .copied()
-            .unwrap_or(n);
-        let time_enc =
-            coord_meta.time_encoding.clone();
-
-        // Use the full array path from metadata for I/O operations.
-        // The dim name alone (e.g. "y") is insufficient when the zarr store
-        // root is not "/" — we need the full path (e.g. "/forecasts/ds.zarr/y")
-        // so that Array::async_open can locate the array in the store.
-        let array_path = coord_meta.path.clone();
-
-        // Check monotonicity
-        let Some(dir) = self
-            .check_monotonic(
-                &array_path,
-                n,
-                chunk_size,
-                time_enc.as_ref(),
+        let meta =
+            match self.metadata().await.ok() {
+                Some(m) => m,
+                None => {
+                    return reqs
+                        .into_iter()
+                        .map(|(r, _)| (r, None))
+                        .collect();
+                }
+            };
+        let Some(ctx) =
+            DimResolutionCtx::from_meta(
+                dim, &meta,
             )
-            .await
         else {
             return reqs
                 .into_iter()
-                .map(|(req, _)| (req, None))
+                .map(|(r, _)| (r, None))
                 .collect();
         };
+        if ctx.n == 0 {
+            return reqs
+                .into_iter()
+                .map(|(r, _)| (r, Some(0..0)))
+                .collect();
+        }
 
-        let time_enc2 = time_enc.clone();
+        let te = ctx.time_enc.as_ref();
+        let ap = &ctx.array_path;
+
+        // Check monotonicity via sampled scalars
+        let dir = if ctx.n < 2 {
+            Ord::Less
+        } else {
+            let first = self
+                .scalar_at(
+                    ap,
+                    0,
+                    ctx.n,
+                    ctx.chunk_size,
+                    te,
+                )
+                .await;
+            let last = self
+                .scalar_at(
+                    ap,
+                    ctx.n - 1,
+                    ctx.n,
+                    ctx.chunk_size,
+                    te,
+                )
+                .await;
+            let (Some(first), Some(last)) =
+                (first, last)
+            else {
+                return reqs
+                    .into_iter()
+                    .map(|(r, _)| (r, None))
+                    .collect();
+            };
+            let indices =
+                monotonic_sample_indices(
+                    ctx.n,
+                    ctx.chunk_size,
+                );
+            let mut samples =
+                Vec::with_capacity(indices.len());
+            for &i in &indices {
+                let Some(v) = self
+                    .scalar_at(
+                        ap,
+                        i,
+                        ctx.n,
+                        ctx.chunk_size,
+                        te,
+                    )
+                    .await
+                else {
+                    return reqs
+                        .into_iter()
+                        .map(|(r, _)| (r, None))
+                        .collect();
+                };
+                samples.push(v);
+            }
+            let Some(d) =
+                check_monotonic_from_samples(
+                    &first, &last, &samples,
+                )
+            else {
+                return reqs
+                    .into_iter()
+                    .map(|(r, _)| (r, None))
+                    .collect();
+            };
+            d
+        };
 
         use futures::future::join_all;
-
         let futures =
             reqs.into_iter().map(|(req, vr)| {
-                let this = self;
-                let time_enc3 = time_enc2.clone();
-                let array_path2 =
-                    array_path.clone();
+                let ap2 = ctx.array_path.clone();
+                let te2 = ctx.time_enc.clone();
                 async move {
-                    let result = this
-                        .resolve_range(
-                            &array_path2,
+                    let result =
+                        async_resolve_single(
+                            self,
+                            &ap2,
                             &vr,
                             dir,
-                            n,
-                            chunk_size,
-                            time_enc3.as_ref(),
+                            ctx.n,
+                            ctx.chunk_size,
+                            te2.as_ref(),
                         )
                         .await;
                     (req, result)
                 }
             });
-
-        let results = join_all(futures).await;
-
-        results
+        join_all(futures).await
     }
 
     async fn scalar_at(
@@ -622,209 +644,97 @@ impl<
         }
         let chunk_idx = idx / chunk_size;
         let offset = (idx % chunk_size) as usize;
-
         let chunk = self
             .read_chunk_async(dim, &[chunk_idx])
             .await
             .ok()?;
-
-        chunk
-            .get_i64(offset)
-            .map(|raw| {
-                crate::chunk_plan::apply_time_encoding(
-                    raw, time_enc,
-                )
-            })
+        chunk.get_i64(offset).map(|raw| {
+            crate::chunk_plan::apply_time_encoding(raw, time_enc)
+        })
     }
+}
 
-    async fn check_monotonic(
-        &self,
-        dim: &IStr,
-        n: u64,
-        chunk_size: u64,
-        time_enc: Option<
-            &crate::meta::TimeEncoding,
-        >,
-    ) -> Option<Ord> {
-        if n < 2 {
-            return Some(Ord::Less);
+/// Resolve a single value range to an index range (async).
+async fn async_resolve_single<B>(
+    backend: &B,
+    dim: &IStr,
+    vr: &ValueRangePresent,
+    dir: Ord,
+    n: u64,
+    chunk_size: u64,
+    time_enc: Option<&crate::meta::TimeEncoding>,
+) -> Option<std::ops::Range<u64>>
+where
+    B: ResolveDimension,
+{
+    use std::ops::Bound;
+    let start = match &vr.0 {
+        Bound::Included(s)
+        | Bound::Excluded(s) => {
+            let t = s.clone();
+            let strict = matches!(
+                &vr.0,
+                Bound::Excluded(_)
+            );
+            async_binary_search(
+                backend, dim, &t, strict, dir, n,
+                chunk_size, time_enc, false,
+            )
+            .await?
         }
+        Bound::Unbounded => 0,
+    };
+    let end = match &vr.1 {
+        Bound::Included(s)
+        | Bound::Excluded(s) => {
+            let t = s.clone();
+            let strict = matches!(
+                &vr.1,
+                Bound::Excluded(_)
+            );
+            async_binary_search(
+                backend, dim, &t, strict, dir, n,
+                chunk_size, time_enc, true,
+            )
+            .await?
+        }
+        Bound::Unbounded => n,
+    };
+    Some(start..end)
+}
 
-        let first = self
+/// Binary search on a coordinate array (async). `is_upper` selects upper-bound vs lower-bound semantics.
+async fn async_binary_search<
+    B: ResolveDimension,
+>(
+    backend: &B,
+    dim: &IStr,
+    target: &CoordScalar,
+    strict: bool,
+    dir: Ord,
+    n: u64,
+    chunk_size: u64,
+    time_enc: Option<&crate::meta::TimeEncoding>,
+    is_upper: bool,
+) -> Option<u64> {
+    let mut lo = 0u64;
+    let mut hi = n;
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        let v = backend
             .scalar_at(
-                dim, 0, n, chunk_size, time_enc,
+                dim, mid, n, chunk_size, time_enc,
             )
             .await?;
-        let last = self
-            .scalar_at(
-                dim,
-                n - 1,
-                n,
-                chunk_size,
-                time_enc,
-            )
-            .await?;
-
-        let dir = match first.partial_cmp(&last) {
-            Some(Ord::Less | Ord::Equal) => {
-                Ord::Less
-            }
-            Some(Ord::Greater) => Ord::Greater,
-            None => return None,
-        };
-
-        let samples = monotonic_sample_indices(
-            n, chunk_size,
-        );
-        let mut prev: Option<CoordScalar> = None;
-        for &i in &samples {
-            let v = self
-                .scalar_at(
-                    dim, i, n, chunk_size,
-                    time_enc,
-                )
-                .await?;
-            if let Some(p) = &prev {
-                if !monotonic_ord_matches(
-                    dir,
-                    p.partial_cmp(&v),
-                ) {
-                    return None;
-                }
-            }
-            prev = Some(v);
+        if should_go_right(
+            target, &v, dir, strict, is_upper,
+        ) {
+            lo = mid + 1;
+        } else {
+            hi = mid;
         }
-
-        Some(dir)
     }
-
-    async fn lower_bound(
-        &self,
-        dim: &IStr,
-        target: &CoordScalar,
-        strict: bool,
-        dir: Ord,
-        n: u64,
-        chunk_size: u64,
-        time_enc: Option<
-            &crate::meta::TimeEncoding,
-        >,
-    ) -> Option<u64> {
-        let mut lo = 0u64;
-        let mut hi = n;
-
-        while lo < hi {
-            let mid = lo + (hi - lo) / 2;
-            let v = self
-                .scalar_at(
-                    dim, mid, n, chunk_size,
-                    time_enc,
-                )
-                .await?;
-            let cmp = v.partial_cmp(target);
-            let go_left =
-                lower_bound_should_go_left(
-                    dir, strict, cmp,
-                );
-
-            if go_left {
-                hi = mid;
-            } else {
-                lo = mid + 1;
-            }
-        }
-
-        Some(lo)
-    }
-
-    async fn upper_bound(
-        &self,
-        dim: &IStr,
-        target: &CoordScalar,
-        strict: bool,
-        dir: Ord,
-        n: u64,
-        chunk_size: u64,
-        time_enc: Option<
-            &crate::meta::TimeEncoding,
-        >,
-    ) -> Option<u64> {
-        let mut lo = 0u64;
-        let mut hi = n;
-
-        while lo < hi {
-            let mid = lo + (hi - lo) / 2;
-            let v = self
-                .scalar_at(
-                    dim, mid, n, chunk_size,
-                    time_enc,
-                )
-                .await?;
-            let cmp = v.partial_cmp(target);
-            let go_right =
-                upper_bound_should_go_right(
-                    dir, strict, cmp,
-                );
-
-            if go_right {
-                lo = mid + 1;
-            } else {
-                hi = mid;
-            }
-        }
-
-        Some(lo)
-    }
-
-    async fn resolve_range(
-        &self,
-        dim: &IStr,
-        vr: &ValueRange,
-        dir: Ord,
-        n: u64,
-        chunk_size: u64,
-        time_enc: Option<
-            &crate::meta::TimeEncoding,
-        >,
-    ) -> Option<std::ops::Range<u64>> {
-        use std::ops::Bound;
-        let vr = vr.as_ref()?;
-        let start = match &vr.0 {
-            Bound::Included(s) => {
-                self.lower_bound(
-                    dim, s, false, dir, n,
-                    chunk_size, time_enc,
-                )
-                .await?
-            }
-            Bound::Excluded(s) => {
-                self.lower_bound(
-                    dim, s, true, dir, n,
-                    chunk_size, time_enc,
-                )
-                .await?
-            }
-            Bound::Unbounded => 0,
-        };
-        let end = match &vr.1 {
-            Bound::Included(s) => {
-                self.upper_bound(
-                    dim, s, false, dir, n,
-                    chunk_size, time_enc,
-                )
-                .await?
-            }
-            Bound::Excluded(s) => {
-                self.upper_bound(
-                    dim, s, true, dir, n,
-                    chunk_size, time_enc,
-                )
-                .await?
-            }
-            Bound::Unbounded => n,
-        };
-        Some(start..end)
-    }
+    Some(lo)
 }
 
 impl<
@@ -839,7 +749,7 @@ impl<
         dim: &IStr,
         reqs: Vec<(
             ResolutionRequest,
-            ValueRange,
+            ValueRangePresent,
         )>,
     ) -> Vec<(
         ResolutionRequest,
@@ -847,78 +757,108 @@ impl<
     )> {
         use rayon::prelude::*;
 
-        // Get coordinate array metadata
-        let coord_meta = match self
-            .metadata()
-            .ok()
-            .and_then(|meta| {
-                meta.clone()
-                    .array_by_path(dim.clone())
-                    .cloned()
-            }) {
+        let meta = match self.metadata().ok() {
             Some(m) => m,
             None => {
                 return reqs
                     .into_iter()
-                    .map(|(req, _)| (req, None))
+                    .map(|(r, _)| (r, None))
                     .collect();
             }
         };
-
-        if coord_meta.shape.len() != 1 {
-            return reqs
-                .into_iter()
-                .map(|(req, _)| (req, None))
-                .collect();
-        }
-
-        let n = coord_meta.shape[0];
-        if n == 0 {
-            return reqs
-                .into_iter()
-                .map(|(req, _)| (req, Some(0..0)))
-                .collect();
-        }
-
-        let chunk_size = coord_meta
-            .chunk_shape
-            .first()
-            .copied()
-            .unwrap_or(n);
-        let time_enc =
-            coord_meta.time_encoding.clone();
-
-        // Use the full array path from metadata for I/O operations.
-        // The dim name alone (e.g. "y") is insufficient when the zarr store
-        // root is not "/" — we need the full path (e.g. "/forecasts/ds.zarr/y")
-        // so that Array::async_open can locate the array in the store.
-        let array_path = coord_meta.path.clone();
-
-        // Check monotonicity
-        let Some(dir) = self
-            .check_monotonic_sync(
-                &array_path,
-                n,
-                chunk_size,
-                time_enc.as_ref(),
+        let Some(ctx) =
+            DimResolutionCtx::from_meta(
+                dim, &meta,
             )
         else {
             return reqs
                 .into_iter()
-                .map(|(req, _)| (req, None))
+                .map(|(r, _)| (r, None))
                 .collect();
+        };
+        if ctx.n == 0 {
+            return reqs
+                .into_iter()
+                .map(|(r, _)| (r, Some(0..0)))
+                .collect();
+        }
+
+        let te = ctx.time_enc.as_ref();
+        let ap = &ctx.array_path;
+
+        let dir = if ctx.n < 2 {
+            Ord::Less
+        } else {
+            let first = self.scalar_at_sync(
+                ap,
+                0,
+                ctx.n,
+                ctx.chunk_size,
+                te,
+            );
+            let last = self.scalar_at_sync(
+                ap,
+                ctx.n - 1,
+                ctx.n,
+                ctx.chunk_size,
+                te,
+            );
+            let (Some(first), Some(last)) =
+                (first, last)
+            else {
+                return reqs
+                    .into_iter()
+                    .map(|(r, _)| (r, None))
+                    .collect();
+            };
+            let indices =
+                monotonic_sample_indices(
+                    ctx.n,
+                    ctx.chunk_size,
+                );
+            let mut samples =
+                Vec::with_capacity(indices.len());
+            for &i in &indices {
+                let Some(v) = self
+                    .scalar_at_sync(
+                        ap,
+                        i,
+                        ctx.n,
+                        ctx.chunk_size,
+                        te,
+                    )
+                else {
+                    return reqs
+                        .into_iter()
+                        .map(|(r, _)| (r, None))
+                        .collect();
+                };
+                samples.push(v);
+            }
+            let Some(d) =
+                check_monotonic_from_samples(
+                    &first, &last, &samples,
+                )
+            else {
+                return reqs
+                    .into_iter()
+                    .map(|(r, _)| (r, None))
+                    .collect();
+            };
+            d
         };
 
         reqs.into_par_iter()
             .map(|(req, vr)| {
-                let resolved = self
-                    .resolve_range_sync(
-                        &array_path,
+                let resolved =
+                    sync_resolve_single(
+                        self,
+                        ap,
                         &vr,
                         dir,
-                        n,
-                        chunk_size,
-                        time_enc.as_ref(),
+                        ctx.n,
+                        ctx.chunk_size,
+                        te,
                     );
                 (req, resolved)
             })
@@ -940,191 +880,85 @@ impl<
         }
         let chunk_idx = idx / chunk_size;
         let offset = (idx % chunk_size) as usize;
-
         let chunk = self
             .read_chunk_sync(dim, &[chunk_idx])
             .ok()?;
-
-        chunk
-            .get_i64(offset)
-            .map(|raw| {
-                crate::chunk_plan::apply_time_encoding(
-                    raw, time_enc,
-                )
-            })
+        chunk.get_i64(offset).map(|raw| {
+            crate::chunk_plan::apply_time_encoding(raw, time_enc)
+        })
     }
+}
 
-    fn check_monotonic_sync(
-        &self,
-        dim: &IStr,
-        n: u64,
-        chunk_size: u64,
-        time_enc: Option<
-            &crate::meta::TimeEncoding,
-        >,
-    ) -> Option<Ord> {
-        if n < 2 {
-            return Some(Ord::Less);
+/// Resolve a single value range to an index range (sync).
+fn sync_resolve_single<
+    B: ResolveDimensionSync,
+>(
+    backend: &B,
+    dim: &IStr,
+    vr: &ValueRangePresent,
+    dir: Ord,
+    n: u64,
+    chunk_size: u64,
+    time_enc: Option<&crate::meta::TimeEncoding>,
+) -> Option<std::ops::Range<u64>> {
+    use std::ops::Bound;
+    let start = match &vr.0 {
+        Bound::Included(s)
+        | Bound::Excluded(s) => {
+            let strict = matches!(
+                &vr.0,
+                Bound::Excluded(_)
+            );
+            sync_binary_search(
+                backend, dim, s, strict, dir, n,
+                chunk_size, time_enc, false,
+            )?
         }
+        Bound::Unbounded => 0,
+    };
+    let end = match &vr.1 {
+        Bound::Included(s)
+        | Bound::Excluded(s) => {
+            let strict = matches!(
+                &vr.1,
+                Bound::Excluded(_)
+            );
+            sync_binary_search(
+                backend, dim, s, strict, dir, n,
+                chunk_size, time_enc, true,
+            )?
+        }
+        Bound::Unbounded => n,
+    };
+    Some(start..end)
+}
 
-        let first = self.scalar_at_sync(
-            dim, 0, n, chunk_size, time_enc,
+/// Binary search on a coordinate array (sync). `is_upper` selects upper-bound vs lower-bound semantics.
+fn sync_binary_search<B: ResolveDimensionSync>(
+    backend: &B,
+    dim: &IStr,
+    target: &CoordScalar,
+    strict: bool,
+    dir: Ord,
+    n: u64,
+    chunk_size: u64,
+    time_enc: Option<&crate::meta::TimeEncoding>,
+    is_upper: bool,
+) -> Option<u64> {
+    let mut lo = 0u64;
+    let mut hi = n;
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        let v = backend.scalar_at_sync(
+            dim, mid, n, chunk_size, time_enc,
         )?;
-        let last = self.scalar_at_sync(
-            dim,
-            n - 1,
-            n,
-            chunk_size,
-            time_enc,
-        )?;
-
-        let dir = match first.partial_cmp(&last) {
-            Some(Ord::Less | Ord::Equal) => {
-                Ord::Less
-            }
-            Some(Ord::Greater) => Ord::Greater,
-            None => return None,
-        };
-
-        let samples = monotonic_sample_indices(
-            n, chunk_size,
-        );
-        let mut prev: Option<CoordScalar> = None;
-        for &i in &samples {
-            let v = self.scalar_at_sync(
-                dim, i, n, chunk_size, time_enc,
-            )?;
-            if let Some(p) = &prev {
-                if !monotonic_ord_matches(
-                    dir,
-                    p.partial_cmp(&v),
-                ) {
-                    return None;
-                }
-            }
-            prev = Some(v);
-        }
-
-        Some(dir)
-    }
-
-    fn lower_bound_sync(
-        &self,
-        dim: &IStr,
-        target: &CoordScalar,
-        strict: bool,
-        dir: Ord,
-        n: u64,
-        chunk_size: u64,
-        time_enc: Option<
-            &crate::meta::TimeEncoding,
-        >,
-    ) -> Option<u64> {
-        let mut lo = 0u64;
-        let mut hi = n;
-
-        while lo < hi {
-            let mid = lo + (hi - lo) / 2;
-            let v = self.scalar_at_sync(
-                dim, mid, n, chunk_size, time_enc,
-            )?;
-            let cmp = v.partial_cmp(target);
-            let go_left =
-                lower_bound_should_go_left(
-                    dir, strict, cmp,
-                );
-
-            if go_left {
-                hi = mid;
-            } else {
-                lo = mid + 1;
-            }
-        }
-
-        Some(lo)
-    }
-
-    fn upper_bound_sync(
-        &self,
-        dim: &IStr,
-        target: &CoordScalar,
-        strict: bool,
-        dir: Ord,
-        n: u64,
-        chunk_size: u64,
-        time_enc: Option<
-            &crate::meta::TimeEncoding,
-        >,
-    ) -> Option<u64> {
-        let mut lo = 0u64;
-        let mut hi = n;
-
-        while lo < hi {
-            let mid = lo + (hi - lo) / 2;
-            let v = self.scalar_at_sync(
-                dim, mid, n, chunk_size, time_enc,
-            )?;
-            let cmp = v.partial_cmp(target);
-            let go_right =
-                upper_bound_should_go_right(
-                    dir, strict, cmp,
-                );
-
-            if go_right {
-                lo = mid + 1;
-            } else {
-                hi = mid;
-            }
-        }
-
-        Some(lo)
-    }
-
-    fn resolve_range_sync(
-        &self,
-        dim: &IStr,
-        vr: &ValueRange,
-        dir: Ord,
-        n: u64,
-        chunk_size: u64,
-        time_enc: Option<
-            &crate::meta::TimeEncoding,
-        >,
-    ) -> Option<std::ops::Range<u64>> {
-        if let Some(vr) = vr {
-            use crate::chunk_plan::HasCoordBound;
-            let lower = |b: &CoordBound| {
-                b.get_scalar().and_then(|t| {
-                    self.lower_bound_sync(
-                        dim,
-                        &t,
-                        b.is_exclusive(),
-                        dir,
-                        n,
-                        chunk_size,
-                        time_enc,
-                    )
-                })
-            };
-            let upper = |b: &CoordBound| {
-                b.get_scalar().and_then(|t| {
-                    self.upper_bound_sync(
-                        dim,
-                        &t,
-                        b.is_exclusive(),
-                        dir,
-                        n,
-                        chunk_size,
-                        time_enc,
-                    )
-                })
-            };
-            compute_bounds_from_value_range(
-                vr, n, lower, upper,
-            )
-            .map(|(s, e)| s..e)
+        if should_go_right(
+            target, &v, dir, strict, is_upper,
+        ) {
+            lo = mid + 1;
         } else {
-            Some(0..0)
+            hi = mid;
         }
     }
+    Some(lo)
 }

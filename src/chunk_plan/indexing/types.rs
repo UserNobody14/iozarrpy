@@ -494,27 +494,13 @@ impl ValueRangePresent {
         Some(start..end_exclusive)
     }
 }
-pub(crate) type ValueRange =
-    Option<ValueRangePresent>;
-
-pub(crate) trait HasIntersect:
-    Sized
-{
-    fn intersect(
+impl ValueRangePresent {
+    /// Intersect two value ranges, producing the tighter of the two.
+    /// Returns `None` if the intersection is provably empty (incomparable bounds).
+    pub(crate) fn intersect(
         &self,
-        other: Option<Self>,
-    ) -> Option<Self>;
-}
-
-impl HasIntersect for ValueRangePresent {
-    fn intersect(
-        &self,
-        other_range: Option<Self>,
+        other: &Self,
     ) -> Option<Self> {
-        let Some(other) = other_range else {
-            return Some(self.clone());
-        };
-        // Intersect = tighter start × tighter end.
         let new_start = pick_tighter_min_bound(
             self.0.clone(),
             other.0.clone(),
@@ -526,43 +512,6 @@ impl HasIntersect for ValueRangePresent {
         Self::from_option_bounds(
             new_start, new_end,
         )
-    }
-}
-
-impl HasIntersect for Option<ValueRangePresent> {
-    fn intersect(
-        &self,
-        other: Option<Self>,
-    ) -> Option<Self> {
-        match (self, other) {
-            (Some(a), None) => {
-                Some(Some(a.clone()))
-            }
-            (None, a) => a,
-            (Some(a), Some(b)) => match b {
-                Some(b) => Some(
-                    a.intersect(Some(b.clone())),
-                ),
-                None => Some(Some(a.clone())),
-            },
-        }
-    }
-}
-
-impl HasIntersect
-    for std::sync::Arc<Option<ValueRangePresent>>
-{
-    fn intersect(
-        &self,
-        other: Option<Self>,
-    ) -> Option<Self> {
-        self.as_ref()
-            .intersect(other.map(|o| {
-                o.as_ref()
-                    .as_ref()
-                    .map(|o| o.clone())
-            }))
-            .map(|o| std::sync::Arc::new(o))
     }
 }
 
