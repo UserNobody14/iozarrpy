@@ -1,19 +1,14 @@
 //! `ExprPlan` — intermediate representation that separates dimension constraints
 //! from variable tracking during expression compilation.
 //!
-//! The `GroupedSelection` grouping by dimension signature is deferred to a single
-//! conversion step (`into_lazy_dataset_selection`) before materialization.
+//! Resolution to concrete `DatasetSelection` is handled by
+//! `resolve_expr_plan_sync`/`resolve_expr_plan_async` in `lazy_materialize`.
 
 use smallvec::SmallVec;
 
 use crate::IStr;
-use crate::chunk_plan::indexing::grouped_selection::GroupedSelection;
-use crate::chunk_plan::indexing::lazy_selection::{
-    LazyArraySelection, LazyDatasetSelection,
-};
+use crate::chunk_plan::indexing::lazy_selection::LazyArraySelection;
 use crate::chunk_plan::indexing::selection::SetOperations;
-use crate::chunk_plan::indexing::selection_base::DatasetSelectionBase;
-use crate::meta::ZarrMeta;
 
 /// Which variables an expression references.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -352,33 +347,4 @@ impl ExprPlan {
             .union(&other.difference(self))
     }
 
-    /// Convert to a `LazyDatasetSelection` by grouping variables by dimension
-    /// signature. This is the single point where `GroupedSelection` is constructed
-    /// for the lazy compilation path.
-    pub(crate) fn into_lazy_dataset_selection(
-        self,
-        meta: &ZarrMeta,
-    ) -> LazyDatasetSelection {
-        match self {
-            Self::NoConstraint => LazyDatasetSelection::NoSelectionMade,
-            Self::Empty => LazyDatasetSelection::Empty,
-            Self::Active { vars, constraints } => {
-                let var_list: Vec<IStr> = match vars {
-                    VarSet::Specific(v) if v.is_empty() => {
-                        return LazyDatasetSelection::Empty;
-                    }
-                    VarSet::All => meta.all_array_paths().to_vec(),
-                    VarSet::Specific(v) => v.to_vec(),
-                };
-                DatasetSelectionBase::from_optional(
-                    GroupedSelection::for_vars_with_selection(
-                        var_list,
-                        meta,
-                        *constraints,
-                    )
-                    .to_optional(),
-                )
-            }
-        }
-    }
 }

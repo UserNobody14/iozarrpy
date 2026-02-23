@@ -209,7 +209,7 @@ class TestTernary:
         inner = pl.when(pl.col("b") < 10).then(pl.col("precip")).otherwise(pl.lit(0))
         expr = pl.when(pl.col("a") < 10).then(inner).otherwise(pl.lit(0))
         inferred = get_inferred_vars(multi_var_dataset.path, expr)
-        assert inferred == {"precip"}
+        assert inferred == {"precip", "a", "b"}
 
     def test_when_lon_lat_predicate(self, multi_var_dataset: MultiVarDatasetInfo):
         """when() with lon/lat predicate selecting specific region."""
@@ -222,7 +222,7 @@ class TestTernary:
             .otherwise(pl.lit(None))
         )
         inferred = get_inferred_vars(multi_var_dataset.path, expr)
-        assert inferred == {"temp"}
+        assert inferred == {"temp", "lon", "lat"}
 
 
 @pytest.mark.usefixtures("multi_var_dataset")

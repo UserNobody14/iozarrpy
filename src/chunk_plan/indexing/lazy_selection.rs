@@ -13,7 +13,6 @@ use super::grouped_selection::ArraySelectionType;
 use super::selection::Emptyable;
 use super::types::ValueRangePresent;
 use crate::IStr;
-use crate::chunk_plan::indexing::grouped_selection::GroupedSelection;
 use std::ops::Range;
 
 /// A per-dimension constraint in value-space (deferred resolution).
@@ -222,13 +221,6 @@ impl LazyArraySelection {
     }
 }
 
-/// Dataset-level lazy selection: type alias for the generic `DatasetSelectionBase`.
-///
-/// This groups variables by their dimension signature to avoid duplication.
-pub(crate) type LazyDatasetSelection =
-    super::selection_base::DatasetSelectionBase<
-        GroupedSelection<LazyArraySelection>,
-    >;
 
 // ============================================================================
 // SetOperations implementations for lazy types

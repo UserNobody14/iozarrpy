@@ -2,7 +2,7 @@
 //!
 //! This module contains types and functions for:
 //! - Value range to index range resolution
-//! - Lazy selection types and materialization
+//! - Lazy selection types and inline resolution
 //! - Chunk plan computation from selections
 
 pub mod plan;
@@ -17,14 +17,11 @@ pub mod grouped_selection;
 // Lazy selection types
 pub mod lazy_selection;
 
-// Lazy resolution and materialization
+// Direct resolution and materialization
 pub mod lazy_materialize;
 
-// Resolver traits
+// Resolver traits (error types, dim context)
 pub mod resolver_traits;
-pub(crate) use resolver_traits::{
-    AsyncCoordResolver, SyncCoordResolver,
-};
 
 // Core types re-exports
 pub use plan::ChunkSubset;

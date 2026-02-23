@@ -1,12 +1,6 @@
 //! Entry points for chunk planning compilation.
 //!
-//! This module provides the main entry points for compiling Polars expressions
-//! into chunk plans. The compilation uses a lazy approach:
-//! 1. Compile expression to `LazyDatasetSelection` (no I/O)
-//! 2. Collect resolution requests and batch-resolve value ranges to index ranges
-//! 3. Materialize to concrete `DatasetSelection`
-//!
-//! This enables efficient I/O batching and concurrent resolution for async stores.
+//! Provides `compute_dims_and_lengths_unified` used during expression compilation.
 
 use crate::IStr;
 use crate::meta::ZarrMeta;

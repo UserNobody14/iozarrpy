@@ -1,8 +1,8 @@
 //! Expression compilation for chunk planning.
 //!
-//! The compilation is lazy: expressions are analyzed to produce `LazyDatasetSelection`
-//! containing unresolved value-based constraints. These are later batch-resolved
-//! and materialized into concrete `DatasetSelection`.
+//! Expressions are analyzed to produce `ExprPlan` containing unresolved
+//! value-based constraints. These are resolved inline via the backend
+//! in `lazy_materialize::resolve_expr_plan_sync/async`.
 
 pub mod compile_ctx;
 pub mod compile_node;
