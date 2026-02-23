@@ -170,6 +170,33 @@ impl ExprPlan {
         matches!(self, Self::Empty)
     }
 
+    /// Replace vars with explicit refs while keeping constraints.
+    /// Used by ternary/filter to combine explicit column refs with
+    /// constraints from a predicate (whose own vars may be `All`).
+    pub(crate) fn with_vars(
+        self,
+        vars: VarSet,
+    ) -> Self {
+        match self {
+            Self::NoConstraint => {
+                Self::unconstrained_vars(vars)
+            }
+            Self::Empty => Self::Empty,
+            Self::Active {
+                constraints, ..
+            } => {
+                if vars.is_empty() {
+                    Self::NoConstraint
+                } else {
+                    Self::Active {
+                        vars,
+                        constraints,
+                    }
+                }
+            }
+        }
+    }
+
     /// Add variables without changing constraints.
     /// Used for `Expr::Over` where partition vars need fetching
     /// but shouldn't weaken the function's constraints.
@@ -178,15 +205,17 @@ impl ExprPlan {
         extra: VarSet,
     ) -> Self {
         match self {
-            Self::NoConstraint => Self::NoConstraint,
-            Self::Empty => Self::Empty,
-            Self::Active { vars, constraints } => {
-                Self::Active {
-                    vars: vars.union(&extra),
-                    constraints: constraints
-                        .clone(),
-                }
+            Self::NoConstraint => {
+                Self::NoConstraint
             }
+            Self::Empty => Self::Empty,
+            Self::Active {
+                vars,
+                constraints,
+            } => Self::Active {
+                vars: vars.union(&extra),
+                constraints: constraints.clone(),
+            },
         }
     }
 
@@ -268,7 +297,9 @@ impl ExprPlan {
         match (self, other) {
             (Self::Empty, _) => Self::Empty,
             (x, Self::Empty) => x.clone(),
-            (_, Self::NoConstraint) => Self::Empty,
+            (_, Self::NoConstraint) => {
+                Self::Empty
+            }
             (Self::NoConstraint, _) => {
                 Self::NoConstraint
             }

@@ -454,26 +454,21 @@ def test_current_behavior_struct_field_predicate(
     """
     zarr_url = datatree_datasets["simple_datatree"]
 
-    try:
-        # Try a struct field predicate
-        pred = pl.col("model_a").struct.field("temperature") > 280
+    # Try a struct field predicate
+    pred = pl.col("model_a").struct.field("temperature") > 280
 
-        chunks = ZarrBackend.from_url(zarr_url).selected_chunks_debug(
-            pred,       
-        )
+    chunks = ZarrBackend.from_url(zarr_url).selected_chunks_debug(
+        pred,       
+    )
 
-        idxs = _chunk_indices(chunks, variables=["model_a/temperature"])
-        print(f"Struct field predicate - chunks returned: {len(idxs)}")
+    idxs = _chunk_indices(chunks, variables=["model_a/temperature"])
+    print(f"Struct field predicate - chunks returned: {len(idxs)}")
 
-        if idxs:
-            print(f"First chunk: {next(iter(idxs))}")
+    if idxs:
+        print(f"First chunk: {next(iter(idxs))}")
 
-        assert True
+    assert len(idxs) >= 0
 
-    except Exception as e:
-        print(f"Struct field predicate failed: {type(e).__name__}: {e}")
-        # Document the error type for future reference
-        assert True
 
 
 def test_current_behavior_root_dim_filter_on_children(
@@ -482,19 +477,11 @@ def test_current_behavior_root_dim_filter_on_children(
     """Document how root dimension filters affect child variable chunks."""
     zarr_url = datatree_datasets["simple_datatree"]
 
-    try:
-        pred = pl.col("y") < 8
+    pred = pl.col("y") < 8
 
-        # Try selecting a child variable with root filter
-        chunks = ZarrBackend.from_url(zarr_url).selected_chunks_debug(
-            pred,
-        )
-
-        idxs = _chunk_indices(chunks, variables=["model_a/temperature"])
-        print(f"Root dim filter on child - chunks returned: {len(idxs)}")
-
-        assert True
-
-    except Exception as e:
-        print(f"Root dim filter on child failed: {type(e).__name__}: {e}")
-        assert True
+    # Try selecting a child variable with root filter
+    chunks = ZarrBackend.from_url(zarr_url).selected_chunks_debug(
+        pred,
+    )
+    idxs = _chunk_indices(chunks, variables=["model_a/temperature"])
+    assert len(idxs) >= 0

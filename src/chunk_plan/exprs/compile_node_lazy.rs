@@ -44,6 +44,16 @@ fn refs_to_plan(refs: Vec<IStr>) -> ExprPlan {
     }
 }
 
+fn refs_to_plan_with_vars(
+    vars: VarSet,
+) -> ExprPlan {
+    if vars.is_empty() {
+        ExprPlan::NoConstraint
+    } else {
+        ExprPlan::unconstrained_vars(vars)
+    }
+}
+
 fn collect_refs_from_expr(
     expr: &Expr,
 ) -> Vec<IStr> {
@@ -135,7 +145,26 @@ pub(crate) fn compile_expr(
                 input.as_ref(),
                 ctx,
             )?;
-            Ok(input_plan.intersect(&filter_plan))
+            let result = input_plan
+                .intersect(&filter_plan);
+            let filter_refs: Vec<IStr> =
+                collect_refs_from_expr(
+                    by.as_ref(),
+                )
+                .into_iter()
+                .filter(|r| {
+                    ctx.meta
+                        .array_by_path(r.clone())
+                        .is_some()
+                })
+                .collect();
+            if filter_refs.is_empty() {
+                Ok(result)
+            } else {
+                Ok(result.add_vars(
+                    VarSet::from_vec(filter_refs),
+                ))
+            }
         }
 
         Expr::BinaryExpr { left, op, right } => {
@@ -345,21 +374,28 @@ pub(crate) fn compile_expr(
                 }
             }
 
-            let predicate_plan = compile_expr(
-                predicate.as_ref(),
-                ctx,
-            )?;
-            let truthy_plan = compile_expr(
-                truthy.as_ref(),
-                ctx,
-            )?;
-            let falsy_plan = compile_expr(
-                falsy.as_ref(),
-                ctx,
-            )?;
-            Ok(truthy_plan
-                .union(&falsy_plan)
-                .union(&predicate_plan))
+            let all_refs =
+                collect_refs_from_expr(expr);
+            let vars = VarSet::from_vec(all_refs);
+
+            let is_falsy_null = matches!(
+                strip_wrappers(falsy.as_ref()),
+                Expr::Literal(lit) if matches!(literal_anyvalue(lit), Some(AnyValue::Null))
+            );
+
+            if is_falsy_null {
+                let predicate_plan =
+                    compile_expr(
+                        predicate.as_ref(),
+                        ctx,
+                    )?;
+                if predicate_plan.is_empty() {
+                    return Ok(ExprPlan::Empty);
+                }
+                Ok(predicate_plan.with_vars(vars))
+            } else {
+                Ok(refs_to_plan_with_vars(vars))
+            }
         }
 
         Expr::Function { input, function } => {
@@ -410,9 +446,10 @@ pub(crate) fn compile_expr(
             ))
         }
 
-        Expr::Agg(_) => Ok(refs_to_plan(
-            collect_refs_from_expr(expr),
-        )),
+        Expr::Agg(agg) => {
+            let inner: &Expr = agg.as_ref();
+            compile_expr(inner, ctx)
+        }
 
         Expr::AnonymousFunction {
             input, ..

@@ -248,7 +248,6 @@ async fn read_var_chunks<
             )?;
 
         let name = name.clone();
-        let var_meta = var_meta.clone();
         let dims = dims.to_vec();
         let idx = idx.to_vec();
         let chunk_shape = chunk_shape.to_vec();

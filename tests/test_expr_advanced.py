@@ -15,8 +15,7 @@ These tests are designed for an IDEAL implementation where:
 - Per-variable chunk selection is tracked
 - The planner correctly handles complex expressions
 
-All tests assert EXACT expected values. Tests for unimplemented features
-are marked with xfail and will pass once the feature is implemented.
+All tests assert EXACT expected values.
 """
 
 from __future__ import annotations
@@ -31,31 +30,24 @@ from rainbear import ZarrBackend
 if TYPE_CHECKING:
     from conftest import MultiVarDatasetInfo
 
-# Mark for tests that require unsupported expression handling
-needs_expr_support = pytest.mark.xfail(
-    reason="Expression type not yet supported in chunk planner",
-    strict=False,
-)
-
 
 # =============================================================================
 # Helper Functions
 # =============================================================================
 
 
-def get_chunk_indices(zarr_url: str, expr: pl.Expr) -> set[tuple[int, ...]]:
-    """Get the set of chunk indices selected by an expression."""
+def get_chunk_indices(zarr_url: str, expr: pl.Expr, variable: str = "temp") -> set[tuple[int, ...]]:
+    """Get the set of chunk indices selected by an expression for a given variable."""
     grid_plans = ZarrBackend.from_url(zarr_url).selected_chunks_debug(expr)
-    # Find a grid that includes "temp"
     for grid in grid_plans["grids"]:
-        if "temp" in grid["variables"]:
+        if variable in grid["variables"]:
             return {tuple(c["indices"]) for c in grid["chunks"]}
-    raise ValueError(f"No grid found for variable 'temperature' in {grid_plans}")
+    raise ValueError(f"No grid found for variable '{variable}' in {grid_plans}")
 
 
-def get_chunk_count(zarr_url: str, expr: pl.Expr) -> int:
+def get_chunk_count(zarr_url: str, expr: pl.Expr, variable: str = "temp") -> int:
     """Get the count of chunks selected by an expression."""
-    return len(get_chunk_indices(zarr_url, expr))
+    return len(get_chunk_indices(zarr_url, expr, variable=variable))
 
 def get_per_var_chunks(zarr_url: str, expr: pl.Expr) -> dict[str, int]:
     """Get per-variable chunk counts from an expression."""
@@ -127,32 +119,28 @@ class TestAggregations:
         count = get_chunk_count(multi_var_dataset.path, expr)
         assert count == 60
 
-    @needs_expr_support
     def test_mean_needs_all_chunks(self, multi_var_dataset: MultiVarDatasetInfo):
         """mean() aggregation needs all chunks."""
         expr = pl.col("precip").mean()
-        count = get_chunk_count(multi_var_dataset.path, expr)
+        count = get_chunk_count(multi_var_dataset.path, expr, variable="precip")
         assert count == 60
 
-    @needs_expr_support
     def test_min_needs_all_chunks(self, multi_var_dataset: MultiVarDatasetInfo):
         """min() aggregation needs all chunks."""
         expr = pl.col("wind_u").min()
-        count = get_chunk_count(multi_var_dataset.path, expr)
+        count = get_chunk_count(multi_var_dataset.path, expr, variable="wind_u")
         assert count == 60
 
-    @needs_expr_support
     def test_max_needs_all_chunks(self, multi_var_dataset: MultiVarDatasetInfo):
         """max() aggregation needs all chunks."""
         expr = pl.col("wind_v").max()
-        count = get_chunk_count(multi_var_dataset.path, expr)
+        count = get_chunk_count(multi_var_dataset.path, expr, variable="wind_v")
         assert count == 60
 
-    @needs_expr_support
     def test_count_needs_all_chunks(self, multi_var_dataset: MultiVarDatasetInfo):
         """count() aggregation needs all chunks."""
         expr = pl.col("pressure").count()
-        count = get_chunk_count(multi_var_dataset.path, expr)
+        count = get_chunk_count(multi_var_dataset.path, expr, variable="pressure")
         assert count == 60
 
     def test_std_needs_all_chunks(self, multi_var_dataset: MultiVarDatasetInfo):
@@ -167,7 +155,6 @@ class TestAggregations:
         count = get_chunk_count(multi_var_dataset.path, expr)
         assert count == 60
 
-    @needs_expr_support
     def test_filtered_sum_narrows_chunks(self, multi_var_dataset: MultiVarDatasetInfo):
         """sum() with filter can narrow chunks."""
         expr = pl.col("temp").filter(pl.col("a") < 10).sum()
@@ -175,7 +162,6 @@ class TestAggregations:
         # 1 * 4 * 3 = 12 chunks
         assert count == 12
 
-    @needs_expr_support
     def test_filtered_mean_with_multi_dim(self, multi_var_dataset: MultiVarDatasetInfo):
         """mean() with multi-dim filter should narrow chunks."""
         expr = pl.col("temp").filter((pl.col("a") < 10) & (pl.col("b") < 10)).mean()
@@ -200,11 +186,10 @@ class TestWindowFunctions:
         count = get_chunk_count(multi_var_dataset.path, expr)
         assert count == 60
 
-    @needs_expr_support
     def test_mean_over_needs_all_chunks(self, multi_var_dataset: MultiVarDatasetInfo):
         """mean().over() needs all chunks."""
         expr = pl.col("precip").mean().over("b")
-        count = get_chunk_count(multi_var_dataset.path, expr)
+        count = get_chunk_count(multi_var_dataset.path, expr, variable="precip")
         assert count == 60
 
     def test_rank_over_needs_all_chunks(self, multi_var_dataset: MultiVarDatasetInfo):
@@ -258,7 +243,6 @@ class TestWindowFunctions:
 @pytest.mark.usefixtures("multi_var_dataset")
 class TestComplexTernary:
     """Tests for complex ternary expressions with coordinate references."""
-    @needs_expr_support
     def test_when_then_otherwise_with_null(
         self, multi_var_dataset: MultiVarDatasetInfo
     ):
@@ -280,7 +264,6 @@ class TestComplexTernary:
         # Need all chunks because either branch could be taken
         assert count == 60
 
-    @needs_expr_support
     def test_when_multi_condition_with_null(
         self, multi_var_dataset: MultiVarDatasetInfo
     ):
