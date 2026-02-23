@@ -8,10 +8,13 @@ use pyo3::prelude::*;
 use pyo3::types::PyAny;
 use pyo3_async_runtimes::tokio::future_into_py;
 use pyo3_polars::PySchema;
+use pyo3_polars::error::PyPolarsErr;
+use snafu::ResultExt;
 use std::collections::BTreeSet;
 use zarrs::array::Array;
 
 use crate::backend::implementation::scan_zarr_with_backend_async;
+use crate::errors::IncompatibleDimensionalitySnafu;
 use crate::py::expr_extract::extract_expr;
 use crate::shared::ChunkedExpressionCompilerAsync;
 use crate::shared::{
@@ -21,7 +24,7 @@ use crate::shared::{
     to_fully_cached_async,
 };
 use crate::store::StoreInput;
-
+use crate::{IStr, IntoIStr};
 /// Python-exposed Zarr backend with caching and scan methods.
 ///
 /// The backend owns the store and caches coordinate array chunks and metadata
@@ -120,15 +123,10 @@ impl PyZarrBackend {
             // `predicate` is used for chunk planning but may also include projection,
             // e.g. `pl.col(["y","x","var"]).filter(pred)`.
             let lf = df.lazy();
-            let filtered =                         lf
-                            .select([expr2])
-                            .collect()
-                            .map_err(|e| {
-                                PyErr::new::<
-                                    pyo3::exceptions::PyRuntimeError,
-                                    _,
-                                >(e.to_string())
-                            })?;
+            let filtered = lf
+                .select([expr2])
+                .collect()
+                .map_err(PyPolarsErr::from)?;
 
             Python::attach(|py| {
                 Ok(PyDataFrame(filtered)
@@ -254,7 +252,7 @@ impl PyZarrBackend {
                     let mut array_shape: Option<Vec<u64>> = None;
                     if let Some(var) = vars.first() {
                         let path =
-                            crate::shared::normalize_path(*var);
+                            crate::shared::normalize_path(var);
                         if let Ok(arr) = Array::async_open(
                             store.clone(),
                             &path,
@@ -284,13 +282,13 @@ impl PyZarrBackend {
                         let chunk_indices = chunkgrid
                             .chunks_in_array_subset(
                                 subset,
-                            )
-                            .map_err(|e| {
-                                PyErr::new::<
-                                pyo3::exceptions::PyValueError,
-                                _,
-                            >(e.to_string())
-                            })?;
+                            ).context(
+                                IncompatibleDimensionalitySnafu {
+                                    dims: sig.dims().to_vec(),
+                                    shape: chunkgrid.array_shape().to_vec(),
+                                    paths: vars.iter().cloned().collect::<Vec<IStr>>(),
+                                }
+                            )?;
 
                         if let Some(indices) =
                             chunk_indices

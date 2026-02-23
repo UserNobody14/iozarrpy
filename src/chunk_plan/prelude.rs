@@ -4,6 +4,4 @@ pub(super) use polars::prelude::{
     Selector,
 };
 
-pub(super) use crate::meta::{
-    TimeEncoding, ZarrDatasetMeta,
-};
+pub(super) use crate::meta::TimeEncoding;

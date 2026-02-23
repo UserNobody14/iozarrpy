@@ -11,6 +11,7 @@ mod prelude;
 mod exprs;
 mod indexing;
 
+mod selection;
 // GroupedChunkPlan entry points (heterogeneous chunk grids)
 pub(crate) use compile_entry::compute_dims_and_lengths_unified;
 pub(crate) use exprs::LazyCompileCtx;

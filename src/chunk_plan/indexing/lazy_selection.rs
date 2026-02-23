@@ -236,7 +236,7 @@ pub(crate) type LazyDatasetSelection =
 /// Groups variables by their dimension signature from metadata.
 pub(crate) fn lazy_dataset_all_for_vars(
     vars: impl IntoIterator<Item = IStr>,
-    meta: &crate::meta::ZarrDatasetMeta,
+    meta: &crate::meta::ZarrMeta,
 ) -> LazyDatasetSelection {
     LazyDatasetSelection::all_for_vars(vars, meta)
 }
@@ -246,7 +246,7 @@ pub(crate) fn lazy_dataset_all_for_vars(
 /// Groups variables by their dimension signature from metadata.
 pub(crate) fn lazy_dataset_for_vars_with_selection(
     vars: impl IntoIterator<Item = IStr>,
-    meta: &crate::meta::ZarrDatasetMeta,
+    meta: &crate::meta::ZarrMeta,
     sel: LazyArraySelection,
 ) -> LazyDatasetSelection {
     LazyDatasetSelection::for_vars_with_selection(

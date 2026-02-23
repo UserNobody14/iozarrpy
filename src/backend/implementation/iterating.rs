@@ -5,9 +5,11 @@ use polars::prelude::*;
 use pyo3::PyErr;
 use pyo3::prelude::*;
 use rayon::prelude::*;
+use snafu::ensure;
 
 use crate::IStr;
 use crate::chunk_plan::ChunkSubset;
+use crate::errors::MaxChunksToReadExceededSnafu;
 use crate::meta::ZarrMeta;
 use crate::scan::chunk_to_df_from_grid_with_backend_sync;
 use crate::shared::HasMetadataBackendSync;
@@ -145,15 +147,13 @@ impl ZarrIteratorInner {
         {
             let total_chunks = grouped_plan
                 .total_unique_chunks()?;
-            if total_chunks > max_chunks {
-                return Err(PyErr::new::<
-                    pyo3::exceptions::PyRuntimeError,
-                    _,
-                >(format!(
-                    "max_chunks_to_read exceeded: {} chunks needed, limit is {}",
-                    total_chunks, max_chunks
-                )));
-            }
+            ensure!(
+                total_chunks <= max_chunks,
+                MaxChunksToReadExceededSnafu {
+                    total_chunks,
+                    max_chunks,
+                }
+            );
         }
 
         // Collect all grid groups upfront and convert to owned data
@@ -168,11 +168,7 @@ impl ZarrIteratorInner {
                     sig: Arc::new(
                         group.sig.clone(),
                     ),
-                    vars: group
-                        .vars
-                        .iter()
-                        .map(|&v| v.clone())
-                        .collect(),
+                    vars: group.vars,
                     chunk_indices: group
                         .chunk_indices,
                     chunk_subsets: group
@@ -317,16 +313,10 @@ impl ZarrIteratorInner {
             // Combine all chunk DataFrames
             let combined = if batch_dfs.is_empty()
             {
-                let keys: Vec<IStr> = state
-                    .meta
-                    .path_to_array
-                    .keys()
-                    .cloned()
-                    .collect();
-                let planning_meta =
-                    state.meta.planning_meta();
+                let keys: Vec<IStr> =
+                    state.meta.all_array_paths();
                 DataFrame::empty_with_schema(
-                    &planning_meta.tidy_schema(
+                    &state.meta.tidy_schema(
                         Some(keys.as_slice()),
                     ),
                 )

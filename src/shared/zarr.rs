@@ -21,7 +21,8 @@ use crate::errors::{
     BackendError, BackendResult,
 };
 use crate::meta::{
-    ZarrMeta, load_zarr_meta_from_opened,
+    ZarrMeta,
+    load_zarr_meta_from_opened,
     load_zarr_meta_from_opened_async,
 };
 use crate::reader::{
@@ -137,7 +138,7 @@ impl ChunkedDataBackendSync for ZarrBackendSync {
                     let cached =
                         self.cached_meta.read();
                     cached.as_ref().and_then(|meta| {
-                        meta.path_to_array.get(var).and_then(|arr_meta| {
+                        meta.array_by_path(var.clone()).and_then(|arr_meta| {
                             arr_meta.array_metadata.clone()
                         })
                     })
@@ -280,8 +281,7 @@ impl ChunkedDataBackendAsync
                             .await;
                         cached.as_ref().and_then(
                             |meta| {
-                                meta.path_to_array
-                                    .get(var)
+                                meta.array_by_path(var.clone())
                                     .and_then(
                                         |arr_meta| {
                                             arr_meta

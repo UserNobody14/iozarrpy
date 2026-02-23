@@ -24,13 +24,14 @@ use super::selection::{
     Emptyable, SetOperations,
 };
 use super::types::DimSignature;
+use crate::meta::ZarrMeta;
 
 /// Materialize a lazy dataset selection into a concrete selection.
 ///
 /// Uses the provided cache to resolve value ranges to index ranges.
 pub(crate) fn materialize(
     selection: &LazyDatasetSelection,
-    meta: &ZarrDatasetMeta,
+    meta: &ZarrMeta,
     cache: &dyn ResolutionCache,
 ) -> Result<DatasetSelection, ResolutionError> {
     match selection {
@@ -98,30 +99,52 @@ pub(crate) fn materialize(
     }
 }
 
+fn all_some<T>(
+    vec: Vec<Option<T>>,
+) -> Option<Vec<T>> {
+    let mut dim_shape_reduced =
+        Vec::with_capacity(vec.len());
+    for shape in vec {
+        match shape {
+            Some(shape) => {
+                dim_shape_reduced.push(shape);
+            }
+            None => {
+                return None;
+            }
+        }
+    }
+    Some(dim_shape_reduced)
+}
+
 /// Get shape for a dimension signature by looking up the first matching array.
 fn dims_to_shape(
     dims: &[crate::IStr],
-    meta: &ZarrDatasetMeta,
+    meta: &ZarrMeta,
 ) -> Result<Arc<[u64]>, ResolutionError> {
     // Find an array that has these dimensions
-    for (_, array_meta) in &meta.arrays {
-        if array_meta.dims.len() == dims.len()
-            && array_meta
-                .dims
-                .iter()
-                .zip(dims.iter())
-                .all(|(a, b)| a == b)
-        {
-            return Ok(array_meta.shape.clone());
-        }
-    }
+    let dim_shape: Vec<Option<u64>> = dims
+        .to_vec()
+        .iter()
+        .map(|dim| {
+            meta.dim_analysis
+                .dim_lengths
+                .get(dim)
+                .copied()
+        })
+        .collect();
+    // If all dim_shape are Some, return, otherwise fallback:
+    let dim_shape_reduced = all_some(dim_shape);
 
+    if let Some(reduced) = dim_shape_reduced {
+        return Ok(reduced.into());
+    }
     // Fallback: construct shape from coordinate arrays
     let mut shape =
         Vec::with_capacity(dims.len());
     for dim in dims {
         if let Some(coord_array) =
-            meta.arrays.get(dim)
+            meta.array_by_path(dim)
         {
             if let Some(&len) =
                 coord_array.shape.first()
@@ -431,7 +454,6 @@ fn materialize_constraint(
 
 use crate::chunk_plan::indexing::selection::ArraySubsetList;
 use crate::chunk_plan::indexing::types::ValueRangePresent;
-use crate::meta::ZarrDatasetMeta;
 
 /// Collect requests and handle index-only dimensions.
 ///
@@ -439,7 +461,7 @@ use crate::meta::ZarrDatasetMeta;
 /// we can resolve them immediately using the dimension length.
 pub(crate) fn collect_requests_with_meta(
     selection: &LazyDatasetSelection,
-    meta: &ZarrDatasetMeta,
+    meta: &ZarrMeta,
     dim_lengths: &[u64],
     dims: &[crate::IStr],
 ) -> (
@@ -479,7 +501,7 @@ pub(crate) fn collect_requests_with_meta(
 
 fn collect_array_requests_with_meta(
     selection: &LazyArraySelection,
-    meta: &ZarrDatasetMeta,
+    meta: &ZarrMeta,
     dim_lengths: &[u64],
     dims: &[crate::IStr],
     requests: &mut HashSet<ResolutionRequest>,
@@ -522,7 +544,7 @@ fn collect_array_requests_with_meta(
 
 fn collect_rectangle_requests_with_meta(
     rect: &LazyHyperRectangle,
-    meta: &ZarrDatasetMeta,
+    meta: &ZarrMeta,
     dim_lengths: &[u64],
     dims: &[crate::IStr],
     requests: &mut HashSet<ResolutionRequest>,
@@ -534,7 +556,7 @@ fn collect_rectangle_requests_with_meta(
                 let request = ResolutionRequest::new(dim.as_ref(), vr.clone());
 
                 // Check if this is an index-only dimension (no coordinate array)
-                if meta.arrays.get(dim).is_none() {
+                if !meta.array_by_path_contains(dim) {
                     // Index-only dimension - resolve immediately
                     if let Some(dim_idx) = dims.iter().position(|d| d == dim) {
                         if let Some(&dim_len) = dim_lengths.get(dim_idx) {
@@ -558,7 +580,7 @@ fn collect_rectangle_requests_with_meta(
                 let request = ResolutionRequest::new(dim.as_ref(), vr.clone());
 
                 // Check if this is an index-only dimension (no coordinate array)
-                if meta.arrays.get(dim).is_none() {
+                if !meta.array_by_path_contains(dim) {
                     // Index-only dimension - resolve immediately
                     if let Some(dim_idx) = dims.iter().position(|d| d == dim) {
                         if let Some(&dim_len) = dim_lengths.get(dim_idx) {
@@ -588,7 +610,7 @@ fn collect_rectangle_requests_with_meta(
                     );
 
                     // Check if this is an index-only dimension
-                    if meta.arrays.get(dim).is_none() {
+                    if !meta.array_by_path_contains(dim) {
                         if let Some(dim_idx) = dims.iter().position(|d| d == dim) {
                             if let Some(&dim_len) = dim_lengths.get(dim_idx) {
                                 // For index-only dims, resolve immediately

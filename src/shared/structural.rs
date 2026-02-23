@@ -1,7 +1,8 @@
 use polars::prelude::*;
+use snafu::ResultExt;
 use std::collections::BTreeSet;
 
-use crate::errors::BackendResult;
+use crate::errors::{BackendResult, PolarsSnafu};
 use crate::meta::{ZarrMeta, ZarrNode};
 use crate::{IStr, IntoIStr};
 /// Combine chunk DataFrames, handling heterogeneous schemas.
@@ -57,8 +58,14 @@ pub fn combine_chunk_dataframes(
         for df in iter {
             // Reorder columns to match the first DataFrame
             let reordered =
-                df.select(col_order.as_slice())?;
-            acc.vstack_mut(&reordered)?;
+                df.select(col_order.as_slice())
+                .context(
+                    PolarsSnafu 
+                )?;
+            acc.vstack_mut(&reordered)
+            .context(
+                PolarsSnafu 
+            )?;
         }
         vstacked.push(acc);
     }
@@ -108,6 +115,8 @@ pub fn combine_chunk_dataframes(
         // No shared coordinates - fall back to diagonal concat
         return Ok(polars::functions::concat_df_diagonal(
             &vstacked,
+        ).context(
+            PolarsSnafu 
         )?);
     }
 
@@ -124,6 +133,8 @@ pub fn combine_chunk_dataframes(
                     JoinCoalesce::CoalesceColumns,
                 ),
             None,
+        ).context(
+            PolarsSnafu 
         )?;
     }
 
@@ -184,6 +195,8 @@ pub fn restructure_to_structs(
     Ok(DataFrame::new(
         df.height(),
         result_columns,
+    ).context(
+        PolarsSnafu 
     )?)
 }
 
@@ -247,6 +260,8 @@ fn build_struct_column_for_node(
             prefix.into(),
             df.height(),
             &fields,
+        ).context(
+            PolarsSnafu 
         )?;
 
     Ok(Some(struct_series.into_column()))
@@ -296,7 +311,7 @@ pub fn expand_projection_to_flat_paths(
         }
 
         // Check if it's already a flat path that exists
-        if meta.path_to_array.contains_key(col) {
+        if meta.array_by_path_contains(col.clone()) {
             expanded.insert(col.clone());
             continue;
         }
@@ -316,8 +331,8 @@ pub fn expand_projection_to_flat_paths(
         // Try to match partial paths like "level_1/level_2"
         // that might reference nested groups
         if let Some(paths) =
-            find_paths_matching_prefix(
-                col_str, meta,
+            meta.find_paths_matching_prefix(
+                col_str
             )
         {
             for p in paths {
@@ -364,27 +379,3 @@ fn collect_all_paths_from_node(
     }
 }
 
-/// Find all paths that start with the given prefix.
-fn find_paths_matching_prefix(
-    prefix: &str,
-    meta: &ZarrMeta,
-) -> Option<Vec<IStr>> {
-    let prefix_with_slash =
-        format!("{}/", prefix);
-    let matching: Vec<IStr> = meta
-        .path_to_array
-        .keys()
-        .filter(|p| {
-            let p_str: &str = p.as_ref();
-            p_str.starts_with(&prefix_with_slash)
-                || p_str == prefix
-        })
-        .cloned()
-        .collect();
-
-    if matching.is_empty() {
-        None
-    } else {
-        Some(matching)
-    }
-}

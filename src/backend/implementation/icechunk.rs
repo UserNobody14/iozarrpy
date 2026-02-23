@@ -97,10 +97,7 @@ impl HasMetadataBackendAsync<ZarrMeta>
                 &self.store,
                 &self.root,
             )
-            .await
-            .map_err(|e| {
-                BackendError::other(e.to_string())
-            })?;
+            .await?;
         Ok(Arc::new(meta))
     }
 }
@@ -133,19 +130,13 @@ impl ChunkedDataBackendAsync
             let chunk = retrieve_chunk_async(
                 &array, &cache, chunk_idx,
             )
-            .await
-            .map_err(|e| {
-                BackendError::other(e.to_string())
-            })?;
+            .await?;
             return Ok(chunk);
         }
 
         // Open array and create cache
-        let array = Array::async_open(store, var)
-            .await
-            .map_err(|e| {
-                BackendError::other(e.to_string())
-            })?;
+        let array =
+            Array::async_open(store, var).await?;
         let array_arc = Arc::new(array);
         let cache =
             Arc::new(ShardedCacheAsync::new(
@@ -157,10 +148,7 @@ impl ChunkedDataBackendAsync
             &cache,
             chunk_idx,
         )
-        .await
-        .map_err(|e| {
-            BackendError::other(e.to_string())
-        })?;
+        .await?;
 
         self.opened_arrays.write().await.insert(
             var.clone(),

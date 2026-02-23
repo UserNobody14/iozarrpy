@@ -451,7 +451,7 @@ impl PyIcechunkBackend {
                     if let Some(var) = vars.first() {
                         if let Ok(arr) = Array::async_open(
                             backend.async_store().clone(),
-                            &normalize_path(*var),
+                            &normalize_path(var),
                         )
                         .await
                         {
@@ -716,9 +716,6 @@ where
     const DEFAULT_MAX_CONCURRENCY: usize = 32;
     let meta = backend.metadata().await?;
 
-    let planning_meta =
-        StdArc::new(meta.planning_meta());
-
     // // Expand struct column names to flat paths for chunk reading
     // let expanded_with_columns =
     //     with_columns.as_ref().map(|cols| {
@@ -761,11 +758,8 @@ where
         grouped_plan.iter_consolidated_chunks()
     {
         let group = group?;
-        let vars: Vec<IStr> = group
-            .vars
-            .iter()
-            .map(|v| v.istr())
-            .collect();
+        let vars: Vec<IStr> =
+            group.vars.iter().cloned().collect();
 
         for (idx, subset) in group
             .chunk_indices
@@ -814,7 +808,7 @@ where
             .cloned()
             .collect();
         polars::prelude::DataFrame::empty_with_schema(
-            &planning_meta.tidy_schema(Some(keys.as_slice())),
+            &meta.tidy_schema(Some(keys.as_slice())),
         )
     } else if dfs.len() == 1 {
         dfs.into_iter().next().unwrap()

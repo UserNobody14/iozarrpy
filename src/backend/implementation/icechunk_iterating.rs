@@ -13,11 +13,15 @@ use futures::stream::{
 use polars::prelude::*;
 use pyo3::PyErr;
 use pyo3::prelude::*;
+use snafu::ResultExt;
+use snafu::ensure;
 use tokio::sync::Semaphore;
 
 use crate::IStr;
 use crate::chunk_plan::ChunkSubset;
 use crate::errors::BackendError;
+use crate::errors::CreateTokioRuntimeForSyncStoreSnafu;
+use crate::errors::MaxChunksToReadExceededSnafu;
 use crate::meta::ZarrMeta;
 use crate::scan::async_scan::chunk_to_df_from_grid_with_backend;
 use crate::shared::ChunkedExpressionCompilerAsync;
@@ -95,12 +99,12 @@ impl IcechunkIterator {
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
-            .map_err(|e| {
-                PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
-                    "Failed to create tokio runtime: {}",
-                    e
-                ))
-            })?;
+            .context(
+                CreateTokioRuntimeForSyncStoreSnafu {
+                    store: "icechunk_iterating".to_string(),
+                    prefix: "".to_string(),
+                },
+            )?;
 
         Ok(Self {
             backend,
@@ -136,19 +140,16 @@ impl IcechunkIterator {
             let expanded_with_columns =
                 with_columns.as_ref().map(|cols| expand_projection_to_flat_paths(cols, &meta));
 
-            let (grouped_plan, _stats) = backend.compile_expression_async(&expr).await.map_err(
-                |e: BackendError| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()),
-            )?;
+            let (grouped_plan, _stats) = backend.compile_expression_async(&expr).await?;
 
             if let Some(max_chunks) = max_chunks_to_read {
                 let total_chunks =
                     grouped_plan.total_unique_chunks()?;
-                if total_chunks > max_chunks {
-                    return Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
-                        "max_chunks_to_read exceeded: {} chunks needed, limit is {}",
-                        total_chunks, max_chunks
-                    )));
-                }
+
+                ensure!(total_chunks <= max_chunks, MaxChunksToReadExceededSnafu {
+                    total_chunks,
+                    max_chunks,
+                });
             }
 
             let grid_groups: Vec<OwnedGridGroup> = grouped_plan
@@ -157,14 +158,14 @@ impl IcechunkIterator {
                 .into_iter()
                 .map(|group| OwnedGridGroup {
                     sig: Arc::new(group.sig.clone()),
-                    vars: group.vars.iter().map(|&v| v.clone()).collect(),
+                    vars: group.vars,
                     chunk_indices: group.chunk_indices,
                     chunk_subsets: group.chunk_subsets,
                     array_shape: group.array_shape,
                 })
                 .collect();
 
-            Ok::<_, PyErr>((grid_groups, meta, expanded_with_columns))
+            Ok::<_, BackendError>((grid_groups, meta, expanded_with_columns))
         })?;
 
         self.state = Some(IteratorState {
@@ -303,16 +304,10 @@ impl IcechunkIterator {
 
             let combined = if batch_dfs.is_empty()
             {
-                let keys: Vec<IStr> = state
-                    .meta
-                    .path_to_array
-                    .keys()
-                    .cloned()
-                    .collect();
-                let planning_meta =
-                    state.meta.planning_meta();
+                let keys: Vec<IStr> =
+                    state.meta.all_array_paths();
                 DataFrame::empty_with_schema(
-                    &planning_meta.tidy_schema(
+                    &state.meta.tidy_schema(
                         Some(keys.as_slice()),
                     ),
                 )

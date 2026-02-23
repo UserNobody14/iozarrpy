@@ -10,13 +10,12 @@ pub(crate) use futures::stream::{
     FuturesUnordered, StreamExt,
 };
 pub(crate) use polars::prelude::*;
+use snafu::ResultExt;
 
 use crate::errors::{
-    BackendError, BackendResult,
+    BackendError, BackendResult, PolarsSnafu,
 };
-pub(crate) use crate::meta::{
-    ZarrDatasetMeta, ZarrMeta,
-};
+pub(crate) use crate::meta::ZarrMeta;
 pub(crate) use crate::reader::{
     ColumnData, checked_chunk_len,
     compute_strides,
@@ -148,7 +147,7 @@ async fn read_coord_chunks<
 
         // Check if this dimension has a coordinate array
         let Some(coord_meta) =
-            meta.path_to_array.get(dim_name)
+            meta.array_by_path(dim_name.clone())
         else {
             continue;
         };
@@ -206,7 +205,7 @@ async fn read_var_chunks<
     B: ChunkDataSourceAsync,
 >(
     backend: &B,
-    meta: &ZarrDatasetMeta,
+    meta: &ZarrMeta,
     idx: &[u64],
     chunk_shape: &[u64],
     dims: &[IStr],
@@ -238,10 +237,13 @@ async fn read_var_chunks<
             continue;
         }
 
-        let var_meta =
-            meta.arrays.get(name).ok_or(
-                BackendError::UnknownVariable {
+        let var_meta = meta
+            .array_by_path(name.clone())
+            .ok_or(
+                BackendError::UnknownDataVar {
                     name: name.clone(),
+                    available_vars: meta
+                        .all_data_var_paths(),
                 },
             )?;
 
@@ -335,7 +337,6 @@ pub async fn chunk_to_df_from_grid_with_backend<
         .collect();
 
     let meta = backend.metadata().await?;
-    let planning_meta = meta.planning_meta();
 
     let chunk_len =
         checked_chunk_len(chunk_shape)?;
@@ -362,7 +363,7 @@ pub async fn chunk_to_df_from_grid_with_backend<
         ),
         read_var_chunks(
             backend,
-            &planning_meta,
+            &meta,
             &idx,
             chunk_shape,
             dims,
@@ -384,9 +385,8 @@ pub async fn chunk_to_df_from_grid_with_backend<
             continue;
         }
 
-        let time_encoding = planning_meta
-            .arrays
-            .get(dim_name)
+        let time_encoding = meta
+            .array_by_path(dim_name.clone())
             .and_then(|m| {
                 m.time_encoding.as_ref()
             });
@@ -427,5 +427,6 @@ pub async fn chunk_to_df_from_grid_with_backend<
         cols.push(col);
     }
 
-    Ok(DataFrame::new(height, cols)?)
+    Ok(DataFrame::new(height, cols)
+        .context(PolarsSnafu)?)
 }

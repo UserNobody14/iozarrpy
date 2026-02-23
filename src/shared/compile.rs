@@ -151,22 +151,17 @@ fn prepare_compile_inputs(
     ),
     BackendError,
 > {
-    let legacy_meta = meta.planning_meta();
     let (dims, dim_lengths) =
         compute_dims_and_lengths_unified(meta);
-    let vars = legacy_meta.data_vars.clone();
-    let mut ctx = LazyCompileCtx::new(
-        &legacy_meta,
-        Some(meta),
-        &dims,
-        &vars,
-    );
+    let vars = meta.all_array_paths();
+    let mut ctx =
+        LazyCompileCtx::new(&meta, &dims, &vars);
     let lazy_selection =
         compile_expr(expr, &mut ctx)?;
     let (requests, immediate_cache) =
         collect_requests_with_meta(
             &lazy_selection,
-            &legacy_meta,
+            &meta,
             &dim_lengths,
             &dims,
         );
@@ -187,14 +182,13 @@ fn finish_compile_with_resolved_cache(
     (GroupedChunkPlan, PlannerStats),
     BackendError,
 > {
-    let legacy_meta = meta.planning_meta();
     let merged = MergedCache::new(
         resolved_cache,
         immediate_cache,
     );
     let selection = materialize(
         lazy_selection,
-        &legacy_meta,
+        &meta,
         &merged,
     )?;
     let stats = PlannerStats { coord_reads: 0 };
@@ -526,8 +520,7 @@ impl<
             .await
             .ok()
             .and_then(|meta| {
-                meta.clone()
-                    .array_by_path(dim.as_ref())
+                meta.array_by_path(dim.clone())
                     .cloned()
             }) {
             Some(m) => m,
@@ -860,7 +853,7 @@ impl<
             .ok()
             .and_then(|meta| {
                 meta.clone()
-                    .array_by_path(dim.as_ref())
+                    .array_by_path(dim.clone())
                     .cloned()
             }) {
             Some(m) => m,

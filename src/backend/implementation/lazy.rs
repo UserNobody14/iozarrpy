@@ -4,8 +4,9 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use polars::prelude::*;
-use pyo3::PyErr;
 
+use crate::errors::BackendError;
+use crate::errors::MaxChunksToReadExceededSnafu;
 use crate::scan::sync_scan::chunk_to_df_from_grid_with_backend;
 use crate::shared::ChunkedExpressionCompilerSync;
 use crate::shared::FullyCachedZarrBackendSync;
@@ -16,6 +17,7 @@ use crate::shared::{
     restructure_to_structs,
 };
 use crate::{IStr, IntoIStr};
+use snafu::ensure;
 
 /// Internal: scan using the backend.
 ///
@@ -25,13 +27,12 @@ pub fn scan_zarr_with_backend_sync(
     expr: polars::prelude::Expr,
     with_columns: Option<BTreeSet<IStr>>,
     max_chunks_to_read: Option<usize>,
-) -> Result<polars::prelude::DataFrame, PyErr> {
-    use std::sync::Arc as StdArc;
-
+) -> Result<
+    polars::prelude::DataFrame,
+    BackendError,
+> {
     // Get metadata from backend
     let meta = backend.metadata()?;
-    let planning_meta =
-        StdArc::new(meta.planning_meta());
 
     // Expand struct column names to flat paths for chunk reading
     // e.g., "model_a" -> ["model_a/temperature", "model_a/pressure"]
@@ -50,15 +51,13 @@ pub fn scan_zarr_with_backend_sync(
     if let Some(max_chunks) = max_chunks_to_read {
         let total_chunks =
             grouped_plan.total_unique_chunks()?;
-        if total_chunks > max_chunks {
-            return Err(PyErr::new::<
-                pyo3::exceptions::PyRuntimeError,
-                _,
-            >(format!(
-                "max_chunks_to_read exceeded: {} chunks needed, limit is {}",
-                total_chunks, max_chunks
-            )));
-        }
+        ensure!(
+            total_chunks <= max_chunks,
+            MaxChunksToReadExceededSnafu {
+                total_chunks,
+                max_chunks,
+            }
+        );
     }
 
     // Read chunks using consolidated (deduplicated) iteration
@@ -67,11 +66,7 @@ pub fn scan_zarr_with_backend_sync(
         grouped_plan.iter_consolidated_chunks()
     {
         let group = group?;
-        let vars: Vec<IStr> = group
-            .vars
-            .iter()
-            .map(|v| v.istr())
-            .collect();
+        let vars: Vec<IStr> = group.vars;
 
         for (idx, subset) in group
             .chunk_indices
@@ -101,7 +96,7 @@ pub fn scan_zarr_with_backend_sync(
             .cloned()
             .collect();
         DataFrame::empty_with_schema(
-            &planning_meta.tidy_schema(Some(
+            &meta.tidy_schema(Some(
                 keys.as_slice(),
             )),
         )

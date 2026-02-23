@@ -1,5 +1,8 @@
+use std::{fmt::Debug};
+
 use pyo3::PyErr;
 use snafu::prelude::*;
+use snafu::Backtrace;
 use polars::prelude::{Expr, LiteralValue, Operator, BooleanFunction};
 
 use crate::{IStr, chunk_plan::{ChunkGridSignature, ResolutionError}};
@@ -62,10 +65,27 @@ pub enum BackendError {
     CoordLengthMismatch { name: IStr, expected_len: u64, coord_len: u64 },
 
     #[snafu(display(
-        "unknown variable: {}",
-        name
+        "unknown data variable: '{}' not found. Available variables: {:?}",
+        name,
+        available_vars
     ))]
-    UnknownVariable { name: IStr },
+    UnknownDataVar { name: IStr, available_vars: Vec<IStr> },
+
+    #[snafu(display(
+        "unknown dimension: '{}' not found. Available dimensions: {:?}",
+        name,
+        available_dimensions
+    ))]
+    UnknownDimension { name: IStr, available_dimensions: Vec<IStr> },
+
+    #[snafu(display(
+        "unknown zarr array: '{}' not found. Available zarr arrays: {:?}",
+        name,
+        available_zarr_arrays
+    ))]
+    UnknownZarrArray { name: IStr, available_zarr_arrays: Vec<IStr> },
+
+
 
     #[snafu(display(
         "struct field path '{}' not found in metadata",
@@ -85,8 +105,31 @@ pub enum BackendError {
     #[snafu(display("other error: {}", msg))]
     Other { msg: String },
     
-    #[snafu(context(false))]
-    IncompatibleDimensionality { source: zarrs::array::IncompatibleDimensionalityError },
+    #[snafu(
+        display(
+            "{source} for dimensions {dims:?} with shape {shape:?} at paths {paths:?}",
+            source = source,
+            dims = dims,
+            shape = shape,
+            paths = paths,
+        ),
+        visibility(pub(crate))
+    )]
+    IncompatibleDimensionality { 
+        backtrace: Backtrace,
+        source: zarrs::array::IncompatibleDimensionalityError,
+        dims: Vec<IStr>,
+        shape: Vec<u64>,
+        paths: Vec<IStr>,
+    },
+    #[snafu(display(
+        "max_chunks_to_read exceeded: {total_chunks} chunks needed, limit is {max_chunks}",
+        total_chunks = total_chunks,
+        max_chunks = max_chunks,
+    ),
+    visibility(pub(crate))
+)]
+    MaxChunksToReadExceeded { total_chunks: usize, max_chunks: usize },
     #[snafu(context(false))]
     ArrayError { source: zarrs::array::ArrayError },
     #[snafu(context(false))]
@@ -98,8 +141,14 @@ pub enum BackendError {
 
     #[snafu(context(false))]
     ParseError { source: url::ParseError },
-    #[snafu(context(false))]
-    PolarsError { source: polars::error::PolarsError },
+    #[snafu(
+        display("polars error: {}", source),
+        visibility(pub(crate))
+    )]
+    PolarsError { 
+        source: polars::error::PolarsError,
+        backtrace: Backtrace,
+    },
 
     #[snafu(context(false))]
     ObjectStoreError { 
@@ -189,7 +238,7 @@ impl From<BackendError> for PyErr {
             _ => PyErr::new::<
                 pyo3::exceptions::PyValueError,
                 _,
-            >(error.to_string()),
+            >(format!("{}", snafu::Report::from_error(error))),
         }
     }
 }

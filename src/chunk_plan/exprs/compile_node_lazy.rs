@@ -51,7 +51,7 @@ pub(crate) fn compile_expr(
     let expr: &Expr =
         std::borrow::Borrow::borrow(&expr);
     match expr {
-        Expr::Display { inputs, fmt_str } => {
+        Expr::Display { .. } => {
             panic!(
                 "Display expression not supported"
             );
@@ -522,8 +522,7 @@ fn compile_cmp_to_lazy_selection(
 ) -> LazyResult {
     let time_encoding = ctx
         .meta
-        .arrays
-        .get(&col.istr())
+        .array_by_path(col.clone())
         .and_then(|a| a.time_encoding.as_ref());
     let scalar =
         literal_to_scalar(lit, time_encoding)?;
@@ -566,7 +565,10 @@ fn compile_value_range_to_lazy_selection(
             );
 
         Ok(lazy_dataset_for_vars_with_selection(
-            ctx.vars.iter().cloned(),
+            ctx.meta
+                .all_array_paths()
+                .iter()
+                .cloned(),
             ctx.meta,
             sel,
         ))
@@ -590,22 +592,18 @@ fn compile_struct_field_cmp(
             .istr();
 
     // Look up array metadata using unified meta when available
-    let arr_meta = if let Some(unified) =
-        ctx.unified_meta
-    {
-        let key = unified
-            .normalize_array_path(array_path.as_ref())
-            .ok_or_else(|| {
-                BackendError::StructFieldNotFound {
-                    path: array_path.clone()
-                }
-            })?;
-        unified.path_to_array.get(&key)
-    } else {
-        ctx.meta.arrays.get(&array_path)
-    };
+    let arr_meta_opt =
+        ctx.meta.array_by_path(&array_path);
 
-    let time_encoding = arr_meta
+    if arr_meta_opt.is_none() {
+        return Err(
+            BackendError::StructFieldNotFound {
+                path: array_path.clone(),
+            },
+        );
+    }
+
+    let time_encoding = arr_meta_opt
         .and_then(|a| a.time_encoding.as_ref());
     let scalar =
         literal_to_scalar(lit, time_encoding)?;
@@ -617,9 +615,9 @@ fn compile_struct_field_cmp(
     // For struct fields, we need to find which dimensions apply
     // If the array is a dimension array, constrain that dimension
     // Otherwise, just return "all" for the referenced vars
-    if let Some(meta) = arr_meta {
-        if meta.dims.len() == 1 {
-            let dim = &meta.dims[0];
+    if let Some(arr_meta) = arr_meta_opt {
+        if arr_meta.dims.len() == 1 {
+            let dim = &arr_meta.dims[0];
             if ctx.dims.contains(dim) {
                 // This is a 1D coordinate-like array, apply constraint to its dimension
                 let constraint =
@@ -633,16 +631,16 @@ fn compile_struct_field_cmp(
                             constraint,
                         );
                 let sel =
-                    LazyArraySelection::from_rectangle(
-                        rect,
-                    );
+                            LazyArraySelection::from_rectangle(
+                                rect,
+                            );
                 return Ok(
-                    lazy_dataset_for_vars_with_selection(
-                        ctx.vars.iter().cloned(),
-                        ctx.meta,
-                        sel,
-                    ),
-                );
+                            lazy_dataset_for_vars_with_selection(
+                                ctx.meta.all_array_paths().iter().cloned(),
+                                ctx.meta,
+                                sel,
+                            ),
+                        );
             }
         }
     }
@@ -1022,7 +1020,7 @@ fn compile_selector_lazy(
                 })?;
             let matching_vars: Vec<IStr> = ctx
                 .meta
-                .data_vars
+                .all_array_paths()
                 .iter()
                 .filter(|v| {
                     re.is_match(v.as_ref())
@@ -1041,11 +1039,12 @@ fn compile_selector_lazy(
         Selector::ByDType(dtype_selector) => {
             let matching_vars: Vec<IStr> = ctx
                 .meta
-                .data_vars
+                .all_array_paths()
                 .iter()
                 .filter(|v| {
-                    if let Some(array_meta) =
-                        ctx.meta.arrays.get(v)
+                    if let Some(array_meta) = ctx
+                        .meta
+                        .array_by_path(v.istr())
                     {
                         dtype_selector.matches(
                             &array_meta
@@ -1071,7 +1070,7 @@ fn compile_selector_lazy(
         }
         Selector::Wildcard => {
             Ok(lazy_dataset_all_for_vars(
-                ctx.meta.data_vars.clone(),
+                ctx.meta.all_array_paths(),
                 ctx.meta,
             ))
         }

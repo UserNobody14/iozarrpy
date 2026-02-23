@@ -5,12 +5,13 @@ use std::sync::Arc;
 use smallvec::SmallVec;
 use zarrs::array::ChunkGrid;
 
-use crate::IStr;
 use crate::chunk_plan::indexing::selection::ArraySubsetList;
 use crate::chunk_plan::indexing::types::ChunkGridSignature;
 use crate::errors::{
     BackendError, BackendResult,
 };
+use crate::{IStr, IntoIStr};
+use snafu::prelude::*;
 
 // =============================================================================
 // Chunk Subset
@@ -125,7 +126,7 @@ pub struct ConsolidatedGridGroup<'a> {
     /// The chunk grid signature for this group.
     pub sig: &'a ChunkGridSignature,
     /// Variables sharing this chunk grid.
-    pub vars: Vec<&'a IStr>,
+    pub vars: Vec<IStr>,
     /// Deduplicated, sorted chunk indices.
     pub chunk_indices: Vec<Vec<u64>>,
     /// Per-chunk local subset (parallel to `chunk_indices`).
@@ -135,6 +136,23 @@ pub struct ConsolidatedGridGroup<'a> {
     pub array_shape: Vec<u64>,
 }
 
+impl<'a> ConsolidatedGridGroup<'a> {
+    pub fn new(
+        sig: &'a ChunkGridSignature,
+        vars: Vec<IStr>,
+        chunk_indices: Vec<Vec<u64>>,
+        chunk_subsets: Vec<Option<ChunkSubset>>,
+        array_shape: Vec<u64>,
+    ) -> Self {
+        Self {
+            sig,
+            vars,
+            chunk_indices,
+            chunk_subsets,
+            array_shape,
+        }
+    }
+}
 /// Grouped chunk plan - maps chunk grid signatures to plans.
 ///
 /// This allows heterogeneous chunk layouts: variables with the same dimensions
@@ -150,6 +168,11 @@ pub(crate) struct GroupedChunkPlan {
     var_to_grid:
         BTreeMap<IStr, Arc<ChunkGridSignature>>,
 
+    vars_by_grid: BTreeMap<
+        Arc<ChunkGridSignature>,
+        Vec<IStr>,
+    >,
+
     /// Chunk grid by signature
     chunk_grid: BTreeMap<
         Arc<ChunkGridSignature>,
@@ -163,22 +186,29 @@ impl GroupedChunkPlan {
         Self {
             by_grid: BTreeMap::new(),
             var_to_grid: BTreeMap::new(),
+            vars_by_grid: BTreeMap::new(),
             chunk_grid: BTreeMap::new(),
         }
     }
 
     /// Insert a plan for a variable with the given grid signature.
-    pub fn insert(
+    pub fn insert<T: IntoIStr>(
         &mut self,
-        var: IStr,
+        var: T,
         sig: Arc<ChunkGridSignature>,
         plan: ArraySubsetList,
         chunk_grid: Arc<ChunkGrid>,
     ) {
-        self.var_to_grid.insert(var, sig.clone());
+        let var = var.istr();
+        self.var_to_grid
+            .insert(var.clone(), sig.clone());
         self.by_grid
             .entry(sig.clone())
             .or_insert(plan);
+        self.vars_by_grid
+            .entry(sig.clone())
+            .or_insert(vec![])
+            .push(var.clone());
         self.chunk_grid
             .entry(sig.clone())
             .or_insert(chunk_grid);
@@ -196,12 +226,11 @@ impl GroupedChunkPlan {
     pub fn vars_for_grid(
         &self,
         sig: &ChunkGridSignature,
-    ) -> Vec<&IStr> {
-        self.var_to_grid
-            .iter()
-            .filter(|(_, s)| s.as_ref() == sig)
-            .map(|(v, _)| v)
-            .collect()
+    ) -> Vec<IStr> {
+        self.vars_by_grid
+            .get(sig)
+            .map(|vars| vars.clone())
+            .unwrap_or_default()
     }
 
     /// Iterate over (grid_signature, variables, chunk_plan, chunk_grid) tuples.
@@ -214,7 +243,7 @@ impl GroupedChunkPlan {
     ) -> impl Iterator<
         Item = (
             &ChunkGridSignature,
-            Vec<&IStr>,
+            Vec<IStr>,
             &ArraySubsetList,
             &Arc<ChunkGrid>,
         ),
@@ -244,7 +273,7 @@ impl GroupedChunkPlan {
         &self,
     ) -> BackendResult<usize> {
         let mut total = 0;
-        for (_, _, subsets, chunkgrid) in
+        for (sig, vars, subsets, chunkgrid) in
             self.iter_grids()
         {
             let mut seen: BTreeSet<Vec<u64>> =
@@ -253,6 +282,16 @@ impl GroupedChunkPlan {
                 let indices = chunkgrid
                     .chunks_in_array_subset(
                         subset,
+                    ).context(
+                        crate::errors::backend::IncompatibleDimensionalitySnafu {
+                            dims: sig.dims().to_vec(),
+                            shape: chunkgrid.array_shape().to_vec(),
+                            paths: vars.iter().map(
+                                |v| -> internment::ArcIntern<str> {
+                                    v.clone()
+                                }
+                            ).collect::<Vec<IStr>>(),
+                        }
                     )?;
                 if let Some(indices) = indices {
                     for idx in indices.indices() {
@@ -302,6 +341,16 @@ impl GroupedChunkPlan {
                     let indices = chunkgrid
                         .chunks_in_array_subset(
                             subset,
+                        ).context(
+                            crate::errors::backend::IncompatibleDimensionalitySnafu {
+                                dims: sig.dims().to_vec(),
+                                shape: chunkgrid.array_shape().to_vec(),
+                                paths: vars.iter().map(
+                                    |v| -> internment::ArcIntern<str> {
+                                        v.clone()
+                                    }
+                                ).collect::<Vec<IStr>>(),
+                            }
                         )?;
                     if let Some(indices) = indices
                     {
@@ -332,13 +381,7 @@ impl GroupedChunkPlan {
                     })
                     .collect();
 
-                Ok(ConsolidatedGridGroup {
-                    sig: sig.as_ref(),
-                    vars,
-                    chunk_indices,
-                    chunk_subsets,
-                    array_shape,
-                })
+                Ok(ConsolidatedGridGroup::new(sig, vars, chunk_indices, chunk_subsets, array_shape))
             },
         )
     }

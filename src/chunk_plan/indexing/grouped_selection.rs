@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use crate::IStr;
-use crate::meta::ZarrDatasetMeta;
+use crate::meta::ZarrMeta;
 
 use super::selection::{
     Emptyable, SetOperations,
@@ -54,7 +54,7 @@ impl<Sel: ArraySelectionType>
     /// Groups variables by their dimension signature from metadata.
     pub fn for_vars_with_selection(
         vars: impl IntoIterator<Item = IStr>,
-        meta: &ZarrDatasetMeta,
+        meta: &ZarrMeta,
         sel: Sel,
     ) -> Self {
         let mut by_dims: BTreeMap<
@@ -73,7 +73,7 @@ impl<Sel: ArraySelectionType>
 
         for var in vars {
             let sig = if let Some(array_meta) =
-                meta.arrays.get(&var)
+                meta.array_by_path(var.clone())
             {
                 DimSignature::from_dims_only(
                     array_meta.dims.clone(),
@@ -108,7 +108,7 @@ impl<Sel: ArraySelectionType>
     /// Create a grouped selection for variables with all indices selected.
     pub fn all_for_vars(
         vars: impl IntoIterator<Item = IStr>,
-        meta: &ZarrDatasetMeta,
+        meta: &ZarrMeta,
     ) -> Self {
         Self::for_vars_with_selection(
             vars,
@@ -454,7 +454,7 @@ impl<Sel: ArraySelectionType>
     /// Create a selection for variables with the given selection.
     pub fn for_vars_with_selection(
         vars: impl IntoIterator<Item = IStr>,
-        meta: &ZarrDatasetMeta,
+        meta: &ZarrMeta,
         sel: Sel,
     ) -> Self {
         let grouped =
@@ -471,7 +471,7 @@ impl<Sel: ArraySelectionType>
     /// Create a selection for variables with all indices selected.
     pub fn all_for_vars(
         vars: impl IntoIterator<Item = IStr>,
-        meta: &ZarrDatasetMeta,
+        meta: &ZarrMeta,
     ) -> Self {
         let grouped =
             GroupedSelection::all_for_vars(

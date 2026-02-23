@@ -268,7 +268,7 @@ class TestMaxChunksToReadWithFilter:
             )
             return df
 
-        with pytest.raises(RuntimeError, match="max_chunks_to_read exceeded"):
+        with pytest.raises(ValueError, match="max_chunks_to_read exceeded: 402 chunks needed, limit is 5"):
             asyncio.run(_run())
 
 

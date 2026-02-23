@@ -1,7 +1,10 @@
 use std::sync::Arc;
 
-use pyo3::PyErr;
+use snafu::ensure;
 
+use crate::IStr;
+use crate::errors::BackendError;
+use crate::errors::MaxChunksToReadExceededSnafu;
 use crate::scan::async_scan::chunk_to_df_from_grid_with_backend;
 use crate::shared::ChunkedExpressionCompilerAsync;
 use crate::shared::FullyCachedZarrBackendAsync;
@@ -10,7 +13,6 @@ use crate::shared::{
     combine_chunk_dataframes,
     restructure_to_structs,
 };
-use crate::{IStr, IntoIStr};
 
 /// Internal: Async scan using the backend.
 ///
@@ -20,7 +22,10 @@ pub(crate) async fn scan_zarr_with_backend_async(
     expr: polars::prelude::Expr,
     max_concurrency: Option<usize>,
     max_chunks_to_read: Option<usize>,
-) -> Result<polars::prelude::DataFrame, PyErr> {
+) -> Result<
+    polars::prelude::DataFrame,
+    BackendError,
+> {
     use futures::stream::{
         FuturesUnordered, StreamExt,
     };
@@ -28,9 +33,6 @@ pub(crate) async fn scan_zarr_with_backend_async(
 
     const DEFAULT_MAX_CONCURRENCY: usize = 32;
     let meta = backend.metadata().await?;
-
-    let planning_meta =
-        StdArc::new(meta.planning_meta());
 
     // Compile grouped chunk plan using backend-based resolver
     let (grouped_plan, _stats) = backend
@@ -42,15 +44,13 @@ pub(crate) async fn scan_zarr_with_backend_async(
     if let Some(max_chunks) = max_chunks_to_read {
         let total_chunks =
             grouped_plan.total_unique_chunks()?;
-        if total_chunks > max_chunks {
-            return Err(PyErr::new::<
-                pyo3::exceptions::PyRuntimeError,
-                _,
-            >(format!(
-                "max_chunks_to_read exceeded: {} chunks needed, limit is {}",
-                total_chunks, max_chunks
-            )));
-        }
+        ensure!(
+            total_chunks <= max_chunks,
+            MaxChunksToReadExceededSnafu {
+                total_chunks,
+                max_chunks,
+            }
+        );
     }
 
     let max_conc = max_concurrency
@@ -66,11 +66,7 @@ pub(crate) async fn scan_zarr_with_backend_async(
         grouped_plan.iter_consolidated_chunks()
     {
         let group = group?;
-        let vars: Vec<IStr> = group
-            .vars
-            .iter()
-            .map(|v| v.istr())
-            .collect();
+        let vars: Vec<IStr> = group.vars;
 
         for (idx, subset) in group
             .chunk_indices
@@ -119,7 +115,7 @@ pub(crate) async fn scan_zarr_with_backend_async(
             .cloned()
             .collect();
         polars::prelude::DataFrame::empty_with_schema(
-            &planning_meta.tidy_schema(Some(
+            &meta.tidy_schema(Some(
                 keys.as_slice(),
             )),
         )

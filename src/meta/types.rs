@@ -141,59 +141,44 @@ impl ZarrMeta {
         !self.root.children.is_empty()
     }
 
-    /// Normalize a user path to a canonical key in path_to_array.
-    pub fn normalize_array_path(
+    pub fn array_by_path<T: IntoIStr>(
         &self,
-        path: &str,
-    ) -> Option<IStr> {
-        let raw = path.istr();
-        if self.path_to_array.contains_key(&raw) {
-            return Some(raw);
-        }
-
-        let trimmed =
-            path.trim_start_matches('/');
-        let with_slash =
-            format!("/{}", trimmed).istr();
-        if self
-            .path_to_array
-            .contains_key(&with_slash)
-        {
-            return Some(with_slash);
-        }
-
-        let trimmed_key = trimmed.istr();
-        if self
-            .path_to_array
-            .contains_key(&trimmed_key)
-        {
-            return Some(trimmed_key);
-        }
-
-        None
-    }
-
-    /// Get array meta by a normalized path (adds leading '/' if needed).
-    pub fn array_by_path(
-        &self,
-        path: &str,
+        path: T,
     ) -> Option<&ZarrArrayMeta> {
-        let key =
-            self.normalize_array_path(path)?;
-        self.path_to_array.get(&key)
+        self.path_to_array.get(&path.istr())
     }
 
-    /// Legacy meta for planning, includes all data var paths for hierarchical stores.
-    pub fn planning_meta(
+    pub fn array_by_path_contains<T: IntoIStr>(
         &self,
-    ) -> ZarrDatasetMeta {
-        let mut legacy =
-            ZarrDatasetMeta::from(self);
-        if self.is_hierarchical() {
-            legacy.data_vars =
-                self.all_data_var_paths();
+        path: T,
+    ) -> bool {
+        self.path_to_array
+            .contains_key(&path.istr())
+    }
+
+    pub fn find_paths_matching_prefix<
+        T: IntoIStr,
+    >(
+        &self,
+        prefix: T,
+    ) -> Option<Vec<IStr>> {
+        let binding = prefix.istr();
+        let prefix_str: &str = binding.as_ref();
+        let matching: Vec<IStr> = self
+            .path_to_array
+            .keys()
+            .cloned()
+            .filter(|p| {
+                let p_str: &str = p.as_ref();
+                p_str.starts_with(prefix_str)
+            })
+            .collect();
+
+        if matching.is_empty() {
+            None
+        } else {
+            Some(matching)
         }
-        legacy
     }
 
     /// All data variable paths (flat: just names, hierarchical: includes "group/var" paths)
@@ -205,6 +190,33 @@ impl ZarrMeta {
             &self.root, &mut out,
         );
         out
+    }
+
+    /// All data variable paths (flat: just names, hierarchical: includes "group/var" paths)
+    pub fn all_array_paths(&self) -> Vec<IStr> {
+        // self.path_to_array
+        //     .keys()
+        //     .cloned()
+        //     .collect()
+        let mut out = Vec::new();
+        self.collect_data_var_paths(
+            &self.root, &mut out,
+        );
+        out
+        // out.into_iter()
+        //     .map(|p| {
+        //         p.trim_start_matches('/').istr()
+        //     })
+        //     .collect()
+    }
+
+    pub fn all_zarr_array_paths(
+        &self,
+    ) -> Vec<IStr> {
+        self.path_to_array
+            .keys()
+            .cloned()
+            .collect()
     }
 
     fn collect_data_var_paths(
@@ -319,10 +331,8 @@ impl ZarrMeta {
                 });
 
             if should_include {
-                let struct_dtype = self
-                    .node_to_struct_dtype(
-                        child_node,
-                    );
+                let struct_dtype =
+                    child_node.to_struct_dtype();
                 fields.push(Field::new(
                     child_name_str.into(),
                     struct_dtype,
@@ -331,44 +341,6 @@ impl ZarrMeta {
         }
 
         fields.into_iter().collect()
-    }
-
-    /// Convert a ZarrNode to a Struct dtype for schema generation.
-    fn node_to_struct_dtype(
-        &self,
-        node: &ZarrNode,
-    ) -> PlDataType {
-        let mut struct_fields: Vec<Field> =
-            Vec::new();
-
-        // Add data variable fields
-        for var in &node.data_vars {
-            if let Some(arr_meta) =
-                node.arrays.get(var)
-            {
-                let var_str: &str = var.as_ref();
-                struct_fields.push(Field::new(
-                    var_str.into(),
-                    arr_meta.polars_dtype.clone(),
-                ));
-            }
-        }
-
-        // Recursively add nested child groups
-        for (child_name, child_node) in
-            &node.children
-        {
-            let child_name_str: &str =
-                child_name.as_ref();
-            let nested_dtype = self
-                .node_to_struct_dtype(child_node);
-            struct_fields.push(Field::new(
-                child_name_str.into(),
-                nested_dtype,
-            ));
-        }
-
-        PlDataType::Struct(struct_fields)
     }
 }
 
@@ -382,6 +354,40 @@ impl ZarrNode {
             local_dims: Vec::new(),
             data_vars: Vec::new(),
         }
+    }
+
+    fn to_struct_dtype(&self) -> PlDataType {
+        let mut struct_fields: Vec<Field> =
+            Vec::new();
+
+        // Add data variable fields
+        for var in &self.data_vars {
+            if let Some(arr_meta) =
+                self.arrays.get(var)
+            {
+                let var_str: &str = var.as_ref();
+                struct_fields.push(Field::new(
+                    var_str.into(),
+                    arr_meta.polars_dtype.clone(),
+                ));
+            }
+        }
+
+        // Recursively add nested child groups
+        for (child_name, child_node) in
+            &self.children
+        {
+            let child_name_str: &str =
+                child_name.as_ref();
+            let nested_dtype =
+                child_node.to_struct_dtype();
+            struct_fields.push(Field::new(
+                child_name_str.into(),
+                nested_dtype,
+            ));
+        }
+
+        PlDataType::Struct(struct_fields)
     }
 }
 
@@ -460,154 +466,4 @@ pub struct ZarrArrayMeta {
     /// Raw zarrs ArrayMetadata from traverse (for unconsolidated stores)
     pub array_metadata:
         Option<Arc<zarrs::array::ArrayMetadata>>,
-}
-
-#[derive(Debug, Clone)]
-pub struct ZarrDatasetMeta {
-    pub arrays: BTreeMap<IStr, ZarrArrayMeta>,
-    pub dims: Vec<IStr>,
-    pub data_vars: Vec<IStr>,
-}
-
-impl ZarrDatasetMeta {
-    pub fn tidy_schema(
-        &self,
-        variables: Option<&[IStr]>,
-    ) -> Schema {
-        let var_set: Option<BTreeSet<&str>> =
-            variables.map(|v| {
-                v.iter()
-                    .map(|s| s.as_ref())
-                    .collect()
-            });
-
-        let mut fields: Vec<Field> = Vec::new();
-
-        for dim in &self.dims {
-            let dtype = self
-                .arrays
-                .get(dim)
-                .map(|m| m.polars_dtype.clone())
-                .unwrap_or(PlDataType::Int64);
-            fields.push(Field::new(
-                (<IStr as AsRef<str>>::as_ref(
-                    dim,
-                ))
-                .into(),
-                dtype,
-            ));
-        }
-
-        let vars_iter: Box<
-            dyn Iterator<Item = &str>,
-        > = if let Some(var_set) = &var_set {
-            Box::new(
-                self.data_vars
-                    .iter()
-                    .map(|s| s.as_ref())
-                    .filter(|v| {
-                        var_set.contains(v)
-                    }),
-            )
-        } else {
-            Box::new(
-                self.data_vars
-                    .iter()
-                    .map(|s| s.as_ref()),
-            )
-        };
-
-        for v in vars_iter {
-            if let Some(m) =
-                self.arrays.get(&v.istr())
-            {
-                fields.push(Field::new(
-                    v.into(),
-                    m.polars_dtype.clone(),
-                ));
-            }
-        }
-
-        fields.into_iter().collect()
-    }
-}
-
-// =============================================================================
-// Conversions between ZarrMeta and ZarrDatasetMeta
-// =============================================================================
-
-impl From<ZarrDatasetMeta> for ZarrMeta {
-    /// Convert a flat ZarrDatasetMeta to the unified ZarrMeta format
-    fn from(legacy: ZarrDatasetMeta) -> Self {
-        let mut root = ZarrNode::new("/".istr());
-        root.arrays = legacy.arrays.clone();
-        root.local_dims = legacy.dims.clone();
-        root.data_vars = legacy.data_vars.clone();
-
-        let dim_analysis =
-            DimensionAnalysis::compute(&root);
-
-        let mut path_to_array = BTreeMap::new();
-        for (name, arr) in &legacy.arrays {
-            path_to_array.insert(
-                name.clone(),
-                arr.clone(),
-            );
-        }
-
-        ZarrMeta {
-            root,
-            dim_analysis,
-            path_to_array,
-        }
-    }
-}
-
-impl From<&ZarrMeta> for ZarrDatasetMeta {
-    /// Convert a ZarrMeta back to flat ZarrDatasetMeta.
-    ///
-    /// This preserves hierarchical paths in `arrays` by including:
-    /// - Full path with leading slash (e.g., `/model_a/temperature`)
-    /// - Path without leading slash (e.g., `model_a/temperature`)
-    /// - Leaf name for root arrays (e.g., `temperature`)
-    ///
-    /// `data_vars` contains only root-level variables for schema compatibility.
-    /// Use `arrays` to look up variables by path.
-    fn from(meta: &ZarrMeta) -> Self {
-        let mut arrays = BTreeMap::new();
-
-        // Add all paths from path_to_array
-        for (path, arr) in &meta.path_to_array {
-            let path_str: &str = path.as_ref();
-            arrays.insert(
-                path.clone(),
-                arr.clone(),
-            );
-
-            // Also add without leading slash for user convenience
-            if path_str.starts_with('/') {
-                let no_slash = path_str
-                    .trim_start_matches('/')
-                    .istr();
-                arrays
-                    .entry(no_slash)
-                    .or_insert_with(|| {
-                        arr.clone()
-                    });
-            }
-        }
-
-        ZarrDatasetMeta {
-            arrays,
-            dims: meta
-                .dim_analysis
-                .root_dims
-                .clone(),
-            // Keep only root-level data vars for schema compatibility
-            data_vars: meta
-                .root
-                .data_vars
-                .clone(),
-        }
-    }
 }
