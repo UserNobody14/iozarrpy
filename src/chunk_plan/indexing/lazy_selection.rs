@@ -13,6 +13,8 @@ use super::grouped_selection::ArraySelectionType;
 use super::selection::Emptyable;
 use super::types::{HasIntersect, ValueRange};
 use crate::IStr;
+use crate::chunk_plan::indexing::grouped_selection::GroupedSelection;
+use crate::chunk_plan::indexing::selection_base::DatasetSelectionBase;
 use std::ops::Range;
 
 /// A per-dimension constraint in value-space (deferred resolution).
@@ -227,8 +229,8 @@ impl LazyArraySelection {
 ///
 /// This groups variables by their dimension signature to avoid duplication.
 pub(crate) type LazyDatasetSelection =
-    super::grouped_selection::DatasetSelectionBase<
-        LazyArraySelection,
+    super::selection_base::DatasetSelectionBase<
+        GroupedSelection<LazyArraySelection>,
     >;
 
 /// Create a lazy dataset selection for the given variables with all indices selected.
@@ -238,7 +240,12 @@ pub(crate) fn lazy_dataset_all_for_vars(
     vars: impl IntoIterator<Item = IStr>,
     meta: &crate::meta::ZarrMeta,
 ) -> LazyDatasetSelection {
-    LazyDatasetSelection::all_for_vars(vars, meta)
+    LazyDatasetSelection::from_optional(
+        GroupedSelection::all_for_vars(
+            vars, meta,
+        )
+        .to_optional(),
+    )
 }
 
 /// Create a lazy dataset selection for the given variables with the specified selection.
@@ -249,8 +256,11 @@ pub(crate) fn lazy_dataset_for_vars_with_selection(
     meta: &crate::meta::ZarrMeta,
     sel: LazyArraySelection,
 ) -> LazyDatasetSelection {
-    LazyDatasetSelection::for_vars_with_selection(
-        vars, meta, sel,
+    LazyDatasetSelection::from_optional(
+        GroupedSelection::for_vars_with_selection(
+            vars, meta, sel,
+        )
+        .to_optional(),
     )
 }
 

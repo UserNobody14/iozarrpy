@@ -7,6 +7,7 @@
 
 pub mod plan;
 pub mod selection;
+pub mod selection_base;
 pub mod selection_to_chunks;
 pub mod types;
 
@@ -26,8 +27,8 @@ pub(crate) use resolver_traits::{
 };
 
 // Core types re-exports
-pub(crate) use plan::GroupedChunkPlan;
 pub use plan::ChunkSubset;
+pub(crate) use plan::GroupedChunkPlan;
 pub(crate) use selection::{
     DatasetSelection, Emptyable,
 };

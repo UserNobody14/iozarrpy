@@ -105,6 +105,14 @@ impl<Sel: ArraySelectionType>
         }
     }
 
+    pub fn to_optional(self) -> Option<Self> {
+        if self.is_empty() {
+            None
+        } else {
+            Some(self)
+        }
+    }
+
     /// Create a grouped selection for variables with all indices selected.
     pub fn all_for_vars(
         vars: impl IntoIterator<Item = IStr>,
@@ -370,201 +378,6 @@ impl<Sel: ArraySelectionType> SetOperations
         Self {
             by_dims,
             var_to_sig,
-        }
-    }
-
-    fn exclusive_or(&self, other: &Self) -> Self {
-        self.difference(other)
-            .union(&other.difference(self))
-    }
-}
-
-/// Generic dataset selection enum.
-///
-/// This is parameterized by the array selection type, allowing the same structure
-/// to be used for both lazy (`LazyArraySelection`) and concrete (`DataArraySelection`)
-/// selections.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum DatasetSelectionBase<Sel> {
-    /// No selection was made (equivalent to "select all").
-    NoSelectionMade,
-    /// Everything has been excluded.
-    Empty,
-    /// Standard selection mapping dimension signatures to selections.
-    Selection(GroupedSelection<Sel>),
-}
-
-impl<Sel: ArraySelectionType> Default
-    for DatasetSelectionBase<Sel>
-{
-    fn default() -> Self {
-        Self::NoSelectionMade
-    }
-}
-
-impl<Sel: ArraySelectionType>
-    DatasetSelectionBase<Sel>
-{
-    /// Create an empty selection (selects nothing).
-    pub fn empty() -> Self {
-        Self::Empty
-    }
-
-    // TODO: consider removing?
-    // /// Returns true if this is an empty selection.
-    // pub fn is_empty_selection(&self) -> bool {
-    //     matches!(self, Self::Empty)
-    // }
-
-    // /// Iterate over variables and their selections.
-    // pub fn vars(
-    //     &self,
-    // ) -> Box<dyn Iterator<Item = (&str, &Sel)> + '_>
-    // {
-    //     match self {
-    //         Self::Selection(sel) => {
-    //             Box::new(sel.vars())
-    //         }
-    //         Self::NoSelectionMade
-    //         | Self::Empty => {
-    //             Box::new(std::iter::empty())
-    //         }
-    //     }
-    // }
-
-    // /// Get the selection for a specific variable.
-    // pub fn get(&self, var: &str) -> Option<&Sel> {
-    //     match self {
-    //         Self::Selection(sel) => sel.get(var),
-    //         Self::NoSelectionMade
-    //         | Self::Empty => None,
-    //     }
-    // }
-
-    // /// Get the inner grouped selection, if present.
-    // pub fn as_selection(
-    //     &self,
-    // ) -> Option<&GroupedSelection<Sel>> {
-    //     match self {
-    //         Self::Selection(sel) => Some(sel),
-    //         _ => None,
-    //     }
-    // }
-
-    /// Create a selection for variables with the given selection.
-    pub fn for_vars_with_selection(
-        vars: impl IntoIterator<Item = IStr>,
-        meta: &ZarrMeta,
-        sel: Sel,
-    ) -> Self {
-        let grouped =
-            GroupedSelection::for_vars_with_selection(
-                vars, meta, sel,
-            );
-        if grouped.is_empty() {
-            Self::Empty
-        } else {
-            Self::Selection(grouped)
-        }
-    }
-
-    /// Create a selection for variables with all indices selected.
-    pub fn all_for_vars(
-        vars: impl IntoIterator<Item = IStr>,
-        meta: &ZarrMeta,
-    ) -> Self {
-        let grouped =
-            GroupedSelection::all_for_vars(
-                vars, meta,
-            );
-        if grouped.is_empty() {
-            Self::Empty
-        } else {
-            Self::Selection(grouped)
-        }
-    }
-}
-
-impl<Sel: ArraySelectionType> Emptyable
-    for DatasetSelectionBase<Sel>
-{
-    fn empty() -> Self {
-        Self::Empty
-    }
-
-    fn is_empty(&self) -> bool {
-        matches!(self, Self::Empty)
-    }
-}
-
-impl<Sel: ArraySelectionType> SetOperations
-    for DatasetSelectionBase<Sel>
-{
-    fn union(&self, other: &Self) -> Self {
-        match (self, other) {
-            (Self::NoSelectionMade, _)
-            | (_, Self::NoSelectionMade) => {
-                Self::NoSelectionMade
-            }
-            (Self::Empty, x)
-            | (x, Self::Empty) => x.clone(),
-            (
-                Self::Selection(a),
-                Self::Selection(b),
-            ) => {
-                let unioned = a.union(b);
-                if unioned.is_empty() {
-                    Self::Empty
-                } else {
-                    Self::Selection(unioned)
-                }
-            }
-        }
-    }
-
-    fn intersect(&self, other: &Self) -> Self {
-        match (self, other) {
-            (Self::NoSelectionMade, x)
-            | (x, Self::NoSelectionMade) => {
-                x.clone()
-            }
-            (Self::Empty, _)
-            | (_, Self::Empty) => Self::Empty,
-            (
-                Self::Selection(a),
-                Self::Selection(b),
-            ) => {
-                let intersected = a.intersect(b);
-                if intersected.is_empty() {
-                    Self::Empty
-                } else {
-                    Self::Selection(intersected)
-                }
-            }
-        }
-    }
-
-    fn difference(&self, other: &Self) -> Self {
-        match (self, other) {
-            (Self::NoSelectionMade, _) => {
-                Self::NoSelectionMade
-            }
-            (_, Self::NoSelectionMade) => {
-                Self::Empty
-            }
-            (Self::Empty, _) => Self::Empty,
-            (x, Self::Empty) => x.clone(),
-            (
-                Self::Selection(a),
-                Self::Selection(b),
-            ) => {
-                let diff = a.difference(b);
-                if diff.is_empty() {
-                    Self::Empty
-                } else {
-                    Self::Selection(diff)
-                }
-            }
         }
     }
 
