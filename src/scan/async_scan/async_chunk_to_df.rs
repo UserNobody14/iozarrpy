@@ -214,7 +214,7 @@ async fn read_var_chunks<
 ) -> BackendResult<
     Vec<(
         IStr,
-        ColumnData,
+        Arc<ColumnData>,
         Vec<IStr>,
         Vec<u64>,
         Vec<u64>,
@@ -289,7 +289,7 @@ async fn read_var_chunks<
 
             Ok::<_, BackendError>((
                 name,
-                data,
+                data.clone(),
                 var_dims,
                 var_chunk_shape,
                 var_offsets,

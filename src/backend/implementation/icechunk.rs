@@ -110,7 +110,8 @@ impl ChunkedDataBackendAsync
         &self,
         var: &IStr,
         chunk_idx: &[u64],
-    ) -> Result<ColumnData, BackendError> {
+    ) -> Result<Arc<ColumnData>, BackendError>
+    {
         let store = self.store.clone();
 
         // Clone the Arc values and drop the guard before await to keep the future Send
@@ -131,7 +132,7 @@ impl ChunkedDataBackendAsync
                 &array, &cache, chunk_idx,
             )
             .await?;
-            return Ok(chunk);
+            return Ok(Arc::new(chunk));
         }
 
         // Open array and create cache
@@ -158,7 +159,7 @@ impl ChunkedDataBackendAsync
             },
         );
 
-        Ok(chunk)
+        Ok(Arc::new(chunk))
     }
 }
 

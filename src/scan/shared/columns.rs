@@ -295,7 +295,7 @@ pub(crate) fn compute_in_bounds_mask(
 /// buffer directly to Polars with zero copying.
 pub(crate) fn build_var_column(
     name: &IStr,
-    data: ColumnData,
+    data: Arc<ColumnData>,
     var_dims: &[IStr],
     var_chunk_shape: &[u64],
     var_offsets: &[u64],
@@ -321,8 +321,10 @@ pub(crate) fn build_var_column(
             KeepMask::All(_) => {
                 // Zero-copy: hand buffer directly
                 // to Polars Series (no clone).
-                data.into_series(name.as_ref())
-                    .into()
+                data.borrow_into_series(
+                    name.as_ref(),
+                )
+                .into()
             }
             KeepMask::Sparse(idx) => data
                 .take_indices(idx)

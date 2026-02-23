@@ -1,6 +1,8 @@
 """Tests for consolidated vs unconsolidated metadata handling."""
+from datetime import datetime, timedelta
+
 import polars as pl
-import pytest
+
 import rainbear
 
 
@@ -136,9 +138,19 @@ def test_grid_constant_unconsolidated_basic(baseline_datasets):
     """Test basic read of grid_constant_unconsolidated dataset."""
     path = baseline_datasets["grid_constant_unconsolidated"]
     
-    df = rainbear.scan_zarr(path).collect()
+    df = rainbear.scan_zarr(path).filter(
+        (pl.col("time") > datetime(2024, 1, 1, 0, 0, 0)) &
+        (pl.col("time") < datetime(2024, 1, 1, 12, 0, 0)) &
+        (pl.col("y") > 50) &
+        (pl.col("y") < 150) &
+        (pl.col("x") > 100) &
+        (pl.col("x") < 200) &
+        (pl.col("lead_time") == timedelta(hours=1))
+    ).collect()
     
     # Should successfully read the dataset
     assert df.height > 0
+    # Should not read the whole dataset, but only the filtered rows
+    assert df.height == 9801
     assert "time" in df.columns
     assert "2m_temperature" in df.columns or "total_precipitation" in df.columns

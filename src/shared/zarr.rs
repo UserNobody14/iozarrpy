@@ -120,7 +120,8 @@ impl ChunkedDataBackendSync for ZarrBackendSync {
         &self,
         var: &IStr,
         chunk_idx: &[u64],
-    ) -> Result<ColumnData, BackendError> {
+    ) -> Result<Arc<ColumnData>, BackendError>
+    {
         // Try to get existing array and cache
         let array_opt = self
             .opened_arrays
@@ -160,7 +161,7 @@ impl ChunkedDataBackendSync for ZarrBackendSync {
                         var.clone(),
                         opened_inner.clone(),
                     );
-                opened_inner
+                opened_inner.clone()
             }
         };
 
@@ -170,7 +171,7 @@ impl ChunkedDataBackendSync for ZarrBackendSync {
             chunk_idx,
         )?;
 
-        Ok(chunk)
+        Ok(Arc::new(chunk))
     }
 }
 
@@ -259,7 +260,8 @@ impl ChunkedDataBackendAsync
         &self,
         var: &IStr,
         chunk_idx: &[u64],
-    ) -> Result<ColumnData, BackendError> {
+    ) -> Result<Arc<ColumnData>, BackendError>
+    {
         // Clone the Arc values and drop the guard before await to keep the future Send
         let existing = self
             .opened_arrays
@@ -321,7 +323,7 @@ impl ChunkedDataBackendAsync
         )
         .await?;
 
-        Ok(chunk)
+        Ok(Arc::new(chunk))
     }
 }
 

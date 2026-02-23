@@ -190,7 +190,7 @@ fn read_var_chunks<B: ChunkDataSourceSync>(
 ) -> BackendResult<
     Vec<(
         IStr,
-        ColumnData,
+        Arc<ColumnData>,
         Vec<IStr>,
         Vec<u64>,
         Vec<u64>,
@@ -255,7 +255,7 @@ fn read_var_chunks<B: ChunkDataSourceSync>(
 
         var_chunks.push((
             name.clone(),
-            data,
+            data.clone(),
             var_dims,
             var_chunk_shape,
             var_offsets,

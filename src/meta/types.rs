@@ -25,16 +25,17 @@ pub struct ZarrMeta {
     pub dim_analysis: DimensionAnalysis,
     /// Fast lookup: array path (e.g., "model_a/temperature") -> array metadata
     pub path_to_array:
-        BTreeMap<IStr, ZarrArrayMeta>,
+        BTreeMap<IStr, Arc<ZarrArrayMeta>>,
 }
 
 /// A node in the zarr hierarchy (group or root).
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct ZarrNode {
     /// Path from store root (e.g., "/" or "/model_a" or "/level_1/level_2")
     pub path: IStr,
     /// Arrays directly in this node (keyed by leaf name, not full path)
-    pub arrays: BTreeMap<IStr, ZarrArrayMeta>,
+    pub arrays:
+        BTreeMap<IStr, Arc<ZarrArrayMeta>>,
     /// Child groups (keyed by child name)
     pub children: BTreeMap<IStr, ZarrNode>,
     /// Dimensions used by arrays in this node
@@ -145,7 +146,9 @@ impl ZarrMeta {
         &self,
         path: T,
     ) -> Option<&ZarrArrayMeta> {
-        self.path_to_array.get(&path.istr())
+        self.path_to_array
+            .get(&path.istr())
+            .map(|a| a.as_ref())
     }
 
     pub fn array_by_path_contains<T: IntoIStr>(
@@ -416,6 +419,105 @@ impl Display for ZarrMeta {
     }
 }
 
+pub trait VariableAccess {
+    fn array_by_path<T: IntoIStr>(
+        &self,
+        path: T,
+    ) -> Option<&ZarrArrayMeta>;
+
+    fn array_by_path_contains<T: IntoIStr>(
+        &self,
+        path: T,
+    ) -> bool;
+
+    fn find_paths_matching_prefix<T: IntoIStr>(
+        &self,
+        prefix: T,
+    ) -> Option<Vec<IStr>>;
+}
+
+impl VariableAccess for ZarrNode {
+    fn array_by_path<T: IntoIStr>(
+        &self,
+        path: T,
+    ) -> Option<&ZarrArrayMeta> {
+        let binding = path.istr();
+        let path_str: &str = binding.as_ref();
+        // If the path has no slashes, attempt to get it from the local arrays
+        if !path_str.contains('/') {
+            return self
+                .arrays
+                .get(&binding)
+                .map(|a| a.as_ref());
+        }
+
+        // Otherwise, get the parent path and recurse through the children
+        let parent_path =
+            path_str.split('/').next();
+        if let Some(parent_path) = parent_path {
+            return self
+                .children
+                .get(&parent_path.istr())
+                .and_then(|child| {
+                    child.array_by_path(binding)
+                });
+        }
+
+        None
+    }
+
+    fn array_by_path_contains<T: IntoIStr>(
+        &self,
+        path: T,
+    ) -> bool {
+        self.array_by_path(path).is_some()
+    }
+
+    fn find_paths_matching_prefix<T: IntoIStr>(
+        &self,
+        prefix: T,
+    ) -> Option<Vec<IStr>> {
+        let binding = prefix.istr();
+        let prefix_str: &str = binding.as_ref();
+        // If the prefix is a slash, return all arrays and all child group paths
+        if prefix_str == "/" {
+            let mut arrays_and_children: Vec<
+                IStr,
+            > = self
+                .arrays
+                .keys()
+                .cloned()
+                .collect();
+            let children_paths: Vec<IStr> = self
+                .children
+                .keys()
+                .cloned()
+                .collect();
+            arrays_and_children
+                .extend(children_paths);
+            return Some(arrays_and_children);
+        }
+
+        // Otherwise, get the parent path and recurse through the children
+        let parent_path =
+            prefix_str.split_once('/');
+        if let Some((parent_path, _)) =
+            parent_path
+        {
+            return self
+                .children
+                .get(&parent_path.istr())
+                .and_then(|child| {
+                    child.find_paths_matching_prefix(
+                        binding,
+                    )
+                });
+        }
+
+        None
+    }
+}
+
 /// CF-conventions time encoding information parsed from Zarr attributes.
 #[derive(Debug, Clone)]
 pub struct TimeEncoding {
@@ -452,7 +554,7 @@ impl TimeEncoding {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct ZarrArrayMeta {
     pub path: IStr,
     /// Shape wrapped in Arc for cheap cloning.

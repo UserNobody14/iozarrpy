@@ -36,7 +36,7 @@ pub(crate) fn build_node_tree(
     path: IStr,
     group_arrays: &BTreeMap<
         IStr,
-        Vec<(IStr, ZarrArrayMeta)>,
+        Vec<(IStr, Arc<ZarrArrayMeta>)>,
     >,
     aux_coords: &BTreeSet<IStr>,
 ) -> ZarrNode {
@@ -142,11 +142,11 @@ pub(crate) fn load_zarr_meta_inner<
     // First pass: collect all arrays and identify group structure
     let mut all_arrays: BTreeMap<
         IStr,
-        ZarrArrayMeta,
+        Arc<ZarrArrayMeta>,
     > = BTreeMap::new();
     let mut group_arrays: BTreeMap<
         IStr,
-        Vec<(IStr, ZarrArrayMeta)>,
+        Vec<(IStr, Arc<ZarrArrayMeta>)>,
     > = BTreeMap::new();
     let mut aux_coords: BTreeSet<IStr> =
         BTreeSet::new();
@@ -240,15 +240,17 @@ pub(crate) fn load_zarr_meta_inner<
             )),
         };
 
+        let arr_meta_arc = Arc::new(arr_meta);
+
         // Store in both flat and grouped maps
         all_arrays.insert(
             rel_path.istr(),
-            arr_meta.clone(),
+            arr_meta_arc.clone(),
         );
         group_arrays
             .entry(parent_path)
             .or_default()
-            .push((leaf, arr_meta));
+            .push((leaf, arr_meta_arc.clone()));
     }
 
     // Build the hierarchical node structure
@@ -261,13 +263,13 @@ pub(crate) fn load_zarr_meta_inner<
     // Build path_to_array map with both full paths and leaf names for root arrays
     let mut path_to_array: BTreeMap<
         IStr,
-        ZarrArrayMeta,
+        Arc<ZarrArrayMeta>,
     > = BTreeMap::new();
-    for (path, arr) in &all_arrays {
+    for (path, arr) in all_arrays.into_iter() {
         // Store by full path
         path_to_array.insert(
             path.trim_start_matches('/').istr(),
-            arr.clone(),
+            arr,
         );
     }
 

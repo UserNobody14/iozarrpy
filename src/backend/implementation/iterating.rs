@@ -335,6 +335,7 @@ impl ZarrIteratorInner {
             // Apply the predicate filter to the actual rows
             // Chunk planning only prunes chunks, but chunks may contain rows
             // that don't match the predicate
+            // TODO: unnecessary?
             let result = combined
                 .lazy()
                 .filter(state.predicate.clone())

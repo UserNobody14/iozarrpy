@@ -64,7 +64,7 @@ fn repeat_tile_slice<T: Copy>(
     output
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub(crate) enum ColumnData {
     Bool(Vec<bool>),
     I8(Vec<i8>),
@@ -587,6 +587,47 @@ impl ColumnData {
 
     pub(crate) fn into_series(
         self,
+        name: &str,
+    ) -> Series {
+        match self {
+            ColumnData::Bool(v) => {
+                Series::new(name.into(), v)
+            }
+            ColumnData::I8(v) => {
+                Series::new(name.into(), v)
+            }
+            ColumnData::I16(v) => {
+                Series::new(name.into(), v)
+            }
+            ColumnData::I32(v) => {
+                Series::new(name.into(), v)
+            }
+            ColumnData::I64(v) => {
+                Series::new(name.into(), v)
+            }
+            ColumnData::U8(v) => {
+                Series::new(name.into(), v)
+            }
+            ColumnData::U16(v) => {
+                Series::new(name.into(), v)
+            }
+            ColumnData::U32(v) => {
+                Series::new(name.into(), v)
+            }
+            ColumnData::U64(v) => {
+                Series::new(name.into(), v)
+            }
+            ColumnData::F32(v) => {
+                Series::new(name.into(), v)
+            }
+            ColumnData::F64(v) => {
+                Series::new(name.into(), v)
+            }
+        }
+    }
+
+    pub(crate) fn borrow_into_series(
+        &self,
         name: &str,
     ) -> Series {
         match self {
