@@ -1,6 +1,4 @@
-use super::selection::{
-    Emptyable, SetOperations,
-};
+use super::selection::Emptyable;
 
 /// Generic dataset selection enum.
 ///
@@ -32,7 +30,6 @@ impl<Sel> DatasetSelectionBase<Sel> {
 impl<Sel: Emptyable> Emptyable
     for DatasetSelectionBase<Sel>
 {
-    /// Create an empty selection (selects nothing).
     fn is_empty(&self) -> bool {
         match self {
             Self::NoSelectionMade => false,
@@ -45,97 +42,5 @@ impl<Sel: Emptyable> Emptyable
 
     fn empty() -> Self {
         Self::Empty
-    }
-}
-
-impl<Sel: SetOperations + Clone> SetOperations
-    for DatasetSelectionBase<Sel>
-{
-    fn union(&self, other: &Self) -> Self {
-        match (self, other) {
-            (Self::NoSelectionMade, _)
-            | (_, Self::NoSelectionMade) => {
-                Self::NoSelectionMade
-            }
-            (Self::Empty, x)
-            | (x, Self::Empty) => x.clone(),
-            (
-                Self::Selection(a),
-                Self::Selection(b),
-            ) => {
-                let unioned = a.union(b);
-                if unioned.is_empty() {
-                    Self::Empty
-                } else {
-                    Self::Selection(unioned)
-                }
-            }
-        }
-    }
-
-    fn intersect(&self, other: &Self) -> Self {
-        match (self, other) {
-            (Self::NoSelectionMade, x)
-            | (x, Self::NoSelectionMade) => {
-                x.clone()
-            }
-            (Self::Empty, _)
-            | (_, Self::Empty) => Self::Empty,
-            (
-                Self::Selection(a),
-                Self::Selection(b),
-            ) => {
-                let intersected = a.intersect(b);
-                if intersected.is_empty() {
-                    Self::Empty
-                } else {
-                    Self::Selection(intersected)
-                }
-            }
-        }
-    }
-
-    fn difference(&self, other: &Self) -> Self {
-        match (self, other) {
-            (Self::NoSelectionMade, _)
-            | (_, Self::NoSelectionMade) => {
-                Self::NoSelectionMade
-            }
-            (Self::Empty, _)
-            | (_, Self::Empty) => Self::Empty,
-            (
-                Self::Selection(a),
-                Self::Selection(b),
-            ) => {
-                let diff = a.difference(b);
-                if diff.is_empty() {
-                    Self::Empty
-                } else {
-                    Self::Selection(diff)
-                }
-            }
-        }
-    }
-
-    fn exclusive_or(&self, other: &Self) -> Self {
-        match (self, other) {
-            (Self::NoSelectionMade, _)
-            | (_, Self::NoSelectionMade) => {
-                Self::NoSelectionMade
-            }
-            (Self::Empty, _)
-            | (_, Self::Empty) => Self::Empty,
-            (
-                Self::Selection(a),
-                Self::Selection(b),
-            ) => {
-                let xor = a.exclusive_or(b);
-                if xor.is_empty() {
-                    Self::Empty
-                } else {
-                    Self::Selection(xor)
-                }
-            }
-        }
     }
 }

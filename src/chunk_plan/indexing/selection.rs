@@ -73,16 +73,7 @@ impl Emptyable for DataArraySelection {
     }
 }
 
-impl ArraySelectionType for DataArraySelection {
-    fn all() -> Self {
-        // For concrete selections, "all" is only meaningful when we know the shape.
-        // This method exists for trait completeness but should not be called directly.
-        // Use `from_subsets` with actual bounds instead.
-        // We return empty here as a fallback - in practice, concrete "all" selections
-        // come from materializing LazyArraySelection::all() with shape info.
-        Self::empty()
-    }
-}
+impl ArraySelectionType for DataArraySelection {}
 
 impl SetOperations for DataArraySelection {
     fn union(

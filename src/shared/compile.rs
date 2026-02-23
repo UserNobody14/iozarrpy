@@ -229,7 +229,8 @@ fn should_go_right(
     }
 }
 
-/// Prepare compilation inputs: compile expr to lazy selection and collect resolution requests.
+/// Prepare compilation inputs: compile expr to ExprPlan, convert to lazy selection,
+/// and collect resolution requests.
 fn prepare_compile_inputs(
     meta: &ZarrMeta,
     expr: &Expr,
@@ -243,11 +244,11 @@ fn prepare_compile_inputs(
 > {
     let (dims, dim_lengths) =
         compute_dims_and_lengths_unified(meta);
-    let vars = meta.all_array_paths();
     let mut ctx =
-        LazyCompileCtx::new(&meta, &dims, &vars);
-    let lazy_selection =
-        compile_expr(expr, &mut ctx)?;
+        LazyCompileCtx::new(&meta, &dims);
+    let expr_plan = compile_expr(expr, &mut ctx)?;
+    let lazy_selection = expr_plan
+        .into_lazy_dataset_selection(meta);
     let (requests, immediate_cache) =
         collect_requests_with_meta(
             &lazy_selection,

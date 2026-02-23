@@ -17,7 +17,7 @@ use crate::{IStr, IntoIStr};
 
 /// Unified metadata for any zarr store (flat or hierarchical).
 /// A flat dataset is simply a tree where `root.children` is empty.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct ZarrMeta {
     /// Root node of the hierarchy
     pub root: ZarrNode,

@@ -496,7 +496,7 @@ impl ValueRangePresent {
 }
 impl ValueRangePresent {
     /// Intersect two value ranges, producing the tighter of the two.
-    /// Returns `None` if the intersection is provably empty (incomparable bounds).
+    /// Returns `None` if the intersection is provably empty.
     pub(crate) fn intersect(
         &self,
         other: &Self,
@@ -509,9 +509,38 @@ impl ValueRangePresent {
             self.1.clone(),
             other.1.clone(),
         );
-        Self::from_option_bounds(
+        let result = Self::from_option_bounds(
             new_start, new_end,
-        )
+        )?;
+        if result.is_certainly_empty() {
+            None
+        } else {
+            Some(result)
+        }
+    }
+
+    /// Returns `true` when the lower bound is provably above the upper bound,
+    /// meaning no value can satisfy the range.
+    fn is_certainly_empty(&self) -> bool {
+        let (lo, lo_incl) = match &self.0 {
+            Bound::Included(s) => (s, true),
+            Bound::Excluded(s) => (s, false),
+            Bound::Unbounded => return false,
+        };
+        let (hi, hi_incl) = match &self.1 {
+            Bound::Included(s) => (s, true),
+            Bound::Excluded(s) => (s, false),
+            Bound::Unbounded => return false,
+        };
+        match lo.partial_cmp(hi) {
+            Some(std::cmp::Ordering::Greater) => {
+                true
+            }
+            Some(std::cmp::Ordering::Equal) => {
+                !(lo_incl && hi_incl)
+            }
+            _ => false,
+        }
     }
 }
 

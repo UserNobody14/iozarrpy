@@ -4,7 +4,6 @@ use super::literals::{
     strip_wrappers,
 };
 use crate::chunk_plan::exprs::compile_ctx::LazyCompileCtx;
-use crate::chunk_plan::indexing::lazy_selection::{LazyDatasetSelection, lazy_dataset_all_for_vars};
 use crate::chunk_plan::indexing::types::ValueRangePresent;
 use crate::chunk_plan::prelude::*;
 use crate::{IStr, IntoIStr};
@@ -272,20 +271,3 @@ pub(super) fn series_values_scalar_lazy(
     Some(out)
 }
 
-/// Returns a Sel for the variables referenced in an expression.
-pub(super) fn all_for_referenced_vars_lazy(
-    expr: &Expr,
-    ctx: &LazyCompileCtx<'_>,
-) -> LazyDatasetSelection {
-    let mut refs = Vec::new();
-    super::compile_node::collect_column_refs(
-        expr, &mut refs,
-    );
-    refs.sort();
-    refs.dedup();
-    if refs.is_empty() {
-        LazyDatasetSelection::NoSelectionMade
-    } else {
-        lazy_dataset_all_for_vars(refs, ctx.meta)
-    }
-}

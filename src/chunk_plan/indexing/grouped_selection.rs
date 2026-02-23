@@ -10,9 +10,7 @@ use std::sync::Arc;
 use crate::IStr;
 use crate::meta::ZarrMeta;
 
-use super::selection::{
-    Emptyable, SetOperations,
-};
+use super::selection::Emptyable;
 use super::types::DimSignature;
 
 /// Trait for array-level selection types (lazy or concrete).
@@ -20,10 +18,8 @@ use super::types::DimSignature;
 /// This trait unifies `LazyArraySelection` and `DataArraySelection` so they
 /// can be used generically in `GroupedSelection` and `DatasetSelectionBase`.
 pub trait ArraySelectionType:
-    SetOperations + Clone
+    Emptyable + Clone
 {
-    /// Create a selection that selects all indices.
-    fn all() -> Self;
 }
 
 /// Grouped selection: maps dimension signatures to shared selections.
@@ -113,18 +109,6 @@ impl<Sel: ArraySelectionType>
         }
     }
 
-    /// Create a grouped selection for variables with all indices selected.
-    pub fn all_for_vars(
-        vars: impl IntoIterator<Item = IStr>,
-        meta: &ZarrMeta,
-    ) -> Self {
-        Self::for_vars_with_selection(
-            vars,
-            meta,
-            Sel::all(),
-        )
-    }
-
     /// Check if there are no variables in this selection.
     pub fn is_empty(&self) -> bool {
         self.var_to_sig.is_empty()
@@ -208,181 +192,3 @@ impl<Sel: ArraySelectionType> Emptyable
     }
 }
 
-impl<Sel: ArraySelectionType> SetOperations
-    for GroupedSelection<Sel>
-{
-    fn union(&self, other: &Self) -> Self {
-        if self.is_empty() {
-            return other.clone();
-        }
-        if other.is_empty() {
-            return self.clone();
-        }
-
-        let mut by_dims = self.by_dims.clone();
-        let mut var_to_sig =
-            self.var_to_sig.clone();
-
-        // Add variables from other
-        for (var, sig) in &other.var_to_sig {
-            var_to_sig
-                .entry(var.clone())
-                .or_insert_with(|| sig.clone());
-        }
-
-        // Union selections by signature
-        for (sig, sel) in &other.by_dims {
-            by_dims
-                .entry(sig.clone())
-                .and_modify(|existing| {
-                    *existing =
-                        existing.union(sel)
-                })
-                .or_insert_with(|| sel.clone());
-        }
-
-        Self {
-            by_dims,
-            var_to_sig,
-        }
-    }
-
-    fn intersect(&self, other: &Self) -> Self {
-        if self.is_empty() || other.is_empty() {
-            return Self::new();
-        }
-
-        let mut by_dims = BTreeMap::new();
-        let mut var_to_sig = BTreeMap::new();
-
-        // Only keep variables that are in both
-        for (var, sig) in &self.var_to_sig {
-            if other.var_to_sig.contains_key(var)
-            {
-                var_to_sig.insert(
-                    var.clone(),
-                    sig.clone(),
-                );
-            }
-        }
-
-        // Intersect selections by signature
-        for (sig, sel_a) in &self.by_dims {
-            if let Some(sel_b) =
-                other.by_dims.get(sig)
-            {
-                let intersected =
-                    sel_a.intersect(sel_b);
-                if !intersected.is_empty() {
-                    by_dims.insert(
-                        sig.clone(),
-                        intersected,
-                    );
-                }
-            }
-        }
-
-        Self {
-            by_dims,
-            var_to_sig,
-        }
-    }
-
-    fn difference(&self, other: &Self) -> Self {
-        if self.is_empty() {
-            return Self::new();
-        }
-        if other.is_empty() {
-            return self.clone();
-        }
-
-        // For difference A \ B:
-        // - Variables only in A: keep with original selection
-        // - Variables in both A and B: compute selection difference
-        //   - If difference is non-empty, keep with differenced selection
-        //   - If difference is empty (e.g., all - all), exclude the variable
-        //
-        // Note: When both selections are "all", all.difference(all) returns empty
-        // (handled in LazyArraySelection::difference), so selector XOR works correctly.
-
-        let mut by_dims: BTreeMap<
-            Arc<DimSignature>,
-            Sel,
-        > = BTreeMap::new();
-        let mut var_to_sig: BTreeMap<
-            IStr,
-            Arc<DimSignature>,
-        > = BTreeMap::new();
-
-        // Track which signatures come from variables-only-in-self
-        let mut original_sigs: std::collections::HashSet<
-            Arc<DimSignature>,
-        > = std::collections::HashSet::new();
-
-        // First pass: handle variables only in self
-        for (var, sig) in &self.var_to_sig {
-            if !other.var_to_sig.contains_key(var)
-            {
-                var_to_sig.insert(
-                    var.clone(),
-                    sig.clone(),
-                );
-                if let Some(sel) =
-                    self.by_dims.get(sig)
-                {
-                    by_dims
-                        .entry(sig.clone())
-                        .or_insert_with(|| {
-                            sel.clone()
-                        });
-                    original_sigs
-                        .insert(sig.clone());
-                }
-            }
-        }
-
-        // Second pass: handle variables in both
-        for (var, sig) in &self.var_to_sig {
-            if other.var_to_sig.contains_key(var)
-            {
-                // Don't overwrite signatures from variables-only-in-self
-                if original_sigs.contains(sig) {
-                    continue;
-                }
-
-                if let (
-                    Some(sel_a),
-                    Some(sel_b),
-                ) = (
-                    self.by_dims.get(sig),
-                    other.by_dims.get(sig),
-                ) {
-                    let diff =
-                        sel_a.difference(sel_b);
-                    if !diff.is_empty() {
-                        var_to_sig.insert(
-                            var.clone(),
-                            sig.clone(),
-                        );
-                        by_dims
-                            .entry(sig.clone())
-                            .or_insert_with(
-                                || diff,
-                            );
-                    }
-                    // If diff is empty, the variable is excluded (correct for selector XOR)
-                }
-            }
-        }
-
-        Self {
-            by_dims,
-            var_to_sig,
-        }
-    }
-
-    fn exclusive_or(&self, other: &Self) -> Self {
-        self.difference(other)
-            .union(&other.difference(self))
-    }
-}

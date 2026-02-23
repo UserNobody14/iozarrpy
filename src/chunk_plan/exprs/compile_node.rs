@@ -57,52 +57,46 @@ pub(crate) fn collect_selector_refs(
 // =============================================================================
 
 /// Extract struct field path from an expression.
-/// Returns (struct_column, field_name) or None if not a struct field access.
+/// Returns (root_column, slash_joined_path) or None if not a struct field access.
 ///
-/// This handles expressions like:
-/// - `pl.col("model_a").struct.field("temperature")`
-/// - Which creates: `Expr::Function { input: [Column("model_a")], function: StructExpr(FieldByName(name))}`
+/// Handles arbitrarily nested struct field access, e.g.:
+/// - `col("a").struct.field("b")` → `("a", "b")`
+/// - `col("a").struct.field("b").struct.field("c")` → `("a", "b/c")`
 pub(crate) fn extract_struct_field_path(
     expr: &Expr,
 ) -> Option<(IStr, IStr)> {
+    use polars::prelude::{
+        FunctionExpr, StructFunction,
+    };
     match expr {
         Expr::Function {
             input,
-            function,
-            ..
-        } => {
-            // Check for struct field access function
-            use polars::prelude::FunctionExpr;
-            if let FunctionExpr::StructExpr(
-                struct_fn,
-            ) = function
-            {
-                use polars::prelude::StructFunction;
-                match struct_fn {
+            function:
+                FunctionExpr::StructExpr(
                     StructFunction::FieldByName(
                         field_name,
-                    ) => {
-                        // Get the struct column from input
-                        if let Some(Expr::Column(
-                            col_name,
-                        )) = input.first()
-                        {
-                            let col_name_str: &str =
-                                col_name.as_str();
-                            let field_name_str: &str =
-                                field_name.as_str();
-                            return Some((
-                                col_name_str.istr(),
-                                field_name_str.istr(),
-                            ));
-                        }
-                    }
-                    _ => {}
-                }
+                    ),
+                ),
+            ..
+        } => {
+            let inner = input.first()?;
+            if let Expr::Column(col_name) = inner {
+                Some((
+                    col_name.as_str().istr(),
+                    field_name.as_str().istr(),
+                ))
+            } else if let Some((root, parent_path)) =
+                extract_struct_field_path(inner)
+            {
+                let joined = format!(
+                    "{parent_path}/{}",
+                    field_name.as_str()
+                );
+                Some((root, joined.istr()))
+            } else {
+                None
             }
-            None
         }
-        // Handle nested expressions - unwrap wrappers
         Expr::Alias(inner, _)
         | Expr::KeepName(inner)
         | Expr::Cast { expr: inner, .. } => {

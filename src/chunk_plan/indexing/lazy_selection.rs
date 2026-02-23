@@ -14,7 +14,6 @@ use super::selection::Emptyable;
 use super::types::ValueRangePresent;
 use crate::IStr;
 use crate::chunk_plan::indexing::grouped_selection::GroupedSelection;
-use crate::chunk_plan::indexing::selection_base::DatasetSelectionBase;
 use std::ops::Range;
 
 /// A per-dimension constraint in value-space (deferred resolution).
@@ -230,37 +229,6 @@ pub(crate) type LazyDatasetSelection =
     super::selection_base::DatasetSelectionBase<
         GroupedSelection<LazyArraySelection>,
     >;
-
-/// Create a lazy dataset selection for the given variables with all indices selected.
-///
-/// Groups variables by their dimension signature from metadata.
-pub(crate) fn lazy_dataset_all_for_vars(
-    vars: impl IntoIterator<Item = IStr>,
-    meta: &crate::meta::ZarrMeta,
-) -> LazyDatasetSelection {
-    LazyDatasetSelection::from_optional(
-        GroupedSelection::all_for_vars(
-            vars, meta,
-        )
-        .to_optional(),
-    )
-}
-
-/// Create a lazy dataset selection for the given variables with the specified selection.
-///
-/// Groups variables by their dimension signature from metadata.
-pub(crate) fn lazy_dataset_for_vars_with_selection(
-    vars: impl IntoIterator<Item = IStr>,
-    meta: &crate::meta::ZarrMeta,
-    sel: LazyArraySelection,
-) -> LazyDatasetSelection {
-    LazyDatasetSelection::from_optional(
-        GroupedSelection::for_vars_with_selection(
-            vars, meta, sel,
-        )
-        .to_optional(),
-    )
-}
 
 // ============================================================================
 // SetOperations implementations for lazy types
@@ -518,14 +486,7 @@ impl SetOperations for LazyArraySelection {
     }
 }
 
-impl ArraySelectionType for LazyArraySelection {
-    fn all() -> Self {
-        LazyArraySelection::all()
-    }
-}
-
-// Note: Emptyable and SetOperations for LazyDatasetSelection are provided by
-// the generic DatasetSelectionBase<Sel> implementation in grouped_selection.rs
+impl ArraySelectionType for LazyArraySelection {}
 
 /// Intersect two lazy hyper-rectangles.
 fn intersect_lazy_rectangles(

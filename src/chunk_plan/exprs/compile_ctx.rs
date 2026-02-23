@@ -9,19 +9,15 @@ use crate::meta::ZarrMeta;
 /// and resolved in a separate batch phase.
 pub(crate) struct LazyCompileCtx<'a> {
     pub(crate) meta: &'a ZarrMeta,
-
     pub(crate) dims: &'a [IStr],
-    pub(crate) vars: &'a [IStr],
 }
 
 impl<'a> LazyCompileCtx<'a> {
-    /// Create a new lazy compilation context.
     pub(crate) fn new(
         meta: &'a ZarrMeta,
         dims: &'a [IStr],
-        vars: &'a [IStr],
     ) -> Self {
-        Self { meta, dims, vars }
+        Self { meta, dims }
     }
 
     /// Get the index of a dimension by name.
