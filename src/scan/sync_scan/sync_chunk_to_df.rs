@@ -15,9 +15,7 @@ use crate::reader::{
     ColumnData, checked_chunk_len,
     compute_strides,
 };
-use crate::shared::{
-    ChunkDataSourceSync, ChunkedDataBackendSync,
-};
+use crate::shared::ChunkedDataBackendSync;
 use polars::prelude::*;
 use snafu::ResultExt;
 
@@ -114,7 +112,9 @@ fn read_coord_range_chunked<
 // =============================================================================
 
 /// Read coordinate chunks for all dimensions.
-fn read_coord_chunks<B: ChunkDataSourceSync>(
+fn read_coord_chunks<
+    B: ChunkedDataBackendSync,
+>(
     backend: &B,
     meta: &ZarrMeta,
     dims: &[IStr],
@@ -179,7 +179,7 @@ fn read_coord_chunks<B: ChunkDataSourceSync>(
 }
 
 /// Read variable chunks for all requested variables.
-fn read_var_chunks<B: ChunkDataSourceSync>(
+fn read_var_chunks<B: ChunkedDataBackendSync>(
     backend: &B,
     meta: &ZarrMeta,
     idx: &[u64],
@@ -274,7 +274,7 @@ fn read_var_chunks<B: ChunkDataSourceSync>(
 /// An optional `chunk_subset` constrains which elements within the
 /// chunk are included, avoiding unnecessary column-building work.
 pub fn chunk_to_df_from_grid_with_backend<
-    B: ChunkDataSourceSync,
+    B: ChunkedDataBackendSync,
 >(
     backend: &B,
     idx: Vec<u64>,
@@ -283,6 +283,7 @@ pub fn chunk_to_df_from_grid_with_backend<
     vars: &[IStr],
     with_columns: Option<&BTreeSet<IStr>>,
     chunk_subset: Option<&ChunkSubset>,
+    meta: &ZarrMeta,
 ) -> BackendResult<DataFrame> {
     let chunk_shape = sig.chunk_shape();
     let dims = sig.dims();
@@ -293,8 +294,6 @@ pub fn chunk_to_df_from_grid_with_backend<
         .zip(chunk_shape.iter())
         .map(|(i, s)| i * s)
         .collect();
-
-    let meta = backend.metadata()?;
 
     let chunk_len =
         checked_chunk_len(chunk_shape)?;
@@ -312,7 +311,7 @@ pub fn chunk_to_df_from_grid_with_backend<
     // Read coordinate chunks
     let coord_slices = read_coord_chunks(
         backend,
-        &meta,
+        meta,
         dims,
         &origin,
         chunk_shape,
@@ -322,7 +321,7 @@ pub fn chunk_to_df_from_grid_with_backend<
     // Read variable chunks
     let var_chunks = read_var_chunks(
         backend,
-        &meta,
+        meta,
         &idx,
         chunk_shape,
         dims,

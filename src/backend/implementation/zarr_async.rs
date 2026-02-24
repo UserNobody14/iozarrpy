@@ -79,6 +79,7 @@ pub(crate) async fn scan_zarr_with_backend_async(
             let array_shape =
                 group.array_shape.clone();
             let vars = vars.clone();
+            let meta = meta.clone();
 
             futs.push(async move {
                 let _permit = sem
@@ -93,6 +94,7 @@ pub(crate) async fn scan_zarr_with_backend_async(
                     &vars,
                     None,
                     subset.as_ref(),
+                    &meta,
                 )
                 .await
             });

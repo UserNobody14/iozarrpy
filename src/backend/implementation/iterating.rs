@@ -262,6 +262,7 @@ impl ZarrIteratorInner {
                 let expanded_with_columns = state
                     .expanded_with_columns
                     .clone();
+                let meta = state.meta.clone();
 
                 let dfs: Vec<DataFrame> = chunks_to_read
                     .par_iter()
@@ -274,6 +275,7 @@ impl ZarrIteratorInner {
                             &vars,
                             expanded_with_columns.as_ref(),
                             subset.as_ref(),
+                            &meta,
                         )
                     })
                     .collect::<Result<Vec<_>, _>>()?;

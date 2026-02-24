@@ -82,6 +82,7 @@ pub fn scan_zarr_with_backend_sync(
                     &vars,
                     expanded_with_columns.as_ref(),
                     subset.as_ref(),
+                    &meta,
                 )?;
             dfs.push(df);
         }

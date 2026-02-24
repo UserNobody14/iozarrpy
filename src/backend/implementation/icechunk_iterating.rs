@@ -240,6 +240,7 @@ impl IcechunkIterator {
                     .clone();
                 let max_concurrency =
                     self.max_concurrency;
+                let meta = state.meta.clone();
 
                 let chunk_dfs: Result<Vec<DataFrame>, PyErr> = self.runtime.block_on(async {
                     let semaphore = Arc::new(Semaphore::new(max_concurrency));
@@ -252,6 +253,7 @@ impl IcechunkIterator {
                         let array_shape = array_shape.clone();
                         let vars = vars.clone();
                         let expanded = expanded_with_columns.clone();
+                        let meta = meta.clone();
 
                         futs.push(async move {
                             let _permit = sem.acquire().await.expect("semaphore closed");
@@ -263,6 +265,7 @@ impl IcechunkIterator {
                                 &vars,
                                 expanded.as_ref(),
                                 subset.as_ref(),
+                                &meta,
                             )
                             .await
                         });

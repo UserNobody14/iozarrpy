@@ -32,9 +32,7 @@ use crate::scan::shared::{
     compute_var_chunk_indices,
     should_include_column,
 };
-use crate::shared::{
-    ChunkDataSourceAsync, ChunkedDataBackendAsync,
-};
+use crate::shared::ChunkedDataBackendAsync;
 
 // =============================================================================
 // Chunked Coordinate Reading (replaces retrieve_1d_subset)
@@ -57,38 +55,44 @@ async fn read_coord_range_chunked<
         return Ok(ColumnData::I64(vec![]));
     }
 
-    // For 1D coordinate arrays, compute which chunks we need
     let first_chunk = start / coord_chunk_shape;
     let last_pos = start + len - 1;
     let last_chunk = last_pos / coord_chunk_shape;
 
-    // Read chunks and extract the needed range
+    // Fetch all needed chunks concurrently (typically 1-3 chunks)
+    let chunk_indices: Vec<[u64; 1]> =
+        (first_chunk..=last_chunk)
+            .map(|i| [i])
+            .collect();
+    let chunk_futs: Vec<_> = chunk_indices
+        .iter()
+        .map(|idx| {
+            backend
+                .read_chunk_async(coord_path, idx)
+        })
+        .collect();
+
+    let chunks =
+        futures::future::try_join_all(chunk_futs)
+            .await?;
+
+    // Assemble the result in order from the fetched chunks
+    let range_end = start + len;
     let mut result_data: Option<ColumnData> =
         None;
 
-    for chunk_idx in first_chunk..=last_chunk {
-        let chunk_data = backend
-            .read_chunk_async(
-                coord_path,
-                &[chunk_idx],
-            )
-            .await?;
-
-        // Calculate what portion of this chunk we need
+    for (i, chunk_data) in
+        chunks.into_iter().enumerate()
+    {
+        let chunk_idx = first_chunk + i as u64;
         let chunk_start_pos =
             chunk_idx * coord_chunk_shape;
         let chunk_end_pos =
             chunk_start_pos + coord_chunk_shape;
 
-        // Our range within global coords
-        let range_start = start;
-        let range_end = start + len;
-
-        // Intersection with this chunk
         let local_start =
-            if range_start > chunk_start_pos {
-                (range_start - chunk_start_pos)
-                    as usize
+            if start > chunk_start_pos {
+                (start - chunk_start_pos) as usize
             } else {
                 0
             };
@@ -124,7 +128,7 @@ async fn read_coord_range_chunked<
 
 /// Read coordinate chunks for all dimensions.
 async fn read_coord_chunks<
-    B: ChunkDataSourceAsync,
+    B: ChunkedDataBackendAsync,
 >(
     backend: &B,
     meta: &ZarrMeta,
@@ -202,7 +206,7 @@ async fn read_coord_chunks<
 
 /// Read variable chunks for all requested variables.
 async fn read_var_chunks<
-    B: ChunkDataSourceAsync,
+    B: ChunkedDataBackendAsync,
 >(
     backend: &B,
     meta: &ZarrMeta,
@@ -315,7 +319,7 @@ async fn read_var_chunks<
 /// An optional `chunk_subset` constrains which elements within the
 /// chunk are included, avoiding unnecessary column-building work.
 pub async fn chunk_to_df_from_grid_with_backend<
-    B: ChunkDataSourceAsync,
+    B: ChunkedDataBackendAsync,
 >(
     backend: &B,
     idx: Vec<u64>,
@@ -324,6 +328,7 @@ pub async fn chunk_to_df_from_grid_with_backend<
     vars: &[IStr],
     with_columns: Option<&BTreeSet<IStr>>,
     chunk_subset: Option<&ChunkSubset>,
+    meta: &ZarrMeta,
 ) -> BackendResult<DataFrame> {
     let chunk_shape = sig.chunk_shape();
     let dims = sig.dims();
@@ -334,8 +339,6 @@ pub async fn chunk_to_df_from_grid_with_backend<
         .zip(chunk_shape.iter())
         .map(|(i, s)| i * s)
         .collect();
-
-    let meta = backend.metadata().await?;
 
     let chunk_len =
         checked_chunk_len(chunk_shape)?;
@@ -354,7 +357,7 @@ pub async fn chunk_to_df_from_grid_with_backend<
     let (coord_slices, var_chunks) = futures::try_join!(
         read_coord_chunks(
             backend,
-            &meta,
+            meta,
             dims,
             &origin,
             chunk_shape,
@@ -362,7 +365,7 @@ pub async fn chunk_to_df_from_grid_with_backend<
         ),
         read_var_chunks(
             backend,
-            &meta,
+            meta,
             &idx,
             chunk_shape,
             dims,

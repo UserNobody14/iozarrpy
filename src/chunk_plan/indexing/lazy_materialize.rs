@@ -575,6 +575,10 @@ fn resolve_rectangle_sync<
 
 // ============================================================================
 // Async resolution
+//
+// Uses per-step binary search (same as sync) but with parallelism where
+// independent work exists: concurrent monotonicity sample reads, concurrent
+// dimension resolution within rectangles, and concurrent Union/Difference arms.
 // ============================================================================
 
 use crate::shared::ChunkedDataBackendAsync;
@@ -621,7 +625,7 @@ async fn check_monotonicity_async<
         ctx.chunk_size,
     );
 
-    // Fetch all sample points concurrently (first, last, and 5 samples)
+    // Fetch first, last, and sample points concurrently
     let first_fut = scalar_at_async(
         backend,
         ap,
@@ -662,10 +666,8 @@ async fn check_monotonicity_async<
     let last = last?;
     let samples: Option<Vec<CoordScalar>> =
         sample_results.into_iter().collect();
-    let samples = samples?;
-
     check_monotonic_from_samples(
-        &first, &last, &samples,
+        &first, &last, &samples?,
     )
 }
 
@@ -859,8 +861,14 @@ async fn resolve_constraint_async<
                 points.len(),
             );
             for point in points.iter() {
-                let vr_max = ValueRangePresent::from_max_exclusive(point.clone());
-                let vr_min = ValueRangePresent::from_min_inclusive(point.clone());
+                let vr_max =
+                    ValueRangePresent::from_max_exclusive(
+                        point.clone(),
+                    );
+                let vr_min =
+                    ValueRangePresent::from_min_inclusive(
+                        point.clone(),
+                    );
                 let left_r =
                     resolve_value_range_async(
                         backend, &ctx, &vr_max,
@@ -940,26 +948,30 @@ fn resolve_array_async<
                 a,
                 b,
             ) => {
-                let a_mat = resolve_array_async(
-                    backend, a, dims, shape, meta,
-                )
-                .await?;
-                let b_mat = resolve_array_async(
-                    backend, b, dims, shape, meta,
-                )
-                .await?;
-                Ok(a_mat.difference(&b_mat))
+                let (a_mat, b_mat) = tokio::join!(
+                    resolve_array_async(
+                        backend, a, dims, shape,
+                        meta,
+                    ),
+                    resolve_array_async(
+                        backend, b, dims, shape,
+                        meta,
+                    )
+                );
+                Ok(a_mat?.difference(&b_mat?))
             }
             LazyArraySelection::Union(a, b) => {
-                let a_mat = resolve_array_async(
-                    backend, a, dims, shape, meta,
-                )
-                .await?;
-                let b_mat = resolve_array_async(
-                    backend, b, dims, shape, meta,
-                )
-                .await?;
-                Ok(a_mat.union(&b_mat))
+                let (a_mat, b_mat) = tokio::join!(
+                    resolve_array_async(
+                        backend, a, dims, shape,
+                        meta,
+                    ),
+                    resolve_array_async(
+                        backend, b, dims, shape,
+                        meta,
+                    )
+                );
+                Ok(a_mat?.union(&b_mat?))
             }
         }
     })
@@ -978,7 +990,7 @@ async fn resolve_rectangle_async<
         return Ok(ArraySubsetList::empty());
     }
 
-    // Collect all constrained dimensions and resolve them concurrently
+    // Resolve all dimensions concurrently
     let constraint_futs: Vec<_> = rect
         .dims()
         .filter_map(|(dim, constraint)| {
