@@ -10,7 +10,7 @@ use crate::meta::dims::{
 };
 use crate::meta::dtype::zarr_dtype_to_polars;
 
-use crate::meta::time_encoding::extract_time_encoding;
+use crate::meta::time_encoding::extract_var_encoding;
 use crate::meta::types::{
     DimensionAnalysis, ZarrArrayMeta, ZarrMeta,
 };
@@ -189,11 +189,11 @@ pub(crate) fn load_zarr_meta_inner<
             .unwrap_or_else(|| {
                 default_dims(shape.len())
             });
-        let time_encoding =
-            extract_time_encoding(&array);
+        let encoding =
+            extract_var_encoding(&array);
         let polars_dtype = zarr_dtype_to_polars(
             array.data_type(),
-            time_encoding.as_ref(),
+            encoding.as_ref(),
         );
 
         // Extract inner chunk shape (for sharded arrays) or regular chunk shape
@@ -234,7 +234,7 @@ pub(crate) fn load_zarr_meta_inner<
                 .into(),
             dims,
             polars_dtype,
-            time_encoding,
+            encoding,
             array_metadata: Some(Arc::new(
                 array_md.clone(),
             )),

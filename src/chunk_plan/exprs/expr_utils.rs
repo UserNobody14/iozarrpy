@@ -53,7 +53,8 @@ pub(super) fn try_expr_to_value_range_lazy(
     let time_encoding = ctx
         .meta
         .array_by_path(col.clone())
-        .and_then(|a| a.time_encoding.as_ref());
+        .and_then(|a| a.encoding.as_ref())
+        .and_then(|e| e.as_time_encoding());
     let Ok(scalar) =
         literal_to_scalar(lit, time_encoding)
     else {

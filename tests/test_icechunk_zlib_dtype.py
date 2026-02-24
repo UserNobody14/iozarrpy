@@ -451,66 +451,55 @@ class TestZlibVsBloscEquivalence:
 
 
 class TestCFPackedDtype:
-    """Test that CF-packed data (int16 + scale_factor/add_offset) is handled.
+    """Test that CF-packed data (int16 + scale_factor/add_offset) is auto-decoded.
 
     When satellite data like EUMETSAT SARAH stores float64 data as packed int16
-    with CF-convention scale_factor/add_offset attributes:
-    - xarray shows float64 (auto-decoded)
-    - zarr metadata records int16 as the data_type
-    - rainbear should read the raw zarr dtype (int16)
-
-    These tests document the expected behavior and will help determine whether
-    the issue is a codec bug or a CF-decoding feature gap.
+    with CF-convention scale_factor/add_offset attributes, rainbear now
+    auto-decodes them to Float64, matching xarray's decode_cf=True behaviour.
     """
 
-    async def test_cf_packed_zarr_dtype_is_int16(
+    async def test_cf_packed_schema_is_float64(
         self,
         cf_packed_icechunk_datasets: dict[str, dict],
     ) -> None:
-        """CF-packed zarr array has int16 dtype in zarr metadata."""
+        """Schema should report Float64 for CF-packed data (auto-decoded)."""
         info = cf_packed_icechunk_datasets["cf_packed_zlib"]
         backend = await rainbear.IcechunkBackend.from_filesystem(info["path"])
         schema = backend.schema()
 
-        # The zarr metadata says int16 (CF packing), so schema should reflect that
         assert "CAL" in schema
-        assert schema["CAL"] == pl.Int16, (
-            f"Expected Int16 for CF-packed CAL (raw zarr dtype), got {schema['CAL']}. "
-            f"The zarr data_type is int16 even though xarray shows float64."
+        assert schema["CAL"] == pl.Float64, (
+            f"Expected Float64 for CF-decoded CAL, got {schema['CAL']}."
         )
 
-    async def test_cf_packed_scan_returns_int16(
+    async def test_cf_packed_scan_returns_float64(
         self,
         cf_packed_icechunk_datasets: dict[str, dict],
     ) -> None:
-        """Scanning CF-packed data returns int16 (the raw zarr dtype)."""
+        """Scanning CF-packed data should auto-decode to Float64."""
         info = cf_packed_icechunk_datasets["cf_packed_zlib"]
         backend = await rainbear.IcechunkBackend.from_filesystem(info["path"])
 
         df = await backend.scan_zarr_async(pl.all().filter(pl.lit(True)))
 
         assert df.height > 0
-        assert df["CAL"].dtype == pl.Int16, (
-            f"Expected Int16 for CF-packed CAL, got {df['CAL'].dtype}. "
-            f"rainbear reads raw zarr data; int16 is correct for CF-packed data."
+        assert df["CAL"].dtype == pl.Float64, (
+            f"Expected Float64 for CF-decoded CAL, got {df['CAL'].dtype}."
         )
 
-    async def test_cf_packed_values_can_be_decoded_to_float64(
+    async def test_cf_packed_values_match_original(
         self,
         cf_packed_icechunk_datasets: dict[str, dict],
     ) -> None:
-        """CF-packed int16 values can be manually decoded to float64 using attributes."""
+        """Auto-decoded CF-packed values should match the original float64 data."""
         info = cf_packed_icechunk_datasets["cf_packed_zlib"]
         backend = await rainbear.IcechunkBackend.from_filesystem(info["path"])
 
         df = await backend.scan_zarr_async(pl.all().filter(pl.lit(True)))
 
         scale = info["scale_factor"]
-        offset = info["add_offset"]
         original = info["original_float64"]
 
-        # Restrict to first complete chunk to avoid partial-chunk boundary issues.
-        # lat has 20 values with chunk size 10, lon has 15 with chunk size 10.
         lat_vals = np.linspace(0, 10, 20)
         lon_vals = np.linspace(0, 20, 15)
         lat_max_chunk0 = lat_vals[9]
@@ -518,12 +507,10 @@ class TestCFPackedDtype:
 
         df_chunk0 = df.filter(
             (pl.col("lat") <= lat_max_chunk0) & (pl.col("lon") <= lon_max_chunk0)
-            & (pl.col("CAL") != -32767)
+            & pl.col("CAL").is_not_nan()
         ).sort(["lat", "lon"])
 
         assert df_chunk0.height > 0, "No rows in first chunk"
-
-        decoded = (df_chunk0["CAL"].cast(pl.Float64) * scale + offset).to_numpy()
 
         ref_rows = []
         for i in range(10):
@@ -531,26 +518,20 @@ class TestCFPackedDtype:
                 ref_rows.append(original[i, j])
 
         np.testing.assert_allclose(
-            decoded,
+            df_chunk0["CAL"].to_numpy(),
             np.array(ref_rows),
             atol=scale,
             err_msg="CF-decoded values don't match original float64 data",
         )
 
-    async def test_cf_packed_xarray_shows_float64_but_zarr_is_int16(
+    async def test_cf_packed_matches_xarray(
         self,
         cf_packed_icechunk_datasets: dict[str, dict],
     ) -> None:
-        """Demonstrate the xarray vs rainbear dtype discrepancy for CF-packed data.
-
-        This test documents the root cause of confusion: xarray auto-decodes
-        CF-packed int16 to float64, while rainbear correctly reads the raw
-        zarr int16 values.
-        """
+        """rainbear and xarray should both produce Float64 for CF-packed data."""
         info = cf_packed_icechunk_datasets["cf_packed_zlib"]
         path = info["path"]
 
-        # xarray reads float64 (auto-decoded)
         from icechunk import Repository, local_filesystem_storage
         storage = local_filesystem_storage(path)
         repo = Repository.open(storage)
@@ -558,19 +539,15 @@ class TestCFPackedDtype:
         ds = xr.open_zarr(session.store, zarr_version=3, consolidated=False)
         xarray_dtype = ds["CAL"].dtype
 
-        # rainbear reads int16 (raw zarr dtype)
         backend = await rainbear.IcechunkBackend.from_filesystem(path)
-        df = await backend.scan_zarr_async(pl.all().filter(pl.lit(True)))
-        rainbear_dtype = df["CAL"].dtype
+        schema = backend.schema()
+        rainbear_dtype = schema["CAL"]
 
-        # This documents the discrepancy:
-        # xarray auto-decodes CF scale_factor/add_offset → float64
-        # rainbear reads raw zarr data → int16
         assert xarray_dtype == np.float64, (
             f"xarray should show float64 (CF-decoded), got {xarray_dtype}"
         )
-        assert rainbear_dtype == pl.Int16, (
-            f"rainbear should show Int16 (raw zarr dtype), got {rainbear_dtype}"
+        assert rainbear_dtype == pl.Float64, (
+            f"rainbear should show Float64 (CF-decoded), got {rainbear_dtype}"
         )
 
     async def test_pure_float64_zlib_produces_float64(

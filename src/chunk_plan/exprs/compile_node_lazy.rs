@@ -513,7 +513,8 @@ fn compile_cmp_to_plan(
     let time_encoding = ctx
         .meta
         .array_by_path(col.clone())
-        .and_then(|a| a.time_encoding.as_ref());
+        .and_then(|a| a.encoding.as_ref())
+        .and_then(|e| e.as_time_encoding());
     let scalar =
         literal_to_scalar(lit, time_encoding)?;
     let vr = ValueRangePresent::from_polars_op(
@@ -565,7 +566,8 @@ fn compile_struct_field_cmp(
     }
 
     let time_encoding = arr_meta_opt
-        .and_then(|a| a.time_encoding.as_ref());
+        .and_then(|a| a.encoding.as_ref())
+        .and_then(|e| e.as_time_encoding());
     let scalar =
         literal_to_scalar(lit, time_encoding)?;
     let vr = ValueRangePresent::from_polars_op(

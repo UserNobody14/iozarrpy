@@ -554,6 +554,56 @@ impl TimeEncoding {
     }
 }
 
+/// Unified encoding for CF-convention variable transformations.
+///
+/// Covers both time encoding (units since epoch) and scale/offset
+/// packing (e.g. satellite data stored as int16 with scale_factor
+/// and add_offset attributes).
+#[derive(Debug, Clone)]
+pub enum VarEncoding {
+    /// CF time encoding: raw integer values represent
+    /// time units since an epoch. Decoded as:
+    /// `raw * unit_ns + epoch_ns`, then cast to
+    /// Datetime or Duration.
+    Time(TimeEncoding),
+    /// CF scale/offset packing: raw packed values
+    /// (typically int16) represent floating-point data.
+    /// Decoded as: `raw * scale_factor + add_offset`.
+    ScaleOffset {
+        scale_factor: f64,
+        add_offset: f64,
+        /// Raw fill value (in packed space); matching
+        /// elements become NaN after decoding.
+        fill_value: Option<f64>,
+    },
+}
+
+impl VarEncoding {
+    /// The Polars dtype that decoded output should use.
+    pub fn decoded_polars_dtype(
+        &self,
+    ) -> PlDataType {
+        match self {
+            VarEncoding::Time(te) => {
+                te.to_polars_dtype()
+            }
+            VarEncoding::ScaleOffset {
+                ..
+            } => PlDataType::Float64,
+        }
+    }
+
+    /// Extract the inner `TimeEncoding` if this is the `Time` variant.
+    pub fn as_time_encoding(
+        &self,
+    ) -> Option<&TimeEncoding> {
+        match self {
+            VarEncoding::Time(te) => Some(te),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct ZarrArrayMeta {
     pub path: IStr,
@@ -564,7 +614,7 @@ pub struct ZarrArrayMeta {
     pub chunk_grid: Arc<ChunkGrid>,
     pub dims: SmallVec<[IStr; 4]>,
     pub polars_dtype: PlDataType,
-    pub time_encoding: Option<TimeEncoding>,
+    pub encoding: Option<VarEncoding>,
     /// Raw zarrs ArrayMetadata from traverse (for unconsolidated stores)
     pub array_metadata:
         Option<Arc<zarrs::array::ArrayMetadata>>,

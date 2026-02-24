@@ -64,7 +64,7 @@ fn repeat_tile_slice<T: Copy>(
     output
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) enum ColumnData {
     Bool(Vec<bool>),
     I8(Vec<i8>),
@@ -664,6 +664,73 @@ impl ColumnData {
             ColumnData::F64(v) => {
                 Series::new(name.into(), v)
             }
+        }
+    }
+
+    /// Decode CF scale/offset packing: `raw * scale + offset`.
+    /// Elements matching `fill_value` (in raw space) become NaN.
+    pub(crate) fn to_f64_scaled(
+        &self,
+        scale: f64,
+        offset: f64,
+        fill_value: Option<f64>,
+    ) -> ColumnData {
+        macro_rules! decode {
+            ($v:expr) => {
+                ColumnData::F64(
+                    $v.iter()
+                        .map(|&x| {
+                            let raw = x as f64;
+                            if fill_value
+                                .is_some_and(
+                                    |fv| {
+                                        raw == fv
+                                    },
+                                )
+                            {
+                                f64::NAN
+                            } else {
+                                raw * scale
+                                    + offset
+                            }
+                        })
+                        .collect(),
+                )
+            };
+        }
+        match self {
+            ColumnData::Bool(v) => {
+                ColumnData::F64(
+                    v.iter()
+                        .map(|&x| {
+                            let raw =
+                                x as u8 as f64;
+                            if fill_value
+                                .is_some_and(
+                                    |fv| {
+                                        raw == fv
+                                    },
+                                )
+                            {
+                                f64::NAN
+                            } else {
+                                raw * scale
+                                    + offset
+                            }
+                        })
+                        .collect(),
+                )
+            }
+            ColumnData::I8(v) => decode!(v),
+            ColumnData::I16(v) => decode!(v),
+            ColumnData::I32(v) => decode!(v),
+            ColumnData::I64(v) => decode!(v),
+            ColumnData::U8(v) => decode!(v),
+            ColumnData::U16(v) => decode!(v),
+            ColumnData::U32(v) => decode!(v),
+            ColumnData::U64(v) => decode!(v),
+            ColumnData::F32(v) => decode!(v),
+            ColumnData::F64(v) => decode!(v),
         }
     }
 

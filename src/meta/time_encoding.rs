@@ -3,22 +3,22 @@ use chrono::{
 };
 use zarrs::array::Array;
 
-use crate::meta::types::TimeEncoding;
+use crate::meta::types::{
+    TimeEncoding, VarEncoding,
+};
 
-pub(crate) fn extract_time_encoding<
+fn extract_time_encoding_inner<
     TStorage: ?Sized,
 >(
     array: &Array<TStorage>,
 ) -> Option<TimeEncoding> {
     let attrs = array.attributes();
 
-    // xarray: attrs["units"] like "hours since 2024-01-01 00:00:00"
     let units = attrs
         .get("units")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
 
-    // xarray: attrs["dtype"] like "timedelta64[ns]"
     let dtype = attrs
         .get("dtype")
         .and_then(|v| v.as_str())
@@ -86,6 +86,53 @@ pub(crate) fn extract_time_encoding<
     }
 
     None
+}
+
+fn extract_scale_offset<TStorage: ?Sized>(
+    array: &Array<TStorage>,
+) -> Option<VarEncoding> {
+    let attrs = array.attributes();
+
+    let scale = attrs
+        .get("scale_factor")
+        .and_then(|v| v.as_f64());
+    let offset = attrs
+        .get("add_offset")
+        .and_then(|v| v.as_f64());
+
+    if scale.is_none() && offset.is_none() {
+        return None;
+    }
+
+    let scale_factor = scale.unwrap_or(1.0);
+    let add_offset = offset.unwrap_or(0.0);
+
+    let fill_value = attrs
+        .get("_FillValue")
+        .and_then(|v| v.as_f64());
+
+    Some(VarEncoding::ScaleOffset {
+        scale_factor,
+        add_offset,
+        fill_value,
+    })
+}
+
+/// Extract unified encoding from zarr array attributes.
+///
+/// Priority: time encoding first (CF temporal conventions),
+/// then scale/offset packing (CF numeric conventions).
+pub(crate) fn extract_var_encoding<
+    TStorage: ?Sized,
+>(
+    array: &Array<TStorage>,
+) -> Option<VarEncoding> {
+    if let Some(te) =
+        extract_time_encoding_inner(array)
+    {
+        return Some(VarEncoding::Time(te));
+    }
+    extract_scale_offset(array)
 }
 
 fn parse_duration_units(

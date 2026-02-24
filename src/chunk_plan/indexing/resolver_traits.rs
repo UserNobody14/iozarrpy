@@ -56,8 +56,11 @@ impl DimResolutionCtx {
                 .copied()
                 .unwrap_or(n),
             time_enc: coord_meta
-                .time_encoding
-                .clone(),
+                .encoding
+                .as_ref()
+                .and_then(|e| {
+                    e.as_time_encoding().cloned()
+                }),
             array_path: coord_meta.path.clone(),
         })
     }

@@ -1,30 +1,19 @@
 use std::borrow::Cow;
 
-use polars::prelude::{
-    DataType as PlDataType, TimeUnit,
-};
+use polars::prelude::DataType as PlDataType;
 use zarrs::{
     array::DataType as ZarrDataType,
     plugin::ZarrVersion,
 };
 
-use crate::meta::types::TimeEncoding;
+use crate::meta::types::VarEncoding;
 
 pub(crate) fn zarr_dtype_to_polars(
     zarr_dtype: &ZarrDataType,
-    time_encoding: Option<&TimeEncoding>,
+    encoding: Option<&VarEncoding>,
 ) -> PlDataType {
-    if let Some(te) = time_encoding {
-        return if te.is_duration {
-            PlDataType::Duration(
-                TimeUnit::Nanoseconds,
-            )
-        } else {
-            PlDataType::Datetime(
-                TimeUnit::Nanoseconds,
-                None,
-            )
-        };
+    if let Some(enc) = encoding {
+        return enc.decoded_polars_dtype();
     }
     let binding = zarr_dtype
         .name(ZarrVersion::V3)

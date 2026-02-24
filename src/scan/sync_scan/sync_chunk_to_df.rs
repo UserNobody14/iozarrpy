@@ -342,11 +342,9 @@ pub fn chunk_to_df_from_grid_with_backend<
             continue;
         }
 
-        let time_encoding = meta
+        let encoding = meta
             .array_by_path(dim_name.clone())
-            .and_then(|m| {
-                m.time_encoding.as_ref()
-            });
+            .and_then(|m| m.encoding.as_ref());
 
         let col = build_coord_column(
             dim_name.as_ref(),
@@ -356,7 +354,7 @@ pub fn chunk_to_df_from_grid_with_backend<
             chunk_shape,
             &origin,
             coord_slices.get(dim_name),
-            time_encoding,
+            encoding,
         );
         cols.push(col);
     }
@@ -370,6 +368,10 @@ pub fn chunk_to_df_from_grid_with_backend<
         var_offsets,
     ) in var_chunks
     {
+        let encoding = meta
+            .array_by_path(name.clone())
+            .and_then(|m| m.encoding.as_ref());
+
         let col = build_var_column(
             &name,
             data,
@@ -380,6 +382,7 @@ pub fn chunk_to_df_from_grid_with_backend<
             chunk_shape,
             &strides,
             &keep,
+            encoding,
         );
         cols.push(col);
     }
