@@ -156,6 +156,43 @@ def test_interpolate_nd_group_dim_in_source_coords_is_unconstrained_but_keeps_xy
     assert idxs == {(0, 0, 0), (1, 0, 0)}
 
 
+def test_interpolate_nd_filtered_source_values_constrains_time(tmp_path: Path) -> None:
+    """When source_values uses col("X").filter(time == t), planner constrains time dimension."""
+    import numpy as np
+    import xarray as xr
+
+    nt, ny, nx = 3, 16, 20
+    data = np.arange(nt * ny * nx, dtype=np.float64).reshape(nt, ny, nx)
+    ds = xr.Dataset(
+        data_vars={"value": (["time", "y", "x"], data)},
+        coords={"time": [0, 1, 2], "y": list(range(ny)), "x": list(range(nx))},
+    )
+
+    zarr_path = tmp_path / "interp_filtered.zarr"
+    ds.to_zarr(
+        zarr_path,
+        zarr_format=3,
+        encoding={
+            "value": {
+                "chunks": (1, 10, 10),
+                "compressors": [BloscCodec(cname="zstd", clevel=5, shuffle=BloscShuffle.shuffle)],
+            }
+        },
+    )
+
+    target = pl.DataFrame({"y": [0], "x": [5]})
+    # Filter constrains time to 1 => only time chunk 1
+    expr = interpolate_nd(
+        ["y", "x"],
+        [pl.col("value").filter(pl.col("time") == 1)],
+        target,
+    )
+    chunks = ZarrBackend.from_url(str(zarr_path)).selected_chunks_debug(expr)
+    idxs = _chunk_indices(chunks, variable="value")
+
+    assert idxs == {(1, 0, 0)}
+
+
 def test_interpolate_nd_out_of_bounds_targets_clamp_to_boundary_chunks(tmp_path: Path) -> None:
     """README says out-of-bounds targets clamp; planner must include boundary chunks."""
     import xarray as xr

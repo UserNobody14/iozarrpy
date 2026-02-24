@@ -80,6 +80,35 @@ pub(super) fn expr_to_col_name(
     }
 }
 
+/// Extract variable name and optional filter predicate from a source_values element.
+/// Handles: `col("x")`, `col("x").filter(predicate)`, and wrappers like alias.
+/// Returns `(var_name, filter_predicate)` where filter_predicate is `Some(by)` when
+/// the expression is a Filter.
+pub(super) fn extract_var_from_source_value_expr(
+    e: &Expr,
+) -> Option<(IStr, Option<&Expr>)> {
+    let e = strip_wrappers(e);
+    match e {
+        Expr::Column(name) => {
+            Some((name.istr(), None))
+        }
+        Expr::Filter { input, by } => {
+            let inner =
+                strip_wrappers(input.as_ref());
+            if let Expr::Column(name) = inner {
+                Some((
+                    name.istr(),
+                    Some(by.as_ref()),
+                ))
+            } else {
+                extract_var_from_source_value_expr(input)
+                    .map(|(name, _)| (name, Some(by.as_ref())))
+            }
+        }
+        _ => None,
+    }
+}
+
 /// Extract column names from an expression (for lazy interpolation).
 pub(super) fn extract_column_names_lazy(
     expr: &Expr,
@@ -271,4 +300,3 @@ pub(super) fn series_values_scalar_lazy(
 
     Some(out)
 }
-

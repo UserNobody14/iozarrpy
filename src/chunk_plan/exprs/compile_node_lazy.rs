@@ -25,12 +25,16 @@ use crate::chunk_plan::indexing::lazy_selection::{
     LazyArraySelection, LazyDimConstraint,
     LazyHyperRectangle,
 };
+use crate::chunk_plan::indexing::selection::SetOperations;
 use crate::chunk_plan::indexing::types::ValueRangePresent;
 use crate::chunk_plan::prelude::*;
 use crate::{IStr, IntoIStr};
 use crate::errors::BackendError;
 
-use super::expr_utils::expr_to_col_name;
+use super::expr_utils::{
+    expr_to_col_name,
+    extract_var_from_source_value_expr,
+};
 
 type LazyResult = Result<ExprPlan, BackendError>;
 
@@ -1092,35 +1096,89 @@ fn interpolate_selection_nd_lazy(
     let sel =
         LazyArraySelection::from_rectangle(rect);
 
-    let retrieve_vars = match source_values {
-        Expr::Function { input, function } => match function {
-            FunctionExpr::AsStruct => input
-                .iter()
-                .map(|n| -> Result<IStr, BackendError> {
-                    let Expr::Column(name) = strip_wrappers(n) else {
+    let (retrieve_vars, filter_plan) =
+        match source_values {
+            Expr::Function {
+                input,
+                function,
+            } => match function {
+                FunctionExpr::AsStruct => {
+                    let mut vars =
+                        Vec::with_capacity(
+                            input.len(),
+                        );
+                    let mut filter_plan_acc: Option<ExprPlan> = None;
+                    for n in input {
+                        let Some((name, filter_pred)) =
+                        extract_var_from_source_value_expr(n)
+                    else {
                         return Err(BackendError::compile_polars(format!(
-                            "source_values must be an Expr::Function with FunctionExpr::AsStruct containing variable names: {:?}",
+                            "source_values must be an Expr::Function with FunctionExpr::AsStruct \
+                             containing column refs or col(...).filter(predicate): {:?}",
                             source_values
                         )));
                     };
-                    Ok(name.istr())
-                })
-                .collect::<Result<Vec<IStr>, BackendError>>()?,
-            _ => {
-                return Err(BackendError::compile_polars(format!(
-                    "source_values must be an Expr::Function with FunctionExpr::AsStruct containing variable names: {:?}",
+                        vars.push(name);
+                        if let Some(pred) =
+                            filter_pred
+                        {
+                            let fp =
+                                compile_expr(
+                                    pred, ctx,
+                                )?;
+                            if !fp.is_empty() {
+                                filter_plan_acc = Some(match filter_plan_acc.take() {
+                                None => fp,
+                                Some(acc) => acc.intersect(&fp),
+                            });
+                            }
+                        }
+                    }
+                    (vars, filter_plan_acc)
+                }
+                _ => {
+                    return Err(BackendError::compile_polars(format!(
+                    "source_values must be an Expr::Function with FunctionExpr::AsStruct \
+                     containing column refs or col(...).filter(predicate): {:?}",
                     source_values
                 )));
+                }
+            },
+            Expr::Field(names) => (
+                names
+                    .iter()
+                    .map(|n| n.istr())
+                    .collect::<Vec<_>>(),
+                None,
+            ),
+            _ => {
+                return Err(
+                    BackendError::compile_polars(
+                        format!(
+                            "source_values must be an Expr::Field or AsStruct containing variable names: {:?}",
+                            source_values
+                        ),
+                    ),
+                );
             }
-        },
-        Expr::Field(names) => names.iter().map(|n| n.istr()).collect::<Vec<_>>(),
-        _ => {
-            return Err(BackendError::compile_polars(format!(
-                "source_values must be an Expr::Field containing variable names: {:?}",
-                source_values
-            )));
+        };
+
+    let sel = match filter_plan {
+        Some(ExprPlan::Active {
+            constraints: filter_sel,
+            ..
+        }) => sel.intersect(filter_sel.as_ref()),
+        Some(ExprPlan::Empty) => {
+            return Ok(ExprPlan::Empty);
+        }
+        Some(ExprPlan::NoConstraint) | None => {
+            sel
         }
     };
+
+    if sel.is_empty() {
+        return Ok(ExprPlan::Empty);
+    }
 
     Ok(ExprPlan::constrained(
         VarSet::from_vec(retrieve_vars),
