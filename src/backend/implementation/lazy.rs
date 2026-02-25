@@ -4,8 +4,9 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use polars::prelude::*;
-use pyo3::PyErr;
 
+use crate::errors::BackendError;
+use crate::errors::MaxChunksToReadExceededSnafu;
 use crate::scan::sync_scan::chunk_to_df_from_grid_with_backend;
 use crate::shared::ChunkedExpressionCompilerSync;
 use crate::shared::FullyCachedZarrBackendSync;
@@ -16,6 +17,7 @@ use crate::shared::{
     restructure_to_structs,
 };
 use crate::{IStr, IntoIStr};
+use snafu::ensure;
 
 /// Internal: scan using the backend.
 ///
@@ -25,13 +27,12 @@ pub fn scan_zarr_with_backend_sync(
     expr: polars::prelude::Expr,
     with_columns: Option<BTreeSet<IStr>>,
     max_chunks_to_read: Option<usize>,
-) -> Result<polars::prelude::DataFrame, PyErr> {
-    use std::sync::Arc as StdArc;
-
+) -> Result<
+    polars::prelude::DataFrame,
+    BackendError,
+> {
     // Get metadata from backend
     let meta = backend.metadata()?;
-    let planning_meta =
-        StdArc::new(meta.planning_meta());
 
     // Expand struct column names to flat paths for chunk reading
     // e.g., "model_a" -> ["model_a/temperature", "model_a/pressure"]
@@ -48,23 +49,15 @@ pub fn scan_zarr_with_backend_sync(
 
     // Check max_chunks_to_read limit before doing any I/O
     if let Some(max_chunks) = max_chunks_to_read {
-        let total_chunks = grouped_plan
-            .total_unique_chunks()
-            .map_err(|e| {
-                PyErr::new::<
-                    pyo3::exceptions::PyValueError,
-                    _,
-                >(e)
-            })?;
-        if total_chunks > max_chunks {
-            return Err(PyErr::new::<
-                pyo3::exceptions::PyRuntimeError,
-                _,
-            >(format!(
-                "max_chunks_to_read exceeded: {} chunks needed, limit is {}",
-                total_chunks, max_chunks
-            )));
-        }
+        let total_chunks =
+            grouped_plan.total_unique_chunks()?;
+        ensure!(
+            total_chunks <= max_chunks,
+            MaxChunksToReadExceededSnafu {
+                total_chunks,
+                max_chunks,
+            }
+        );
     }
 
     // Read chunks using consolidated (deduplicated) iteration
@@ -72,17 +65,8 @@ pub fn scan_zarr_with_backend_sync(
     for group in
         grouped_plan.iter_consolidated_chunks()
     {
-        let group = group.map_err(|e| {
-            PyErr::new::<
-                pyo3::exceptions::PyValueError,
-                _,
-            >(e)
-        })?;
-        let vars: Vec<IStr> = group
-            .vars
-            .iter()
-            .map(|v| v.istr())
-            .collect();
+        let group = group?;
+        let vars: Vec<IStr> = group.vars;
 
         for (idx, subset) in group
             .chunk_indices
@@ -98,6 +82,7 @@ pub fn scan_zarr_with_backend_sync(
                     &vars,
                     expanded_with_columns.as_ref(),
                     subset.as_ref(),
+                    &meta,
                 )?;
             dfs.push(df);
         }
@@ -112,7 +97,7 @@ pub fn scan_zarr_with_backend_sync(
             .cloned()
             .collect();
         DataFrame::empty_with_schema(
-            &planning_meta.tidy_schema(Some(
+            &meta.tidy_schema(Some(
                 keys.as_slice(),
             )),
         )
@@ -124,7 +109,9 @@ pub fn scan_zarr_with_backend_sync(
 
     // For hierarchical data, convert flat path columns to struct columns
     if meta.is_hierarchical() {
-        restructure_to_structs(&result, &meta)
+        Ok(restructure_to_structs(
+            &result, &meta,
+        )?)
     } else {
         Ok(result)
     }

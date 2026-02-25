@@ -5,13 +5,12 @@
 //! resolution.
 
 use std::collections::BTreeMap;
-use std::sync::Arc;
 
 use smallvec::SmallVec;
 
 use super::grouped_selection::ArraySelectionType;
 use super::selection::Emptyable;
-use super::types::{HasIntersect, ValueRange};
+use super::types::ValueRangePresent;
 use crate::IStr;
 use std::ops::Range;
 
@@ -23,17 +22,10 @@ pub(crate) enum LazyDimConstraint {
     /// Proven empty (short-circuit optimization).
     Empty,
     /// Needs resolution from value-space to index-space.
-    Unresolved(ValueRange),
-    /// Needs resolution with interpolation expansion (expand by 1 on each side).
+    Unresolved(ValueRangePresent),
+    /// Needs resolution with interpolation expansion (expand to chunk boundaries, or across 2 chunks if at boundary).
     /// Used for interpolation operations that need bracketing indices.
-    UnresolvedInterpolation(Arc<ValueRange>),
-    /// Interpolation with multiple target points - each needs bracketing indices.
-    /// The resolution will union the bracketing ranges for each point with clamping.
-    UnresolvedInterpolationPoints(
-        Arc<Vec<super::types::CoordScalar>>,
-    ),
-    /// Already resolved (optimization for pre-computed constraints).
-    Resolved(Range<u64>),
+    InterpolationRange(ValueRangePresent),
 }
 
 impl LazyDimConstraint {
@@ -41,55 +33,50 @@ impl LazyDimConstraint {
     #[inline]
     pub(crate) fn is_empty(&self) -> bool {
         matches!(self, LazyDimConstraint::Empty)
-            || matches!(self, LazyDimConstraint::Resolved(r) if r.is_empty())
-            || matches!(self, LazyDimConstraint::Unresolved(vr) if vr.is_none())
-            || matches!(self, LazyDimConstraint::UnresolvedInterpolation(vr) if vr.as_ref().as_ref().is_none())
-            || matches!(self, LazyDimConstraint::UnresolvedInterpolationPoints(pts) if pts.is_empty())
     }
 }
 
 /// Conjunction (AND) of per-dimension lazy constraints.
 ///
+/// `None` inner map = empty (selects nothing).
+/// `Some(map)` with empty map = all (no constraints).
 /// Missing dimension keys mean "all indices along that dimension".
-#[derive(
-    Debug, Clone, Default, PartialEq, Eq,
-)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct LazyHyperRectangle {
-    dims: BTreeMap<IStr, LazyDimConstraint>,
-    empty: bool,
+    /// `None` => empty rectangle; `Some(map)` => active constraints.
+    dims:
+        Option<BTreeMap<IStr, LazyDimConstraint>>,
+}
+
+impl Default for LazyHyperRectangle {
+    fn default() -> Self {
+        Self {
+            dims: Some(BTreeMap::new()),
+        }
+    }
 }
 
 impl LazyHyperRectangle {
     /// Create an empty rectangle (selects nothing).
     pub(crate) fn empty() -> Self {
-        Self {
-            dims: BTreeMap::new(),
-            empty: true,
-        }
+        Self { dims: None }
     }
 
     /// Create a rectangle that selects all indices.
     pub(crate) fn all() -> Self {
-        Self {
-            dims: BTreeMap::new(),
-            empty: false,
-        }
+        Self::default()
     }
 
     /// Returns true if this rectangle is proven empty.
     #[inline]
     pub(crate) fn is_empty(&self) -> bool {
-        self.empty
-            || self
-                .dims
-                .values()
-                .any(|c| c.is_empty())
+        self.dims.is_none()
     }
 
     /// Returns true if this rectangle represents "select all" (no constraints).
     #[inline]
     pub(crate) fn is_all(&self) -> bool {
-        !self.empty && self.dims.is_empty()
+        matches!(&self.dims, Some(m) if m.is_empty())
     }
 
     /// Iterate over all dimension constraints.
@@ -98,7 +85,7 @@ impl LazyHyperRectangle {
     ) -> impl Iterator<
         Item = (&IStr, &LazyDimConstraint),
     > {
-        self.dims.iter()
+        self.dims.iter().flat_map(|m| m.iter())
     }
 
     /// Add a constraint to a dimension.
@@ -108,17 +95,15 @@ impl LazyHyperRectangle {
         constraint: LazyDimConstraint,
     ) -> Self {
         if constraint.is_empty() {
-            self.empty = true;
-            self.dims.clear();
-            return self;
+            return Self::empty();
         }
-        if !self.empty
-            && !matches!(
+        if let Some(ref mut m) = self.dims {
+            if !matches!(
                 constraint,
                 LazyDimConstraint::All
-            )
-        {
-            self.dims.insert(dim, constraint);
+            ) {
+                m.insert(dim, constraint);
+            }
         }
         self
     }
@@ -130,12 +115,15 @@ impl LazyHyperRectangle {
             LazyDimConstraint,
         >,
     ) -> Self {
-        let empty = constraints
+        if constraints
             .values()
-            .any(|c| c.is_empty());
-        Self {
-            dims: constraints,
-            empty,
+            .any(|c| c.is_empty())
+        {
+            Self::empty()
+        } else {
+            Self {
+                dims: Some(constraints),
+            }
         }
     }
 }
@@ -223,37 +211,6 @@ impl LazyArraySelection {
     }
 }
 
-/// Dataset-level lazy selection: type alias for the generic `DatasetSelectionBase`.
-///
-/// This groups variables by their dimension signature to avoid duplication.
-pub(crate) type LazyDatasetSelection =
-    super::grouped_selection::DatasetSelectionBase<
-        LazyArraySelection,
-    >;
-
-/// Create a lazy dataset selection for the given variables with all indices selected.
-///
-/// Groups variables by their dimension signature from metadata.
-pub(crate) fn lazy_dataset_all_for_vars(
-    vars: impl IntoIterator<Item = IStr>,
-    meta: &crate::meta::ZarrDatasetMeta,
-) -> LazyDatasetSelection {
-    LazyDatasetSelection::all_for_vars(vars, meta)
-}
-
-/// Create a lazy dataset selection for the given variables with the specified selection.
-///
-/// Groups variables by their dimension signature from metadata.
-pub(crate) fn lazy_dataset_for_vars_with_selection(
-    vars: impl IntoIterator<Item = IStr>,
-    meta: &crate::meta::ZarrDatasetMeta,
-    sel: LazyArraySelection,
-) -> LazyDatasetSelection {
-    LazyDatasetSelection::for_vars_with_selection(
-        vars, meta, sel,
-    )
-}
-
 // ============================================================================
 // SetOperations implementations for lazy types
 // ============================================================================
@@ -307,12 +264,6 @@ impl SetOperations for LazyDimConstraint {
             | (_, LazyDimConstraint::All) => {
                 LazyDimConstraint::All
             }
-            (
-                LazyDimConstraint::Resolved(a),
-                LazyDimConstraint::Resolved(b),
-            ) => LazyDimConstraint::Resolved(
-                a.union(b),
-            ),
             // Can't merge unresolved constraints without resolution - return All conservatively
             _ => LazyDimConstraint::All,
         }
@@ -324,64 +275,24 @@ impl SetOperations for LazyDimConstraint {
                 LazyDimConstraint::Empty
             }
             (LazyDimConstraint::All, x) | (x, LazyDimConstraint::All) => x.clone(),
-            (LazyDimConstraint::Resolved(a), LazyDimConstraint::Resolved(b)) => {
-                let result = a.intersect(b);
-                if result.is_empty() {
-                    LazyDimConstraint::Empty
-                } else {
-                    LazyDimConstraint::Resolved(result)
-                }
-            }
+
             (LazyDimConstraint::Unresolved(a), LazyDimConstraint::Unresolved(b)) => {
-                let vr = a.intersect(Some(b.clone())).flatten();
-                if vr.is_none() {
-                    LazyDimConstraint::Empty
-                } else {
-                    LazyDimConstraint::Unresolved(vr)
+                match a.intersect(b) {
+                    Some(vr) => LazyDimConstraint::Unresolved(vr),
+                    None => LazyDimConstraint::Empty,
                 }
             }
-            // UnresolvedInterpolation combined with Unresolved: intersect their value ranges
-            (
-                LazyDimConstraint::UnresolvedInterpolation(a),
-                LazyDimConstraint::UnresolvedInterpolation(b),
-            ) => {
-                let vr0 = a.intersect(Some(b.clone()));
-                if let Some(vr1) = vr0 {
-                    if let Some(vr) = vr1.as_ref().as_ref().map(|o| o.clone()) {
-                        LazyDimConstraint::UnresolvedInterpolation(Arc::new(Some(vr)))
-                    } else {
-                        LazyDimConstraint::Empty
-                    }
-                } else {
-                    LazyDimConstraint::Empty
+            
+
+
+
+            (LazyDimConstraint::InterpolationRange(a), LazyDimConstraint::InterpolationRange(b))
+            | (LazyDimConstraint::InterpolationRange(a), LazyDimConstraint::Unresolved(b))
+            | (LazyDimConstraint::Unresolved(b), LazyDimConstraint::InterpolationRange(a)) => {
+                match a.intersect(b) {
+                    Some(vr) => LazyDimConstraint::InterpolationRange(vr),
+                    None => LazyDimConstraint::Empty,
                 }
-            }
-            (LazyDimConstraint::UnresolvedInterpolation(a), LazyDimConstraint::Unresolved(b))
-            | (LazyDimConstraint::Unresolved(b), LazyDimConstraint::UnresolvedInterpolation(a)) => {
-                let vr = a.intersect(Some(b.clone().into()));
-                if let Some(vr) = vr {
-                    if let Some(vr) = vr.as_ref().as_ref().map(|o| o.clone()) {
-                        LazyDimConstraint::UnresolvedInterpolation(Arc::new(Some(vr)))
-                    } else {
-                        LazyDimConstraint::Empty
-                    }
-                } else {
-                    LazyDimConstraint::Empty
-                }
-            }
-            // Mixed resolved/unresolved - can't intersect without resolution
-            // Keep the unresolved one (conservative: may over-select)
-            (LazyDimConstraint::Unresolved(vr), _) | (_, LazyDimConstraint::Unresolved(vr)) => {
-                LazyDimConstraint::Unresolved(vr.clone())
-            }
-            (LazyDimConstraint::UnresolvedInterpolation(vr), _)
-            | (_, LazyDimConstraint::UnresolvedInterpolation(vr)) => {
-                LazyDimConstraint::UnresolvedInterpolation(vr.clone())
-            }
-            // InterpolationPoints can't be easily intersected - keep the first one
-            (LazyDimConstraint::UnresolvedInterpolationPoints(pts), _)
-            | (_, LazyDimConstraint::UnresolvedInterpolationPoints(pts)) => {
-                LazyDimConstraint::UnresolvedInterpolationPoints(pts.clone())
             }
         }
     }
@@ -400,19 +311,6 @@ impl SetOperations for LazyDimConstraint {
             (LazyDimConstraint::All, _) => {
                 LazyDimConstraint::All
             } // Can't compute A \ B without knowing B
-            (
-                LazyDimConstraint::Resolved(a),
-                LazyDimConstraint::Resolved(b),
-            ) => {
-                let result = a.difference(b);
-                if result.is_empty() {
-                    LazyDimConstraint::Empty
-                } else {
-                    LazyDimConstraint::Resolved(
-                        result,
-                    )
-                }
-            }
             // Can't compute difference with unresolved - return self conservatively
             _ => self.clone(),
         }
@@ -535,60 +433,49 @@ impl SetOperations for LazyArraySelection {
     }
 }
 
-impl ArraySelectionType for LazyArraySelection {
-    fn all() -> Self {
-        LazyArraySelection::all()
-    }
-}
-
-// Note: Emptyable and SetOperations for LazyDatasetSelection are provided by
-// the generic DatasetSelectionBase<Sel> implementation in grouped_selection.rs
+impl ArraySelectionType for LazyArraySelection {}
 
 /// Intersect two lazy hyper-rectangles.
 fn intersect_lazy_rectangles(
     a: &LazyHyperRectangle,
     b: &LazyHyperRectangle,
 ) -> LazyHyperRectangle {
-    if a.is_empty() || b.is_empty() {
+    let (Some(a_dims), Some(b_dims)) =
+        (&a.dims, &b.dims)
+    else {
         return LazyHyperRectangle::empty();
-    }
+    };
 
-    let mut result = LazyHyperRectangle::all();
-
-    // Collect all dimension names from both rectangles
-    let all_dims: std::collections::BTreeSet<
+    let all_dim_keys: std::collections::BTreeSet<
         &IStr,
-    > = a
-        .dims
+    > = a_dims
         .keys()
-        .chain(b.dims.keys())
+        .chain(b_dims.keys())
         .collect();
 
-    for dim in all_dims {
-        let constraint_a =
-            a.dims.get(dim).cloned().unwrap_or(
-                LazyDimConstraint::All,
-            );
-        let constraint_b =
-            b.dims.get(dim).cloned().unwrap_or(
-                LazyDimConstraint::All,
-            );
-        let intersected =
-            constraint_a.intersect(&constraint_b);
+    let mut merged = BTreeMap::new();
+    for dim in all_dim_keys {
+        let ca = a_dims
+            .get(dim)
+            .cloned()
+            .unwrap_or(LazyDimConstraint::All);
+        let cb = b_dims
+            .get(dim)
+            .cloned()
+            .unwrap_or(LazyDimConstraint::All);
+        let intersected = ca.intersect(&cb);
 
         if intersected.is_empty() {
             return LazyHyperRectangle::empty();
         }
-
         if !matches!(
             intersected,
             LazyDimConstraint::All
         ) {
-            result
-                .dims
+            merged
                 .insert(dim.clone(), intersected);
         }
     }
 
-    result
+    LazyHyperRectangle { dims: Some(merged) }
 }

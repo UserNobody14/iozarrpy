@@ -10,28 +10,21 @@ pub(crate) use futures::stream::{
     FuturesUnordered, StreamExt,
 };
 pub(crate) use polars::prelude::*;
-pub(crate) use pyo3::prelude::*;
-pub(crate) use pyo3_polars::error::PyPolarsErr;
+use snafu::ResultExt;
 
-pub(crate) use crate::meta::{
-    ZarrDatasetMeta, ZarrMeta,
+use crate::errors::{
+    BackendError, BackendResult, PolarsSnafu,
 };
+pub(crate) use crate::meta::ZarrMeta;
 pub(crate) use crate::reader::{
     ColumnData, checked_chunk_len,
     compute_strides,
 };
 
-pub(super) fn to_py_err<E: std::fmt::Display>(
-    e: E,
-) -> PyErr {
-    PyErr::new::<pyo3::exceptions::PyValueError, _>(
-        e.to_string(),
-    )
-}
-
 use crate::IStr;
-use crate::chunk_plan::{ChunkGridSignature, ChunkSubset};
-use crate::errors::BackendError;
+use crate::chunk_plan::{
+    ChunkGridSignature, ChunkSubset,
+};
 use crate::scan::shared::{
     build_coord_column, build_var_column,
     compute_actual_chunk_shape,
@@ -39,9 +32,7 @@ use crate::scan::shared::{
     compute_var_chunk_indices,
     should_include_column,
 };
-use crate::shared::{
-    ChunkDataSourceAsync, ChunkedDataBackendAsync,
-};
+use crate::shared::ChunkedDataBackendAsync;
 
 // =============================================================================
 // Chunked Coordinate Reading (replaces retrieve_1d_subset)
@@ -64,38 +55,44 @@ async fn read_coord_range_chunked<
         return Ok(ColumnData::I64(vec![]));
     }
 
-    // For 1D coordinate arrays, compute which chunks we need
     let first_chunk = start / coord_chunk_shape;
     let last_pos = start + len - 1;
     let last_chunk = last_pos / coord_chunk_shape;
 
-    // Read chunks and extract the needed range
+    // Fetch all needed chunks concurrently (typically 1-3 chunks)
+    let chunk_indices: Vec<[u64; 1]> =
+        (first_chunk..=last_chunk)
+            .map(|i| [i])
+            .collect();
+    let chunk_futs: Vec<_> = chunk_indices
+        .iter()
+        .map(|idx| {
+            backend
+                .read_chunk_async(coord_path, idx)
+        })
+        .collect();
+
+    let chunks =
+        futures::future::try_join_all(chunk_futs)
+            .await?;
+
+    // Assemble the result in order from the fetched chunks
+    let range_end = start + len;
     let mut result_data: Option<ColumnData> =
         None;
 
-    for chunk_idx in first_chunk..=last_chunk {
-        let chunk_data = backend
-            .read_chunk_async(
-                coord_path,
-                &[chunk_idx],
-            )
-            .await?;
-
-        // Calculate what portion of this chunk we need
+    for (i, chunk_data) in
+        chunks.into_iter().enumerate()
+    {
+        let chunk_idx = first_chunk + i as u64;
         let chunk_start_pos =
             chunk_idx * coord_chunk_shape;
         let chunk_end_pos =
             chunk_start_pos + coord_chunk_shape;
 
-        // Our range within global coords
-        let range_start = start;
-        let range_end = start + len;
-
-        // Intersection with this chunk
         let local_start =
-            if range_start > chunk_start_pos {
-                (range_start - chunk_start_pos)
-                    as usize
+            if start > chunk_start_pos {
+                (start - chunk_start_pos) as usize
             } else {
                 0
             };
@@ -131,7 +128,7 @@ async fn read_coord_range_chunked<
 
 /// Read coordinate chunks for all dimensions.
 async fn read_coord_chunks<
-    B: ChunkDataSourceAsync,
+    B: ChunkedDataBackendAsync,
 >(
     backend: &B,
     meta: &ZarrMeta,
@@ -139,9 +136,8 @@ async fn read_coord_chunks<
     origin: &[u64],
     chunk_shape: &[u64],
     with_columns: Option<&BTreeSet<IStr>>,
-) -> Result<
+) -> BackendResult<
     std::collections::BTreeMap<IStr, ColumnData>,
-    PyErr,
 > {
     let mut coord_reads = FuturesUnordered::new();
 
@@ -155,7 +151,7 @@ async fn read_coord_chunks<
 
         // Check if this dimension has a coordinate array
         let Some(coord_meta) =
-            meta.path_to_array.get(dim_name)
+            meta.array_by_path(dim_name.clone())
         else {
             continue;
         };
@@ -194,17 +190,13 @@ async fn read_coord_chunks<
     while let Some((name, expected_len, res)) =
         coord_reads.next().await
     {
-        let coord = res.map_err(to_py_err)?;
+        let coord = res?;
         if coord.len() != expected_len {
-            return Err(PyErr::new::<
-                pyo3::exceptions::PyValueError,
-                _,
-            >(format!(
-                "coord '{}' length mismatch: expected {}, got {}",
-                name,
-                expected_len,
-                coord.len()
-            )));
+            return Err(BackendError::CoordLengthMismatch {
+                name: name.clone(),
+                expected_len: expected_len as u64,
+                coord_len: coord.len() as u64,
+            });
         }
         coord_slices.insert(name, coord);
     }
@@ -214,24 +206,23 @@ async fn read_coord_chunks<
 
 /// Read variable chunks for all requested variables.
 async fn read_var_chunks<
-    B: ChunkDataSourceAsync,
+    B: ChunkedDataBackendAsync,
 >(
     backend: &B,
-    meta: &ZarrDatasetMeta,
+    meta: &ZarrMeta,
     idx: &[u64],
     chunk_shape: &[u64],
     dims: &[IStr],
     vars: &[IStr],
     with_columns: Option<&BTreeSet<IStr>>,
-) -> Result<
+) -> BackendResult<
     Vec<(
         IStr,
-        ColumnData,
+        Arc<ColumnData>,
         Vec<IStr>,
         Vec<u64>,
         Vec<u64>,
     )>,
-    PyErr,
 > {
     let mut var_reads = FuturesUnordered::new();
 
@@ -250,19 +241,17 @@ async fn read_var_chunks<
             continue;
         }
 
-        let var_meta =
-            meta.arrays.get(name).ok_or_else(|| {
-                PyErr::new::<
-                    pyo3::exceptions::PyValueError,
-                    _,
-                >(format!(
-                    "unknown variable: {}",
-                    name
-                ))
-            })?;
+        let var_meta = meta
+            .array_by_path(name.clone())
+            .ok_or(
+                BackendError::UnknownDataVar {
+                    name: name.clone(),
+                    available_vars: meta
+                        .all_data_var_paths(),
+                },
+            )?;
 
         let name = name.clone();
-        let var_meta = var_meta.clone();
         let dims = dims.to_vec();
         let idx = idx.to_vec();
         let chunk_shape = chunk_shape.to_vec();
@@ -299,12 +288,11 @@ async fn read_var_chunks<
                     &var_meta.path,
                     &var_chunk_indices,
                 )
-                .await
-                .map_err(to_py_err)?;
+                .await?;
 
-            Ok::<_, PyErr>((
+            Ok::<_, BackendError>((
                 name,
-                data,
+                data.clone(),
                 var_dims,
                 var_chunk_shape,
                 var_offsets,
@@ -331,7 +319,7 @@ async fn read_var_chunks<
 /// An optional `chunk_subset` constrains which elements within the
 /// chunk are included, avoiding unnecessary column-building work.
 pub async fn chunk_to_df_from_grid_with_backend<
-    B: ChunkDataSourceAsync,
+    B: ChunkedDataBackendAsync,
 >(
     backend: &B,
     idx: Vec<u64>,
@@ -340,7 +328,8 @@ pub async fn chunk_to_df_from_grid_with_backend<
     vars: &[IStr],
     with_columns: Option<&BTreeSet<IStr>>,
     chunk_subset: Option<&ChunkSubset>,
-) -> Result<DataFrame, PyErr> {
+    meta: &ZarrMeta,
+) -> BackendResult<DataFrame> {
     let chunk_shape = sig.chunk_shape();
     let dims = sig.dims();
 
@@ -350,12 +339,6 @@ pub async fn chunk_to_df_from_grid_with_backend<
         .zip(chunk_shape.iter())
         .map(|(i, s)| i * s)
         .collect();
-
-    let meta = backend
-        .metadata()
-        .await
-        .map_err(to_py_err)?;
-    let planning_meta = meta.planning_meta();
 
     let chunk_len =
         checked_chunk_len(chunk_shape)?;
@@ -374,7 +357,7 @@ pub async fn chunk_to_df_from_grid_with_backend<
     let (coord_slices, var_chunks) = futures::try_join!(
         read_coord_chunks(
             backend,
-            &meta,
+            meta,
             dims,
             &origin,
             chunk_shape,
@@ -382,7 +365,7 @@ pub async fn chunk_to_df_from_grid_with_backend<
         ),
         read_var_chunks(
             backend,
-            &planning_meta,
+            meta,
             &idx,
             chunk_shape,
             dims,
@@ -404,12 +387,9 @@ pub async fn chunk_to_df_from_grid_with_backend<
             continue;
         }
 
-        let time_encoding = planning_meta
-            .arrays
-            .get(dim_name)
-            .and_then(|m| {
-                m.time_encoding.as_ref()
-            });
+        let encoding = meta
+            .array_by_path(dim_name.clone())
+            .and_then(|m| m.encoding.as_ref());
 
         let col = build_coord_column(
             dim_name.as_ref(),
@@ -419,7 +399,7 @@ pub async fn chunk_to_df_from_grid_with_backend<
             chunk_shape,
             &origin,
             coord_slices.get(dim_name),
-            time_encoding,
+            encoding,
         );
         cols.push(col);
     }
@@ -433,6 +413,10 @@ pub async fn chunk_to_df_from_grid_with_backend<
         var_offsets,
     ) in var_chunks
     {
+        let encoding = meta
+            .array_by_path(name.clone())
+            .and_then(|m| m.encoding.as_ref());
+
         let col = build_var_column(
             &name,
             data,
@@ -443,10 +427,11 @@ pub async fn chunk_to_df_from_grid_with_backend<
             chunk_shape,
             &strides,
             &keep,
+            encoding,
         );
         cols.push(col);
     }
 
     Ok(DataFrame::new(height, cols)
-        .map_err(PyPolarsErr::from)?)
+        .context(PolarsSnafu)?)
 }

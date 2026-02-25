@@ -69,11 +69,16 @@ pub(crate) fn selection_to_grouped_chunk_plan_unified_from_meta(
     };
 
     for (var, maybe_sel) in vars_to_process {
-        let var_key = var.istr();
         let Some(var_meta) =
             meta.array_by_path(var)
         else {
-            continue;
+            return Err(
+                BackendError::UnknownZarrArray {
+                    name: var.istr(),
+                    available_zarr_arrays: meta
+                        .all_zarr_array_paths(),
+                },
+            );
         };
 
         // Get chunk shape from metadata
@@ -101,16 +106,12 @@ pub(crate) fn selection_to_grouped_chunk_plan_unified_from_meta(
                 all_chunks_subset(&var_meta.shape)
             };
 
-        // Create ChunkGrid from array shape and chunk shape
-        // let chunk_grid =
-        //     create_chunk_grid_from_shapes(
-        //         &var_meta.shape,
-        //         &chunk_shape,
-        //     )?;
         let chunk_grid =
             var_meta.chunk_grid.clone();
         grouped_plan.insert(
-            var_key, sig_arc, chunk_plan,
+            var.istr(),
+            sig_arc,
+            chunk_plan,
             chunk_grid,
         );
     }

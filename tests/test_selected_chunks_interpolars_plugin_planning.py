@@ -156,6 +156,43 @@ def test_interpolate_nd_group_dim_in_source_coords_is_unconstrained_but_keeps_xy
     assert idxs == {(0, 0, 0), (1, 0, 0)}
 
 
+def test_interpolate_nd_filtered_source_values_constrains_time(tmp_path: Path) -> None:
+    """When source_values uses col("X").filter(time == t), planner constrains time dimension."""
+    import numpy as np
+    import xarray as xr
+
+    nt, ny, nx = 3, 16, 20
+    data = np.arange(nt * ny * nx, dtype=np.float64).reshape(nt, ny, nx)
+    ds = xr.Dataset(
+        data_vars={"value": (["time", "y", "x"], data)},
+        coords={"time": [0, 1, 2], "y": list(range(ny)), "x": list(range(nx))},
+    )
+
+    zarr_path = tmp_path / "interp_filtered.zarr"
+    ds.to_zarr(
+        zarr_path,
+        zarr_format=3,
+        encoding={
+            "value": {
+                "chunks": (1, 10, 10),
+                "compressors": [BloscCodec(cname="zstd", clevel=5, shuffle=BloscShuffle.shuffle)],
+            }
+        },
+    )
+
+    target = pl.DataFrame({"y": [0], "x": [5]})
+    # Filter constrains time to 1 => only time chunk 1
+    expr = interpolate_nd(
+        ["y", "x"],
+        [pl.col("value").filter(pl.col("time") == 1)],
+        target,
+    )
+    chunks = ZarrBackend.from_url(str(zarr_path)).selected_chunks_debug(expr)
+    idxs = _chunk_indices(chunks, variable="value")
+
+    assert idxs == {(1, 0, 0)}
+
+
 def test_interpolate_nd_out_of_bounds_targets_clamp_to_boundary_chunks(tmp_path: Path) -> None:
     """README says out-of-bounds targets clamp; planner must include boundary chunks."""
     import xarray as xr
@@ -226,6 +263,64 @@ def test_interpolate_nd_date_coords_plan_and_clamp(tmp_path: Path) -> None:
 
     # Out-of-bounds clamps to start/end, so we only need first + last chunk.
     assert idxs == {(0,), (9,)}
+
+
+
+def test_interpolate_nd_date_coords_plan_and_clamp_low_only(tmp_path: Path) -> None:
+    """Validate planning when the interpolation axis is Date-like."""
+    import numpy as np
+    import xarray as xr
+
+    n = 100
+    d = np.array([np.datetime64("2020-01-01") + np.timedelta64(i, "D") for i in range(n)])
+    ds = xr.Dataset(
+        data_vars={"value": (["d"], np.arange(n, dtype=np.float64))},
+        coords={"d": d},
+    )
+
+    zarr_path = tmp_path / "interp_date_1d.zarr"
+    ds.to_zarr(
+        zarr_path,
+        zarr_format=3,
+        encoding={
+            "value": {
+                "chunks": (10,),
+                # "shards": (50,),  # Zarr shards - must be evenly divisible by chunks
+                "compressors": [BloscCodec(cname="zstd", clevel=5, shuffle=BloscShuffle.shuffle)],
+            }
+        },
+    )
+
+    # Print ds:
+    print(ds.value.values)
+
+
+    target = pl.DataFrame(
+        {
+            "d": pl.Series("d", [date(1900, 1, 1)], dtype=pl.Date),
+            "label": ["lo"],
+        }
+    )
+
+    expr = interpolate_nd(["d"], ["value"], target)
+    chunks = ZarrBackend.from_url(str(zarr_path)).selected_chunks_debug( expr)
+    assert chunks == {
+        "coord_reads": 0,
+        "grids": [ {
+            "chunks": [
+                {
+                    "indices": [0],
+                    "origin": [0],
+                    "shape": [10],
+                }
+            ],
+            "dims": ["d"],
+            "variables": ["value"],
+        }],
+    }
+
+
+
 
 
 def test_interpolate_nd_duration_coords_plan_and_clamp(tmp_path: Path) -> None:

@@ -1,9 +1,13 @@
+use std::fmt::Display;
 use std::hash::{Hash, Hasher};
 use std::ops::{Bound, RangeBounds};
 
 use smallvec::SmallVec;
 
 use crate::IStr;
+use crate::errors::{
+    BackendError, BackendResult,
+};
 use polars::prelude::Operator;
 
 /// Chunk grid signature - dimensions + chunk shape for grouping.
@@ -68,6 +72,22 @@ impl From<&[IStr]> for ChunkGridSignature {
                 .cloned()
                 .collect::<SmallVec<[IStr; 4]>>(),
         )
+    }
+}
+
+impl Display for ChunkGridSignature {
+    fn fmt(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
+        write!(f, "ChunkGridSignature(")?;
+        write!(f, "dims: {:?}", self.dims)?;
+        write!(
+            f,
+            "chunk_shape: {:?}",
+            self.chunk_shape
+        )?;
+        write!(f, ")")
     }
 }
 
@@ -420,24 +440,24 @@ impl ValueRangePresent {
     pub(crate) fn from_polars_op(
         op: Operator,
         scalar: CoordScalar,
-    ) -> Option<Self> {
+    ) -> BackendResult<Self> {
         match op {
-            Operator::Eq => Some(
+            Operator::Eq => Ok(
                 Self::from_equal_case(scalar),
             ),
-            Operator::Gt => Some(
+            Operator::Gt => Ok(
                 Self::from_min_exclusive(scalar),
             ),
-            Operator::GtEq => Some(
+            Operator::GtEq => Ok(
                 Self::from_min_inclusive(scalar),
             ),
-            Operator::Lt => Some(
+            Operator::Lt => Ok(
                 Self::from_max_exclusive(scalar),
             ),
-            Operator::LtEq => Some(
+            Operator::LtEq => Ok(
                 Self::from_max_inclusive(scalar),
             ),
-            _ => None,
+            _ => Err(BackendError::UnsupportedOperator { op }),
         }
     }
 
@@ -474,27 +494,13 @@ impl ValueRangePresent {
         Some(start..end_exclusive)
     }
 }
-pub(crate) type ValueRange =
-    Option<ValueRangePresent>;
-
-pub(crate) trait HasIntersect:
-    Sized
-{
-    fn intersect(
+impl ValueRangePresent {
+    /// Intersect two value ranges, producing the tighter of the two.
+    /// Returns `None` if the intersection is provably empty.
+    pub(crate) fn intersect(
         &self,
-        other: Option<Self>,
-    ) -> Option<Self>;
-}
-
-impl HasIntersect for ValueRangePresent {
-    fn intersect(
-        &self,
-        other_range: Option<Self>,
+        other: &Self,
     ) -> Option<Self> {
-        let Some(other) = other_range else {
-            return Some(self.clone());
-        };
-        // Intersect = tighter start × tighter end.
         let new_start = pick_tighter_min_bound(
             self.0.clone(),
             other.0.clone(),
@@ -503,46 +509,38 @@ impl HasIntersect for ValueRangePresent {
             self.1.clone(),
             other.1.clone(),
         );
-        Self::from_option_bounds(
+        let result = Self::from_option_bounds(
             new_start, new_end,
-        )
-    }
-}
-
-impl HasIntersect for Option<ValueRangePresent> {
-    fn intersect(
-        &self,
-        other: Option<Self>,
-    ) -> Option<Self> {
-        match (self, other) {
-            (Some(a), None) => {
-                Some(Some(a.clone()))
-            }
-            (None, a) => a,
-            (Some(a), Some(b)) => match b {
-                Some(b) => Some(
-                    a.intersect(Some(b.clone())),
-                ),
-                None => Some(Some(a.clone())),
-            },
+        )?;
+        if result.is_certainly_empty() {
+            None
+        } else {
+            Some(result)
         }
     }
-}
 
-impl HasIntersect
-    for std::sync::Arc<Option<ValueRangePresent>>
-{
-    fn intersect(
-        &self,
-        other: Option<Self>,
-    ) -> Option<Self> {
-        self.as_ref()
-            .intersect(other.map(|o| {
-                o.as_ref()
-                    .as_ref()
-                    .map(|o| o.clone())
-            }))
-            .map(|o| std::sync::Arc::new(o))
+    /// Returns `true` when the lower bound is provably above the upper bound,
+    /// meaning no value can satisfy the range.
+    fn is_certainly_empty(&self) -> bool {
+        let (lo, lo_incl) = match &self.0 {
+            Bound::Included(s) => (s, true),
+            Bound::Excluded(s) => (s, false),
+            Bound::Unbounded => return false,
+        };
+        let (hi, hi_incl) = match &self.1 {
+            Bound::Included(s) => (s, true),
+            Bound::Excluded(s) => (s, false),
+            Bound::Unbounded => return false,
+        };
+        match lo.partial_cmp(hi) {
+            Some(std::cmp::Ordering::Greater) => {
+                true
+            }
+            Some(std::cmp::Ordering::Equal) => {
+                !(lo_incl && hi_incl)
+            }
+            _ => false,
+        }
     }
 }
 

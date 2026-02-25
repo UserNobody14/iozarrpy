@@ -1,18 +1,17 @@
 //! Expression compilation for chunk planning.
 //!
-//! The compilation is lazy: expressions are analyzed to produce `LazyDatasetSelection`
-//! containing unresolved value-based constraints. These are later batch-resolved
-//! and materialized into concrete `DatasetSelection`.
+//! Expressions are analyzed to produce `ExprPlan` containing unresolved
+//! value-based constraints. These are resolved inline via the backend
+//! in `lazy_materialize::resolve_expr_plan_sync/async`.
 
 pub mod compile_ctx;
 pub mod compile_node;
 pub mod compile_node_lazy;
+pub mod expr_plan;
 pub mod expr_utils;
 pub mod expr_walk;
 pub mod literals;
 
-pub(crate) use crate::chunk_plan::indexing::Emptyable;
-pub(crate) use crate::chunk_plan::indexing::selection::SetOperations;
 pub(crate) use compile_ctx::LazyCompileCtx;
 pub(crate) use compile_node_lazy::compile_expr;
 pub(crate) use literals::apply_time_encoding;

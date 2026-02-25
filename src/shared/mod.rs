@@ -8,7 +8,6 @@ pub(crate) use stats::PlannerStats;
 
 // Re-export commonly used traits
 pub(crate) use traits::{
-    ChunkDataSourceAsync, ChunkDataSourceSync,
     ChunkedDataBackendAsync,
     ChunkedDataBackendSync,
     ChunkedDataCacheAsync,

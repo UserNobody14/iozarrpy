@@ -4,28 +4,22 @@
 //! using a generic backend interface that can work with any implementation.
 
 use crate::IStr;
-use crate::chunk_plan::{ChunkGridSignature, ChunkSubset};
-use crate::errors::BackendError;
-use crate::meta::{ZarrDatasetMeta, ZarrMeta};
+use crate::chunk_plan::{
+    ChunkGridSignature, ChunkSubset,
+};
+use crate::errors::{
+    BackendError, BackendResult, PolarsSnafu,
+};
+use crate::meta::ZarrMeta;
 use crate::reader::{
     ColumnData, checked_chunk_len,
     compute_strides,
 };
-use crate::shared::{
-    ChunkDataSourceSync, ChunkedDataBackendSync,
-};
+use crate::shared::ChunkedDataBackendSync;
 use polars::prelude::*;
-use pyo3::prelude::*;
-use pyo3_polars::error::PyPolarsErr;
-use std::collections::BTreeSet;
+use snafu::ResultExt;
 
-fn to_py_err<E: std::fmt::Display>(
-    e: E,
-) -> PyErr {
-    PyErr::new::<pyo3::exceptions::PyValueError, _>(
-        e.to_string(),
-    )
-}
+use std::collections::BTreeSet;
 
 use crate::scan::shared::{
     build_coord_column, build_var_column,
@@ -118,16 +112,17 @@ fn read_coord_range_chunked<
 // =============================================================================
 
 /// Read coordinate chunks for all dimensions.
-fn read_coord_chunks<B: ChunkDataSourceSync>(
+fn read_coord_chunks<
+    B: ChunkedDataBackendSync,
+>(
     backend: &B,
     meta: &ZarrMeta,
     dims: &[IStr],
     origin: &[u64],
     chunk_shape: &[u64],
     with_columns: Option<&BTreeSet<IStr>>,
-) -> Result<
+) -> BackendResult<
     std::collections::BTreeMap<IStr, ColumnData>,
-    PyErr,
 > {
     let mut coord_slices: std::collections::BTreeMap<
         IStr,
@@ -144,7 +139,7 @@ fn read_coord_chunks<B: ChunkDataSourceSync>(
 
         // Check if this dimension has a coordinate array
         let Some(coord_meta) =
-            meta.path_to_array.get(dim_name)
+            meta.array_by_path(dim_name.clone())
         else {
             continue;
         };
@@ -167,19 +162,14 @@ fn read_coord_chunks<B: ChunkDataSourceSync>(
             coord_chunk_shape,
             dim_start,
             dim_len,
-        )
-        .map_err(to_py_err)?;
+        )?;
 
         if data.len() != dim_len as usize {
-            return Err(PyErr::new::<
-                pyo3::exceptions::PyValueError,
-                _,
-            >(format!(
-                "coord '{}' length mismatch: expected {}, got {}",
-                dim_name,
-                dim_len,
-                data.len()
-            )));
+            return Err(BackendError::CoordLengthMismatch {
+                name: dim_name.clone(),
+                expected_len: dim_len,
+                coord_len: data.len() as u64,
+            });
         }
         coord_slices
             .insert(dim_name.clone(), data);
@@ -189,23 +179,22 @@ fn read_coord_chunks<B: ChunkDataSourceSync>(
 }
 
 /// Read variable chunks for all requested variables.
-fn read_var_chunks<B: ChunkDataSourceSync>(
+fn read_var_chunks<B: ChunkedDataBackendSync>(
     backend: &B,
-    meta: &ZarrDatasetMeta,
+    meta: &ZarrMeta,
     idx: &[u64],
     chunk_shape: &[u64],
     dims: &[IStr],
     vars: &[IStr],
     with_columns: Option<&BTreeSet<IStr>>,
-) -> Result<
+) -> BackendResult<
     Vec<(
         IStr,
-        ColumnData,
+        Arc<ColumnData>,
         Vec<IStr>,
         Vec<u64>,
         Vec<u64>,
     )>,
-    PyErr,
 > {
     let mut var_chunks = Vec::new();
 
@@ -225,15 +214,13 @@ fn read_var_chunks<B: ChunkDataSourceSync>(
         }
 
         let var_meta =
-            meta.arrays.get(name).ok_or_else(|| {
-                PyErr::new::<
-                    pyo3::exceptions::PyValueError,
-                    _,
-                >(format!(
-                    "unknown variable: {}",
-                    name
-                ))
-            })?;
+            meta.array_by_path(name).ok_or(
+                BackendError::UnknownDataVar {
+                    name: name.clone(),
+                    available_vars: meta
+                        .all_data_var_paths(),
+                },
+            )?;
 
         let var_dims: Vec<IStr> = var_meta
             .dims
@@ -261,16 +248,14 @@ fn read_var_chunks<B: ChunkDataSourceSync>(
             );
 
         // Read the chunk using the full path from metadata
-        let data = backend
-            .read_chunk_sync(
-                &name,
-                &var_chunk_indices,
-            )
-            .map_err(to_py_err)?;
+        let data = backend.read_chunk_sync(
+            &name,
+            &var_chunk_indices,
+        )?;
 
         var_chunks.push((
             name.clone(),
-            data,
+            data.clone(),
             var_dims,
             var_chunk_shape,
             var_offsets,
@@ -289,7 +274,7 @@ fn read_var_chunks<B: ChunkDataSourceSync>(
 /// An optional `chunk_subset` constrains which elements within the
 /// chunk are included, avoiding unnecessary column-building work.
 pub fn chunk_to_df_from_grid_with_backend<
-    B: ChunkDataSourceSync,
+    B: ChunkedDataBackendSync,
 >(
     backend: &B,
     idx: Vec<u64>,
@@ -298,7 +283,8 @@ pub fn chunk_to_df_from_grid_with_backend<
     vars: &[IStr],
     with_columns: Option<&BTreeSet<IStr>>,
     chunk_subset: Option<&ChunkSubset>,
-) -> Result<DataFrame, PyErr> {
+    meta: &ZarrMeta,
+) -> BackendResult<DataFrame> {
     let chunk_shape = sig.chunk_shape();
     let dims = sig.dims();
 
@@ -308,10 +294,6 @@ pub fn chunk_to_df_from_grid_with_backend<
         .zip(chunk_shape.iter())
         .map(|(i, s)| i * s)
         .collect();
-
-    let meta =
-        backend.metadata().map_err(to_py_err)?;
-    let planning_meta = meta.planning_meta();
 
     let chunk_len =
         checked_chunk_len(chunk_shape)?;
@@ -329,7 +311,7 @@ pub fn chunk_to_df_from_grid_with_backend<
     // Read coordinate chunks
     let coord_slices = read_coord_chunks(
         backend,
-        &meta,
+        meta,
         dims,
         &origin,
         chunk_shape,
@@ -339,7 +321,7 @@ pub fn chunk_to_df_from_grid_with_backend<
     // Read variable chunks
     let var_chunks = read_var_chunks(
         backend,
-        &planning_meta,
+        meta,
         &idx,
         chunk_shape,
         dims,
@@ -360,12 +342,9 @@ pub fn chunk_to_df_from_grid_with_backend<
             continue;
         }
 
-        let time_encoding = planning_meta
-            .arrays
-            .get(dim_name)
-            .and_then(|m| {
-                m.time_encoding.as_ref()
-            });
+        let encoding = meta
+            .array_by_path(dim_name.clone())
+            .and_then(|m| m.encoding.as_ref());
 
         let col = build_coord_column(
             dim_name.as_ref(),
@@ -375,7 +354,7 @@ pub fn chunk_to_df_from_grid_with_backend<
             chunk_shape,
             &origin,
             coord_slices.get(dim_name),
-            time_encoding,
+            encoding,
         );
         cols.push(col);
     }
@@ -389,6 +368,10 @@ pub fn chunk_to_df_from_grid_with_backend<
         var_offsets,
     ) in var_chunks
     {
+        let encoding = meta
+            .array_by_path(name.clone())
+            .and_then(|m| m.encoding.as_ref());
+
         let col = build_var_column(
             &name,
             data,
@@ -399,10 +382,11 @@ pub fn chunk_to_df_from_grid_with_backend<
             chunk_shape,
             &strides,
             &keep,
+            encoding,
         );
         cols.push(col);
     }
 
     Ok(DataFrame::new(height, cols)
-        .map_err(PyPolarsErr::from)?)
+        .context(PolarsSnafu)?)
 }

@@ -14,18 +14,6 @@ if TYPE_CHECKING:
 
     from rainbear._core import SelectedChunksDebugReturn
 
-# Mark for tests that require variable inference (not yet implemented)
-needs_var_inference = pytest.mark.xfail(
-    reason="Variable inference from expressions not yet implemented",
-    strict=False,
-)
-
-# Mark for tests that require unsupported expression handling
-needs_expr_support = pytest.mark.xfail(
-    reason="Expression type not yet supported in chunk planner",
-    strict=False,
-)
-
 
 
 # =============================================================================
@@ -185,7 +173,6 @@ class TestSelectorSetOps:
 @pytest.mark.usefixtures("multi_var_dataset")
 class TestTernary:
 
-    @needs_expr_support
     def test_when_then_otherwise_both_cols(
         self, multi_var_dataset: MultiVarDatasetInfo
     ):
@@ -197,7 +184,6 @@ class TestTernary:
         assert inferred == {"temp", "precip", "a"}
 
 
-    @needs_expr_support
     def test_when_coord_reference_in_predicate(
         self, multi_var_dataset: MultiVarDatasetInfo
     ):
@@ -206,7 +192,6 @@ class TestTernary:
         inferred = get_inferred_vars(multi_var_dataset.path, expr)
         assert inferred == {"temp", "lat"}
 
-    @needs_expr_support
     def test_chained_when_then(self, multi_var_dataset: MultiVarDatasetInfo):
         """Chained when().then().when().then().otherwise()."""
         expr = (
@@ -219,15 +204,13 @@ class TestTernary:
         inferred = get_inferred_vars(multi_var_dataset.path, expr)
         assert inferred == {"temp", "precip", "wind_u", "a"}
 
-    @needs_expr_support
     def test_nested_when(self, multi_var_dataset: MultiVarDatasetInfo):
         """Nested when() expressions."""
         inner = pl.when(pl.col("b") < 10).then(pl.col("precip")).otherwise(pl.lit(0))
         expr = pl.when(pl.col("a") < 10).then(inner).otherwise(pl.lit(0))
         inferred = get_inferred_vars(multi_var_dataset.path, expr)
-        assert inferred == {"precip"}
+        assert inferred == {"precip", "a", "b"}
 
-    @pytest.mark.xfail(reason="Not implemented", strict=False)
     def test_when_lon_lat_predicate(self, multi_var_dataset: MultiVarDatasetInfo):
         """when() with lon/lat predicate selecting specific region."""
         # lon is -120 + c*0.1, lat is 30 + b*0.1
@@ -239,7 +222,7 @@ class TestTernary:
             .otherwise(pl.lit(None))
         )
         inferred = get_inferred_vars(multi_var_dataset.path, expr)
-        assert inferred == {"temp"}
+        assert inferred == {"temp", "lon", "lat"}
 
 
 @pytest.mark.usefixtures("multi_var_dataset")
@@ -269,7 +252,7 @@ class TestVariableInference:
         expr = pl.col("temp").filter(pl.col("a") > 30)
         inferred = get_inferred_vars(multi_var_dataset.path, expr)
         inferred_dims = get_inferred_dims(multi_var_dataset.path, expr)
-        assert inferred == {"temp"}
+        assert inferred == {"temp", "a"}
         assert inferred_dims == {"a", "b", "c"}
 
     def test_infer_2d_coord_from_filter(self, multi_var_dataset: MultiVarDatasetInfo):
@@ -277,7 +260,7 @@ class TestVariableInference:
         expr = pl.col("temp").filter((pl.col("a") > 33.0) & (pl.col("b") > 33.0))
         inferred = get_inferred_vars(multi_var_dataset.path, expr)
         inferred_dims = get_inferred_dims(multi_var_dataset.path, expr)
-        assert inferred == {"temp"}
+        assert inferred == {"temp", "a", "b"}
         assert inferred_dims == {"a", "b", "c"}
 
     def test_alias_preserves_inference(self, multi_var_dataset: MultiVarDatasetInfo):
@@ -352,7 +335,6 @@ class TestWindowFunctions:
         assert inferred == {"temp", "a"}
 
 
-    @needs_expr_support
     def test_over_multiple_partition_cols(self, multi_var_dataset: MultiVarDatasetInfo):
         """over() with multiple partition cols should infer all."""
         expr = pl.col("temp").rank().over(["a", "b"])
@@ -389,7 +371,6 @@ class TestColumnSelectors:
         inferred = get_inferred_vars(multi_var_dataset.path, expr)
         assert inferred == {"temp", "precip"}
 
-    @needs_var_inference
     def test_filter_with_coord_infers_data_and_coord(
         self, multi_var_dataset: MultiVarDatasetInfo
     ):

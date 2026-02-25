@@ -108,7 +108,14 @@ pyo3-polars = { git = "https://github.com/pola-rs/polars.git", rev = "099564e917
 ] }
 tokio = { version = "1.45.1", features = ["rt-multi-thread", "macros", "sync", "parking_lot"] }
 url = "2.5.4"
-zarrs = { version = "0.23.2", features = ["async", "sharding"] }
+zarrs = { version = "0.23.3", features = [
+    "async",
+    "sharding",
+    "zlib",
+    "jiff",
+    "chrono",
+    "bitround",
+    ] }
 zarrs_object_store = { version = "0.6.1", features = [
     "aws",
     "azure",
@@ -132,6 +139,7 @@ ambassador = "0.5.0"
 parking_lot = "0.12.5"
 moka = { version = "0.12.13", features = ["future", "sync"] }
 rayon = "1.10"
+snafu = {version = "0.8.9", features = ["backtrace"] }
 
 # Profiling/tracing support (behind feature flag)
 console-subscriber = { version = "0.4", optional = true }

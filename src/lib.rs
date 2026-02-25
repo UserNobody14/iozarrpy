@@ -44,6 +44,19 @@ impl FromIStr for PlSmallStr {
         PlSmallStr::from(istr.clone().to_string())
     }
 }
+
+impl IntoIStr for IStr {
+    fn istr(self) -> IStr {
+        self
+    }
+}
+
+impl IntoIStr for &IStr {
+    fn istr(self) -> IStr {
+        self.clone()
+    }
+}
+
 impl IntoIStr for &str {
     fn istr(self) -> IStr {
         IStr::from(self)

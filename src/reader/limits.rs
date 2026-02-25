@@ -1,4 +1,7 @@
-use pyo3::prelude::*;
+use crate::errors::{
+    BackendError, BackendResult,
+};
+use snafu::ResultExt;
 
 const DEFAULT_MAX_CHUNK_ELEMS: usize = 50_000_000;
 
@@ -12,27 +15,23 @@ pub(crate) fn max_chunk_elems() -> usize {
 
 pub(crate) fn checked_chunk_len(
     shape: &[u64],
-) -> PyResult<usize> {
+) -> BackendResult<usize> {
     let mut acc: usize = 1;
     for &d in shape {
-        let d_usize: usize = d.try_into().map_err(|_| {
-            PyErr::new::<pyo3::exceptions::PyMemoryError, _>(
-                "chunk shape dimension does not fit in usize",
-            )
-        })?;
-        acc =
-            acc.checked_mul(d_usize).ok_or_else(|| {
-                PyErr::new::<
-                    pyo3::exceptions::PyMemoryError,
-                    _,
-                >("chunk size overflow")
-            })?;
+        let d_usize: usize = d.try_into().context(
+            crate::errors::backend::ChunkDimTooLargeSnafu {
+                dim: d,
+                max: usize::MAX,
+            }
+        )?;
+        acc = acc.checked_mul(d_usize).ok_or(
+            BackendError::other(
+                "chunk size overflow".to_string(),
+            ),
+        )?;
         if acc > max_chunk_elems() {
-            return Err(PyErr::new::<
-                pyo3::exceptions::PyMemoryError,
-                _,
-            >(
-                "refusing to allocate an extremely large chunk; set RAINBEAR_MAX_CHUNK_ELEMS to override",
+            return Err(BackendError::other(
+                "refusing to allocate an extremely large chunk; set RAINBEAR_MAX_CHUNK_ELEMS to override".to_string(),
             ));
         }
     }

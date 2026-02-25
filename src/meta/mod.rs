@@ -2,6 +2,7 @@ pub(crate) mod dims;
 mod dtype;
 mod load_async;
 mod load_sync;
+mod shared;
 mod time_encoding;
 mod types;
 
@@ -11,6 +12,6 @@ pub use load_async::{
 };
 pub use load_sync::load_zarr_meta_from_opened;
 pub use types::{
-    TimeEncoding, ZarrDatasetMeta, ZarrMeta,
+    TimeEncoding, VarEncoding, ZarrMeta,
     ZarrNode,
 };

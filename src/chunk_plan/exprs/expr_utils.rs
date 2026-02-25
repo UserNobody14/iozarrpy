@@ -4,18 +4,15 @@ use super::literals::{
     strip_wrappers,
 };
 use crate::chunk_plan::exprs::compile_ctx::LazyCompileCtx;
-use crate::chunk_plan::indexing::lazy_selection::{LazyDatasetSelection, lazy_dataset_all_for_vars};
-use crate::chunk_plan::indexing::types::{
-    ValueRange, ValueRangePresent,
-};
+use crate::chunk_plan::indexing::types::ValueRangePresent;
 use crate::chunk_plan::prelude::*;
 use crate::{IStr, IntoIStr};
 
-/// Try to extract a column name and ValueRange from a comparison expression.
+/// Try to extract a column name and value range from a comparison expression.
 pub(super) fn try_expr_to_value_range_lazy(
     expr: &Expr,
     ctx: &LazyCompileCtx<'_>,
-) -> Option<(IStr, ValueRange)> {
+) -> Option<(IStr, ValueRangePresent)> {
     let expr = strip_wrappers(expr);
     let Expr::BinaryExpr { left, op, right } =
         expr
@@ -53,10 +50,11 @@ pub(super) fn try_expr_to_value_range_lazy(
         return None;
     };
 
-    let time_encoding =
-        ctx.meta.arrays.get(&col).and_then(|a| {
-            a.time_encoding.as_ref()
-        });
+    let time_encoding = ctx
+        .meta
+        .array_by_path(col.clone())
+        .and_then(|a| a.encoding.as_ref())
+        .and_then(|e| e.as_time_encoding());
     let Ok(scalar) =
         literal_to_scalar(lit, time_encoding)
     else {
@@ -65,7 +63,8 @@ pub(super) fn try_expr_to_value_range_lazy(
 
     let vr = ValueRangePresent::from_polars_op(
         op_eff, scalar,
-    );
+    )
+    .ok()?;
 
     Some((col, vr))
 }
@@ -78,6 +77,35 @@ pub(super) fn expr_to_col_name(
         Some(name.istr())
     } else {
         None
+    }
+}
+
+/// Extract variable name and optional filter predicate from a source_values element.
+/// Handles: `col("x")`, `col("x").filter(predicate)`, and wrappers like alias.
+/// Returns `(var_name, filter_predicate)` where filter_predicate is `Some(by)` when
+/// the expression is a Filter.
+pub(super) fn extract_var_from_source_value_expr(
+    e: &Expr,
+) -> Option<(IStr, Option<&Expr>)> {
+    let e = strip_wrappers(e);
+    match e {
+        Expr::Column(name) => {
+            Some((name.istr(), None))
+        }
+        Expr::Filter { input, by } => {
+            let inner =
+                strip_wrappers(input.as_ref());
+            if let Expr::Column(name) = inner {
+                Some((
+                    name.istr(),
+                    Some(by.as_ref()),
+                ))
+            } else {
+                extract_var_from_source_value_expr(input)
+                    .map(|(name, _)| (name, Some(by.as_ref())))
+            }
+        }
+        _ => None,
     }
 }
 
@@ -117,9 +145,8 @@ pub(super) fn extract_literal_struct_series_lazy(
 /// Extract scalar values from a Series.
 pub(super) fn series_values_scalar_lazy(
     s: &polars::prelude::Series,
-) -> Result<
+) -> Option<
     Vec<crate::chunk_plan::indexing::types::CoordScalar>,
-    (),
 >{
     use crate::chunk_plan::indexing::types::CoordScalar;
     use polars::prelude::DataType;
@@ -129,19 +156,19 @@ pub(super) fn series_values_scalar_lazy(
 
     match s.dtype() {
         DataType::Int64 => {
-            let ca = s.i64().map_err(|_| ())?;
+            let ca = s.i64().ok()?;
             for v in ca.into_iter().flatten() {
                 out.push(CoordScalar::I64(v));
             }
         }
         DataType::UInt64 => {
-            let ca = s.u64().map_err(|_| ())?;
+            let ca = s.u64().ok()?;
             for v in ca.into_iter().flatten() {
                 out.push(CoordScalar::U64(v));
             }
         }
         DataType::Float64 => {
-            let ca = s.f64().map_err(|_| ())?;
+            let ca = s.f64().ok()?;
             for v in ca.into_iter().flatten() {
                 out.push(CoordScalar::F64(
                     v.into(),
@@ -149,7 +176,7 @@ pub(super) fn series_values_scalar_lazy(
             }
         }
         DataType::Float32 => {
-            let ca = s.f32().map_err(|_| ())?;
+            let ca = s.f32().ok()?;
             for v in ca.into_iter().flatten() {
                 out.push(CoordScalar::F64(
                     (v as f64).into(),
@@ -157,7 +184,7 @@ pub(super) fn series_values_scalar_lazy(
             }
         }
         DataType::Int32 => {
-            let ca = s.i32().map_err(|_| ())?;
+            let ca = s.i32().ok()?;
             for v in ca.into_iter().flatten() {
                 out.push(CoordScalar::I64(
                     v as i64,
@@ -165,7 +192,7 @@ pub(super) fn series_values_scalar_lazy(
             }
         }
         DataType::Int16 => {
-            let ca = s.i16().map_err(|_| ())?;
+            let ca = s.i16().ok()?;
             for v in ca.into_iter().flatten() {
                 out.push(CoordScalar::I64(
                     v as i64,
@@ -173,7 +200,7 @@ pub(super) fn series_values_scalar_lazy(
             }
         }
         DataType::Int8 => {
-            let ca = s.i8().map_err(|_| ())?;
+            let ca = s.i8().ok()?;
             for v in ca.into_iter().flatten() {
                 out.push(CoordScalar::I64(
                     v as i64,
@@ -181,7 +208,7 @@ pub(super) fn series_values_scalar_lazy(
             }
         }
         DataType::UInt32 => {
-            let ca = s.u32().map_err(|_| ())?;
+            let ca = s.u32().ok()?;
             for v in ca.into_iter().flatten() {
                 out.push(CoordScalar::U64(
                     v as u64,
@@ -189,7 +216,7 @@ pub(super) fn series_values_scalar_lazy(
             }
         }
         DataType::UInt16 => {
-            let ca = s.u16().map_err(|_| ())?;
+            let ca = s.u16().ok()?;
             for v in ca.into_iter().flatten() {
                 out.push(CoordScalar::U64(
                     v as u64,
@@ -197,7 +224,7 @@ pub(super) fn series_values_scalar_lazy(
             }
         }
         DataType::UInt8 => {
-            let ca = s.u8().map_err(|_| ())?;
+            let ca = s.u8().ok()?;
             for v in ca.into_iter().flatten() {
                 out.push(CoordScalar::U64(
                     v as u64,
@@ -207,8 +234,7 @@ pub(super) fn series_values_scalar_lazy(
         DataType::Datetime(tu, _) => {
             // Use physical representation for Datetime
             let phys = s.to_physical_repr();
-            let ca =
-                phys.i64().map_err(|_| ())?;
+            let ca = phys.i64().ok()?;
             for v in ca.into_iter().flatten() {
                 let ns = match tu {
                     TimeUnit::Nanoseconds => v,
@@ -228,8 +254,7 @@ pub(super) fn series_values_scalar_lazy(
         DataType::Date => {
             // Use physical representation for Date (i32 days since epoch)
             let phys = s.to_physical_repr();
-            let ca =
-                phys.i32().map_err(|_| ())?;
+            let ca = phys.i32().ok()?;
             for v in ca.into_iter().flatten() {
                 let ns = (v as i64)
                     .saturating_mul(
@@ -243,8 +268,7 @@ pub(super) fn series_values_scalar_lazy(
         DataType::Duration(tu) => {
             // Use physical representation for Duration
             let phys = s.to_physical_repr();
-            let ca =
-                phys.i64().map_err(|_| ())?;
+            let ca = phys.i64().ok()?;
             for v in ca.into_iter().flatten() {
                 let ns = match tu {
                     TimeUnit::Nanoseconds => v,
@@ -264,34 +288,15 @@ pub(super) fn series_values_scalar_lazy(
         DataType::Time => {
             // Use physical representation for Time (i64 nanoseconds since midnight)
             let phys = s.to_physical_repr();
-            let ca =
-                phys.i64().map_err(|_| ())?;
+            let ca = phys.i64().ok()?;
             for v in ca.into_iter().flatten() {
                 out.push(
                     CoordScalar::DurationNs(v),
                 );
             }
         }
-        _ => return Err(()),
+        _ => return None,
     }
 
-    Ok(out)
-}
-
-/// Returns a Sel for the variables referenced in an expression.
-pub(super) fn all_for_referenced_vars_lazy(
-    expr: &Expr,
-    ctx: &LazyCompileCtx<'_>,
-) -> LazyDatasetSelection {
-    let mut refs = Vec::new();
-    super::compile_node::collect_column_refs(
-        expr, &mut refs,
-    );
-    refs.sort();
-    refs.dedup();
-    if refs.is_empty() {
-        LazyDatasetSelection::NoSelectionMade
-    } else {
-        lazy_dataset_all_for_vars(refs, ctx.meta)
-    }
+    Some(out)
 }

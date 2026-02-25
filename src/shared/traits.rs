@@ -41,7 +41,7 @@ pub trait ChunkedDataBackendSync:
         &self,
         var: &IStr,
         chunk_idx: &[u64],
-    ) -> Result<ColumnData, BackendError>;
+    ) -> Result<Arc<ColumnData>, BackendError>;
 }
 
 /// Asynchronous chunked data backend trait.
@@ -64,7 +64,7 @@ pub trait ChunkedDataBackendAsync:
         &self,
         var: &IStr,
         chunk_idx: &[u64],
-    ) -> Result<ColumnData, BackendError>;
+    ) -> Result<Arc<ColumnData>, BackendError>;
 }
 
 /// A backend that can retrieve metadata synchronously
@@ -118,8 +118,10 @@ pub struct ChunkedDataCacheSync<
     BACKEND: ChunkedDataBackendSync,
 > {
     backend: BACKEND,
-    chunk_cache:
-        MokaCache<(IStr, Vec<u64>), ColumnData>,
+    chunk_cache: MokaCache<
+        (IStr, Vec<u64>),
+        Arc<ColumnData>,
+    >,
 }
 
 /// Async cache for chunked data
@@ -129,7 +131,7 @@ pub struct ChunkedDataCacheAsync<
     backend: BACKEND,
     chunk_cache: MokaFutureCache<
         (IStr, Vec<u64>),
-        ColumnData,
+        Arc<ColumnData>,
     >,
 }
 
@@ -275,12 +277,13 @@ impl<BACKEND: ChunkedDataBackendSync>
         &self,
         var: &IStr,
         chunk_idx: &[u64],
-    ) -> Result<ColumnData, BackendError> {
+    ) -> Result<Arc<ColumnData>, BackendError>
+    {
         let key =
             (var.clone(), chunk_idx.to_vec());
         let cache = self.chunk_cache.get(&key);
         if let Some(data) = cache {
-            return Ok(data);
+            return Ok(data.clone());
         }
         drop(cache);
         let data = self
@@ -301,7 +304,8 @@ impl<BACKEND: ChunkedDataBackendAsync>
         &self,
         var: &IStr,
         chunk_idx: &[u64],
-    ) -> Result<ColumnData, BackendError> {
+    ) -> Result<Arc<ColumnData>, BackendError>
+    {
         let key =
             (var.clone(), chunk_idx.to_vec());
         let cache =
@@ -391,7 +395,8 @@ impl<
         &self,
         var: &IStr,
         chunk_idx: &[u64],
-    ) -> Result<ColumnData, BackendError> {
+    ) -> Result<Arc<ColumnData>, BackendError>
+    {
         self.backend
             .read_chunk_async(var, chunk_idx)
             .await
@@ -548,7 +553,8 @@ impl<T: ChunkedDataBackendSync>
         &self,
         var: &IStr,
         chunk_idx: &[u64],
-    ) -> Result<ColumnData, BackendError> {
+    ) -> Result<Arc<ColumnData>, BackendError>
+    {
         (**self).read_chunk_sync(var, chunk_idx)
     }
 }
@@ -561,7 +567,8 @@ impl<T: ChunkedDataBackendAsync>
         &self,
         var: &IStr,
         chunk_idx: &[u64],
-    ) -> Result<ColumnData, BackendError> {
+    ) -> Result<Arc<ColumnData>, BackendError>
+    {
         (**self)
             .read_chunk_async(var, chunk_idx)
             .await
@@ -710,47 +717,3 @@ impl<
 // =============================================================================
 // Combined ChunkDataSource traits for generic chunk processing
 // =============================================================================
-
-use crate::meta::ZarrMeta;
-
-/// Synchronous chunk data source - provides all capabilities needed for chunk processing.
-///
-/// This trait combines chunk reading and metadata access into a single interface,
-/// enabling generic chunk processing code that can work with any backend implementation.
-pub trait ChunkDataSourceSync:
-    ChunkedDataBackendSync
-    + HasMetadataBackendSync<ZarrMeta>
-    + Send
-    + Sync
-{
-}
-
-/// Asynchronous chunk data source - provides all capabilities needed for chunk processing.
-///
-/// This trait combines chunk reading and metadata access into a single interface,
-/// enabling generic chunk processing code that can work with any backend implementation.
-#[async_trait::async_trait]
-pub trait ChunkDataSourceAsync:
-    ChunkedDataBackendAsync
-    + HasMetadataBackendAsync<ZarrMeta>
-    + Send
-    + Sync
-{
-}
-
-// Blanket implementations for types that implement both traits
-impl<T> ChunkDataSourceSync for T where
-    T: ChunkedDataBackendSync
-        + HasMetadataBackendSync<ZarrMeta>
-        + Send
-        + Sync
-{
-}
-
-impl<T> ChunkDataSourceAsync for T where
-    T: ChunkedDataBackendAsync
-        + HasMetadataBackendAsync<ZarrMeta>
-        + Send
-        + Sync
-{
-}

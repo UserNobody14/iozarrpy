@@ -5,8 +5,11 @@ use polars::prelude::*;
 use pyo3::PyErr;
 use pyo3::prelude::*;
 use rayon::prelude::*;
+use snafu::ensure;
 
+use crate::IStr;
 use crate::chunk_plan::ChunkSubset;
+use crate::errors::MaxChunksToReadExceededSnafu;
 use crate::meta::ZarrMeta;
 use crate::scan::chunk_to_df_from_grid_with_backend_sync;
 use crate::shared::HasMetadataBackendSync;
@@ -17,7 +20,6 @@ use crate::shared::{
     expand_projection_to_flat_paths,
     restructure_to_structs,
 };
-use crate::IStr;
 
 /// Version of scan zarr sync that returns an iterator
 ///
@@ -120,8 +122,6 @@ impl ZarrIteratorInner {
     fn initialize(
         &mut self,
     ) -> Result<(), PyErr> {
-        
-
         // Get metadata from backend
         let meta = self.backend.metadata()?;
         // Expand struct column names to flat paths for chunk reading
@@ -146,49 +146,37 @@ impl ZarrIteratorInner {
             self.max_chunks_to_read
         {
             let total_chunks = grouped_plan
-                .total_unique_chunks()
-                .map_err(|e| {
-                    PyErr::new::<
-                        pyo3::exceptions::PyValueError,
-                        _,
-                    >(e)
-                })?;
-            if total_chunks > max_chunks {
-                return Err(PyErr::new::<
-                    pyo3::exceptions::PyRuntimeError,
-                    _,
-                >(format!(
-                    "max_chunks_to_read exceeded: {} chunks needed, limit is {}",
-                    total_chunks, max_chunks
-                )));
-            }
+                .total_unique_chunks()?;
+            ensure!(
+                total_chunks <= max_chunks,
+                MaxChunksToReadExceededSnafu {
+                    total_chunks,
+                    max_chunks,
+                }
+            );
         }
 
         // Collect all grid groups upfront and convert to owned data
         // We need to own the data rather than borrow it because GroupedChunkPlan
         // will be dropped after this function returns
-        let grid_groups: Vec<OwnedGridGroup> = grouped_plan
-            .iter_consolidated_chunks()
-            .map(|result| {
-                result.map_err(|e| {
-                    PyErr::new::<
-                        pyo3::exceptions::PyValueError,
-                        _,
-                    >(e)
+        let grid_groups: Vec<OwnedGridGroup> =
+            grouped_plan
+                .iter_consolidated_chunks()
+                .collect::<Result<Vec<_>, _>>()?
+                .into_iter()
+                .map(|group| OwnedGridGroup {
+                    sig: Arc::new(
+                        group.sig.clone(),
+                    ),
+                    vars: group.vars,
+                    chunk_indices: group
+                        .chunk_indices,
+                    chunk_subsets: group
+                        .chunk_subsets,
+                    array_shape: group
+                        .array_shape,
                 })
-            })
-            .collect::<Result<Vec<_>, PyErr>>()?
-            .into_iter()
-            .map(|group| {
-                OwnedGridGroup {
-                    sig: Arc::new(group.sig.clone()),
-                    vars: group.vars.iter().map(|&v| v.clone()).collect(),
-                    chunk_indices: group.chunk_indices,
-                    chunk_subsets: group.chunk_subsets,
-                    array_shape: group.array_shape,
-                }
-            })
-            .collect();
+                .collect();
 
         self.state = Some(IteratorState {
             grid_groups,
@@ -250,8 +238,10 @@ impl ZarrIteratorInner {
             {
                 let ci = state.current_chunk_idx;
                 chunks_to_read.push((
-                    group.chunk_indices[ci].clone(),
-                    group.chunk_subsets[ci].clone(),
+                    group.chunk_indices[ci]
+                        .clone(),
+                    group.chunk_subsets[ci]
+                        .clone(),
                 ));
                 state.current_chunk_idx += 1;
 
@@ -272,8 +262,9 @@ impl ZarrIteratorInner {
                 let expanded_with_columns = state
                     .expanded_with_columns
                     .clone();
+                let meta = state.meta.clone();
 
-                let chunk_dfs: Result<Vec<DataFrame>, PyErr> = chunks_to_read
+                let dfs: Vec<DataFrame> = chunks_to_read
                     .par_iter()
                     .map(|(idx, subset)| {
                         chunk_to_df_from_grid_with_backend_sync(
@@ -284,11 +275,10 @@ impl ZarrIteratorInner {
                             &vars,
                             expanded_with_columns.as_ref(),
                             subset.as_ref(),
+                            &meta,
                         )
                     })
-                    .collect();
-
-                let dfs = chunk_dfs?;
+                    .collect::<Result<Vec<_>, _>>()?;
 
                 // Add to batch and count rows
                 for df in dfs {
@@ -325,16 +315,10 @@ impl ZarrIteratorInner {
             // Combine all chunk DataFrames
             let combined = if batch_dfs.is_empty()
             {
-                let keys: Vec<IStr> = state
-                    .meta
-                    .path_to_array
-                    .keys()
-                    .cloned()
-                    .collect();
-                let planning_meta =
-                    state.meta.planning_meta();
+                let keys: Vec<IStr> =
+                    state.meta.all_array_paths();
                 DataFrame::empty_with_schema(
-                    &planning_meta.tidy_schema(
+                    &state.meta.tidy_schema(
                         Some(keys.as_slice()),
                     ),
                 )
@@ -353,6 +337,7 @@ impl ZarrIteratorInner {
             // Apply the predicate filter to the actual rows
             // Chunk planning only prunes chunks, but chunks may contain rows
             // that don't match the predicate
+            // TODO: unnecessary?
             let result = combined
                 .lazy()
                 .filter(state.predicate.clone())

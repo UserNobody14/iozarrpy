@@ -7,6 +7,9 @@ use zarrs::array::{
 };
 use zarrs::plugin::ZarrVersion;
 
+use crate::errors::{
+    BackendError, BackendResult,
+};
 use crate::reader::ColumnData;
 
 // Re-export the cache type for use in backends
@@ -23,7 +26,7 @@ pub(crate) async fn retrieve_chunk_async(
     array: &Array<dyn zarrs::storage::AsyncReadableWritableListableStorageTraits>,
     cache: &AsyncArrayShardedReadableExtCache,
     chunk: &[u64],
-) -> Result<ColumnData, String> {
+) -> BackendResult<ColumnData> {
     let idv = array
         .data_type()
         .name(ZarrVersion::V3)
@@ -41,7 +44,7 @@ pub(crate) async fn retrieve_chunk_async(
                     cache, chunk, &options,
                 )
                 .await
-                .map_err(to_string_err)?,
+                ?,
         )),
         "int8" => Ok(ColumnData::I8(
             array
@@ -49,7 +52,7 @@ pub(crate) async fn retrieve_chunk_async(
                     cache, chunk, &options,
                 )
                 .await
-                .map_err(to_string_err)?,
+                ?,
         )),
         "int16" => Ok(ColumnData::I16(
             array
@@ -57,7 +60,7 @@ pub(crate) async fn retrieve_chunk_async(
                     cache, chunk, &options,
                 )
                 .await
-                .map_err(to_string_err)?,
+                ?,
         )),
         "int32" => Ok(ColumnData::I32(
             array
@@ -65,7 +68,7 @@ pub(crate) async fn retrieve_chunk_async(
                     cache, chunk, &options,
                 )
                 .await
-                .map_err(to_string_err)?,
+                ?,
         )),
         "int64" => Ok(ColumnData::I64(
             array
@@ -73,7 +76,7 @@ pub(crate) async fn retrieve_chunk_async(
                     cache, chunk, &options,
                 )
                 .await
-                .map_err(to_string_err)?,
+                ?,
         )),
         "uint8" => Ok(ColumnData::U8(
             array
@@ -81,7 +84,7 @@ pub(crate) async fn retrieve_chunk_async(
                     cache, chunk, &options,
                 )
                 .await
-                .map_err(to_string_err)?,
+                ?,
         )),
         "uint16" => Ok(ColumnData::U16(
             array
@@ -89,7 +92,7 @@ pub(crate) async fn retrieve_chunk_async(
                     cache, chunk, &options,
                 )
                 .await
-                .map_err(to_string_err)?,
+                ?,
         )),
         "uint32" => Ok(ColumnData::U32(
             array
@@ -97,7 +100,7 @@ pub(crate) async fn retrieve_chunk_async(
                     cache, chunk, &options,
                 )
                 .await
-                .map_err(to_string_err)?,
+                ?,
         )),
         "uint64" => Ok(ColumnData::U64(
             array
@@ -105,7 +108,7 @@ pub(crate) async fn retrieve_chunk_async(
                     cache, chunk, &options,
                 )
                 .await
-                .map_err(to_string_err)?,
+                ?,
         )),
         "float32" => Ok(ColumnData::F32(
             array
@@ -113,7 +116,7 @@ pub(crate) async fn retrieve_chunk_async(
                     cache, chunk, &options,
                 )
                 .await
-                .map_err(to_string_err)?,
+                ?,
         )),
         "float64" => Ok(ColumnData::F64(
             array
@@ -121,16 +124,12 @@ pub(crate) async fn retrieve_chunk_async(
                     cache, chunk, &options,
                 )
                 .await
-                .map_err(to_string_err)?,
+                ?,
         )),
         other => {
-            Err(format!("unsupported zarr dtype: {other}"))
+            Err(BackendError::other(format!(
+                "unsupported zarr dtype: {other}"
+            )))
         }
     }
-}
-
-fn to_string_err<E: std::fmt::Display>(
-    e: E,
-) -> String {
-    e.to_string()
 }

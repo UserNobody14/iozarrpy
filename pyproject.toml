@@ -1,6 +1,6 @@
 [project]
 name = "rainbear"
-version = "2.1.0"
+version = "2.2.0"
 description = "Build lazy Zarr scans with Polars"
 readme = "README.md"
 authors = [
@@ -8,7 +8,7 @@ authors = [
 ]
 requires-python = ">=3.12"
 dependencies = [
-    "polars==1.37.1",
+    "polars>=1.37.1",
 ]
 license = { file = "LICENSE" }
 keywords = ["zarr", "polars", "lazy"]
@@ -68,6 +68,7 @@ dev = [
     "py-spy>=0.4.1",
     "icechunk>=1.1.18",
     "pyrefly>=0.50.1",
+    "marimo>=0.20.2",
 ]
 
 build = [

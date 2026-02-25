@@ -6,65 +6,17 @@ use zarrs::array::ArraySubset;
 use crate::IStr;
 
 use super::grouped_selection::{
-    ArraySelectionType, DatasetSelectionBase,
-    GroupedSelection,
+    ArraySelectionType, GroupedSelection,
 };
+use super::selection_base::DatasetSelectionBase;
 
 /// Dataset-level selection: type alias for the generic `DatasetSelectionBase`.
 ///
 /// This groups variables by their dimension signature to avoid duplication.
 pub(crate) type DatasetSelection =
-    DatasetSelectionBase<DataArraySelection>;
-
-/// Trait for dataset selections that can iterate over variables.
-pub trait DSelection {
-    fn vars(
-        &self,
-    ) -> impl Iterator<
-        Item = (&str, &DataArraySelection),
+    DatasetSelectionBase<
+        GroupedSelection<DataArraySelection>,
     >;
-}
-
-impl DSelection
-    for GroupedSelection<DataArraySelection>
-{
-    fn vars(
-        &self,
-    ) -> impl Iterator<
-        Item = (&str, &DataArraySelection),
-    > {
-        Box::new(GroupedSelection::vars(self))
-            as Box<dyn Iterator<Item = _>>
-    }
-}
-
-impl DSelection for DatasetSelection {
-    fn vars(
-        &self,
-    ) -> impl Iterator<
-        Item = (&str, &DataArraySelection),
-    > {
-        match self {
-            Self::Selection(selection) => Box::new(
-                selection.vars(),
-            )
-                as Box<
-                    dyn Iterator<
-                        Item = (
-                            &str,
-                            &DataArraySelection,
-                        ),
-                    >,
-                >,
-            Self::NoSelectionMade => {
-                Box::new(std::iter::empty())
-            }
-            Self::Empty => {
-                Box::new(std::iter::empty())
-            }
-        }
-    }
-}
 
 /// Selection for a single array, expressed as a disjunction (OR) of hyper-rectangles.
 #[derive(
@@ -121,16 +73,7 @@ impl Emptyable for DataArraySelection {
     }
 }
 
-impl ArraySelectionType for DataArraySelection {
-    fn all() -> Self {
-        // For concrete selections, "all" is only meaningful when we know the shape.
-        // This method exists for trait completeness but should not be called directly.
-        // Use `from_subsets` with actual bounds instead.
-        // We return empty here as a fallback - in practice, concrete "all" selections
-        // come from materializing LazyArraySelection::all() with shape info.
-        Self::empty()
-    }
-}
+impl ArraySelectionType for DataArraySelection {}
 
 impl SetOperations for DataArraySelection {
     fn union(
@@ -429,6 +372,7 @@ impl SetOperations for ArraySubsetList {
                 {
                     if !overlap.is_empty() {
                         out.push(overlap);
+                        // Generate true intersection (?)
                     }
                 }
             }

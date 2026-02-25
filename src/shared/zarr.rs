@@ -17,7 +17,9 @@ use super::traits::{
     HasMetadataBackendCacheSync,
     HasMetadataBackendSync, HasStore,
 };
-use crate::errors::BackendError;
+use crate::errors::{
+    BackendError, BackendResult,
+};
 use crate::meta::{
     ZarrMeta, load_zarr_meta_from_opened,
     load_zarr_meta_from_opened_async,
@@ -63,11 +65,8 @@ pub(crate) fn normalize_path(
 impl ZarrBackendSync {
     pub fn new(
         store: StoreInput,
-    ) -> Result<Self, BackendError> {
-        let opened =
-            store.open_sync().map_err(|e| {
-                BackendError::Other(e.to_string())
-            })?;
+    ) -> BackendResult<Self> {
+        let opened = store.open_sync()?;
         Ok(Self {
             store: Arc::new(opened),
             opened_arrays:
@@ -106,10 +105,7 @@ impl HasMetadataBackendSync<ZarrMeta>
         // Load and cache metadata
         let meta = load_zarr_meta_from_opened(
             &self.store,
-        )
-        .map_err(|e| {
-            BackendError::Other(e.to_string())
-        })?;
+        )?;
         let meta_arc = Arc::new(meta);
 
         *self.cached_meta.write() =
@@ -124,7 +120,8 @@ impl ChunkedDataBackendSync for ZarrBackendSync {
         &self,
         var: &IStr,
         chunk_idx: &[u64],
-    ) -> Result<ColumnData, BackendError> {
+    ) -> Result<Arc<ColumnData>, BackendError>
+    {
         // Try to get existing array and cache
         let array_opt = self
             .opened_arrays
@@ -141,7 +138,7 @@ impl ChunkedDataBackendSync for ZarrBackendSync {
                     let cached =
                         self.cached_meta.read();
                     cached.as_ref().and_then(|meta| {
-                        meta.path_to_array.get(var).and_then(|arr_meta| {
+                        meta.array_by_path(var.clone()).and_then(|arr_meta| {
                             arr_meta.array_metadata.clone()
                         })
                     })
@@ -164,7 +161,7 @@ impl ChunkedDataBackendSync for ZarrBackendSync {
                         var.clone(),
                         opened_inner.clone(),
                     );
-                opened_inner
+                opened_inner.clone()
             }
         };
 
@@ -172,14 +169,9 @@ impl ChunkedDataBackendSync for ZarrBackendSync {
             &opened.array,
             &opened.cache,
             chunk_idx,
-        )
-        .map_err(|e| {
-            BackendError::ChunkReadFailed(
-                e.to_string(),
-            )
-        })?;
+        )?;
 
-        Ok(chunk)
+        Ok(Arc::new(chunk))
     }
 }
 
@@ -217,11 +209,8 @@ impl HasAsyncStore for ZarrBackendAsync {
 impl ZarrBackendAsync {
     pub fn new(
         store: StoreInput,
-    ) -> Result<Self, BackendError> {
-        let opened =
-            store.open_async().map_err(|e| {
-                BackendError::Other(e.to_string())
-            })?;
+    ) -> BackendResult<Self> {
+        let opened = store.open_async()?;
         Ok(Self {
             store: Arc::new(opened),
             opened_arrays: RwLock::new(
@@ -238,7 +227,7 @@ impl HasMetadataBackendAsync<ZarrMeta>
 {
     async fn metadata(
         &self,
-    ) -> Result<Arc<ZarrMeta>, BackendError> {
+    ) -> BackendResult<Arc<ZarrMeta>> {
         // Check if already cached
         {
             let cached =
@@ -253,10 +242,7 @@ impl HasMetadataBackendAsync<ZarrMeta>
             load_zarr_meta_from_opened_async(
                 &self.store,
             )
-            .await
-            .map_err(|e| {
-                BackendError::Other(e.to_string())
-            })?;
+            .await?;
         let meta_arc = Arc::new(meta);
 
         *self.cached_meta.write().await =
@@ -274,7 +260,8 @@ impl ChunkedDataBackendAsync
         &self,
         var: &IStr,
         chunk_idx: &[u64],
-    ) -> Result<ColumnData, BackendError> {
+    ) -> Result<Arc<ColumnData>, BackendError>
+    {
         // Clone the Arc values and drop the guard before await to keep the future Send
         let existing = self
             .opened_arrays
@@ -295,8 +282,7 @@ impl ChunkedDataBackendAsync
                             .await;
                         cached.as_ref().and_then(
                             |meta| {
-                                meta.path_to_array
-                                    .get(var)
+                                meta.array_by_path(var.clone())
                                     .and_then(
                                         |arr_meta| {
                                             arr_meta
@@ -335,14 +321,9 @@ impl ChunkedDataBackendAsync
             opened.cache.as_ref(),
             chunk_idx,
         )
-        .await
-        .map_err(|e| {
-            BackendError::ChunkReadFailed(
-                e.to_string(),
-            )
-        })?;
+        .await?;
 
-        Ok(chunk)
+        Ok(Arc::new(chunk))
     }
 }
 

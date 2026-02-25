@@ -18,8 +18,7 @@ use zarrs::array::Array;
 
 use crate::backend::implementation::{
     FullyCachedIcechunkBackendAsync,
-    IcechunkBackendAsync,
-    IcechunkIterator,
+    IcechunkBackendAsync, IcechunkIterator,
     to_fully_cached_icechunk_async,
 };
 use crate::meta::ZarrMeta;
@@ -335,13 +334,19 @@ impl PyIcechunkBackend {
         use polars::prelude::lit;
         use pyo3::IntoPyObjectExt;
 
-        let prd = if let Some(predicate) = predicate {
-            extract_expr(predicate)?
-        } else {
-            lit(true)
-        };
-        let with_cols_set: Option<BTreeSet<IStr>> =
-            with_columns.map(|cols| cols.into_iter().map(|c| c.istr()).collect());
+        let prd =
+            if let Some(predicate) = predicate {
+                extract_expr(predicate)?
+            } else {
+                lit(true)
+            };
+        let with_cols_set: Option<
+            BTreeSet<IStr>,
+        > = with_columns.map(|cols| {
+            cols.into_iter()
+                .map(|c| c.istr())
+                .collect()
+        });
 
         IcechunkIterator::new(
             self.inner.clone(),
@@ -446,7 +451,7 @@ impl PyIcechunkBackend {
                     if let Some(var) = vars.first() {
                         if let Ok(arr) = Array::async_open(
                             backend.async_store().clone(),
-                            &normalize_path(*var),
+                            &normalize_path(var),
                         )
                         .await
                         {
@@ -711,9 +716,6 @@ where
     const DEFAULT_MAX_CONCURRENCY: usize = 32;
     let meta = backend.metadata().await?;
 
-    let planning_meta =
-        StdArc::new(meta.planning_meta());
-
     // // Expand struct column names to flat paths for chunk reading
     // let expanded_with_columns =
     //     with_columns.as_ref().map(|cols| {
@@ -730,14 +732,8 @@ where
 
     // Check max_chunks_to_read limit before doing any I/O
     if let Some(max_chunks) = max_chunks_to_read {
-        let total_chunks = grouped_plan
-            .total_unique_chunks()
-            .map_err(|e| {
-                PyErr::new::<
-                    pyo3::exceptions::PyValueError,
-                    _,
-                >(e)
-            })?;
+        let total_chunks =
+            grouped_plan.total_unique_chunks()?;
         if total_chunks > max_chunks {
             return Err(PyErr::new::<
                 pyo3::exceptions::PyRuntimeError,
@@ -761,17 +757,9 @@ where
     for group in
         grouped_plan.iter_consolidated_chunks()
     {
-        let group = group.map_err(|e| {
-            PyErr::new::<
-                pyo3::exceptions::PyValueError,
-                _,
-            >(e)
-        })?;
-        let vars: Vec<IStr> = group
-            .vars
-            .iter()
-            .map(|v| v.istr())
-            .collect();
+        let group = group?;
+        let vars: Vec<IStr> =
+            group.vars.iter().cloned().collect();
 
         for (idx, subset) in group
             .chunk_indices
@@ -784,6 +772,7 @@ where
             let array_shape =
                 group.array_shape.clone();
             let vars = vars.clone();
+            let meta = meta.clone();
 
             futs.push(async move {
                 let _permit = sem
@@ -798,6 +787,7 @@ where
                     &vars,
                     None,
                     subset.as_ref(),
+                    &meta,
                 )
                 .await
             });
@@ -820,7 +810,7 @@ where
             .cloned()
             .collect();
         polars::prelude::DataFrame::empty_with_schema(
-            &planning_meta.tidy_schema(Some(keys.as_slice())),
+            &meta.tidy_schema(Some(keys.as_slice())),
         )
     } else if dfs.len() == 1 {
         dfs.into_iter().next().unwrap()
@@ -830,7 +820,9 @@ where
 
     // For hierarchical data, convert flat path columns to struct columns
     if meta.is_hierarchical() {
-        restructure_to_structs(&result, &meta)
+        Ok(restructure_to_structs(
+            &result, &meta,
+        )?)
     } else {
         Ok(result)
     }

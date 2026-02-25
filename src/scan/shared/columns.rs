@@ -6,6 +6,7 @@ pub(crate) use std::collections::BTreeSet;
 
 use crate::IStr;
 use crate::chunk_plan::ChunkSubset;
+use crate::meta::VarEncoding;
 
 /// Represents which flat indices in a chunk are in-bounds.
 ///
@@ -141,48 +142,98 @@ pub(crate) fn build_coord_column(
     chunk_shape: &[u64],
     origin: &[u64],
     coord_data: Option<&ColumnData>,
-    time_encoding: Option<
-        &crate::meta::TimeEncoding,
-    >,
+    encoding: Option<&VarEncoding>,
 ) -> Column {
     let stride = strides[dim_idx] as usize;
     let cs = chunk_shape[dim_idx] as usize;
     let origin_val = origin[dim_idx] as i64;
 
     if let Some(coord) = coord_data {
-        if let Some(te) = time_encoding {
-            // Decode coord values first (only cs
-            // elements), then expand to output size.
-            let decoded =
-                coord.map_i64(|v| te.decode(v));
-            let gathered = match keep {
-                KeepMask::All(n) => {
-                    let tile_count =
-                        *n / (cs * stride);
-                    decoded.repeat_tile(
-                        stride, tile_count,
-                    )
+        if let Some(enc) = encoding {
+            match enc {
+                VarEncoding::Time(te) => {
+                    let decoded = coord
+                        .map_i64(|v| te.decode(v));
+                    let gathered = match keep {
+                        KeepMask::All(n) => {
+                            let tile_count =
+                                *n / (cs * stride);
+                            decoded.repeat_tile(
+                                stride, tile_count,
+                            )
+                        }
+                        KeepMask::Sparse(idx) => {
+                            let local_idx =
+                                |row: usize| {
+                                    (row / stride)
+                                        % cs
+                                };
+                            decoded.gather_by(
+                                idx.len(),
+                                |i| {
+                                    local_idx(
+                                        idx[i],
+                                    )
+                                },
+                            )
+                        }
+                    };
+                    let series_uncast = gathered
+                        .into_series(
+                            dim_name.into(),
+                        );
+                    return series_uncast
+                        .cast(
+                            &te.to_polars_dtype(),
+                        )
+                        .unwrap_or(series_uncast)
+                        .into();
                 }
-                KeepMask::Sparse(idx) => {
-                    let local_idx =
-                        |row: usize| {
-                            (row / stride) % cs
-                        };
-                    decoded.gather_by(
-                        idx.len(),
-                        |i| local_idx(idx[i]),
-                    )
+                VarEncoding::ScaleOffset {
+                    scale_factor,
+                    add_offset,
+                    fill_value,
+                } => {
+                    let decoded =
+                        coord.to_f64_scaled(
+                            *scale_factor,
+                            *add_offset,
+                            *fill_value,
+                        );
+                    let gathered = match keep {
+                        KeepMask::All(n) => {
+                            let tile_count =
+                                *n / (cs * stride);
+                            decoded.repeat_tile(
+                                stride, tile_count,
+                            )
+                        }
+                        KeepMask::Sparse(idx) => {
+                            let local_idx =
+                                |row: usize| {
+                                    (row / stride)
+                                        % cs
+                                };
+                            decoded.gather_by(
+                                idx.len(),
+                                |i| {
+                                    local_idx(
+                                        idx[i],
+                                    )
+                                },
+                            )
+                        }
+                    };
+                    return gathered
+                        .into_series(
+                            dim_name.into(),
+                        )
+                        .into();
                 }
-            };
-            let series_uncast = gathered
-                .into_series(dim_name.into());
-            return series_uncast
-                .cast(&te.to_polars_dtype())
-                .unwrap_or(series_uncast)
-                .into();
+            }
         }
 
-        // Coord data, no time encoding
+        // Coord data, no encoding
         let gathered = match keep {
             KeepMask::All(n) => {
                 let tile_count =
@@ -288,6 +339,41 @@ pub(crate) fn compute_in_bounds_mask(
     KeepMask::Sparse(keep)
 }
 
+/// Apply encoding to a gathered `ColumnData`, returning
+/// a Polars `Column`. For `Time`, maps i64 then casts.
+/// For `ScaleOffset`, decodes to f64. No-op if `None`.
+fn apply_encoding(
+    data: ColumnData,
+    name: &str,
+    encoding: Option<&VarEncoding>,
+) -> Column {
+    match encoding {
+        Some(VarEncoding::Time(te)) => {
+            let decoded =
+                data.map_i64(|v| te.decode(v));
+            let series_uncast =
+                decoded.into_series(name);
+            series_uncast
+                .cast(&te.to_polars_dtype())
+                .unwrap_or(series_uncast)
+                .into()
+        }
+        Some(VarEncoding::ScaleOffset {
+            scale_factor,
+            add_offset,
+            fill_value,
+        }) => data
+            .to_f64_scaled(
+                *scale_factor,
+                *add_offset,
+                *fill_value,
+            )
+            .into_series(name)
+            .into(),
+        None => data.into_series(name).into(),
+    }
+}
+
 /// Build a variable column for the DataFrame.
 ///
 /// Takes `data` by value so the common fast path
@@ -295,7 +381,7 @@ pub(crate) fn compute_in_bounds_mask(
 /// buffer directly to Polars with zero copying.
 pub(crate) fn build_var_column(
     name: &IStr,
-    data: ColumnData,
+    data: Arc<ColumnData>,
     var_dims: &[IStr],
     var_chunk_shape: &[u64],
     var_offsets: &[u64],
@@ -303,6 +389,7 @@ pub(crate) fn build_var_column(
     primary_chunk_shape: &[u64],
     primary_strides: &[u64],
     keep: &KeepMask,
+    encoding: Option<&VarEncoding>,
 ) -> Column {
     // Check if we can use direct indexing
     let same_dims = var_dims.len()
@@ -317,18 +404,36 @@ pub(crate) fn build_var_column(
         && same_chunk_shape
         && zero_offsets
     {
-        return match keep {
-            KeepMask::All(_) => {
-                // Zero-copy: hand buffer directly
-                // to Polars Series (no clone).
-                data.into_series(name.as_ref())
+        if encoding.is_none() {
+            return match keep {
+                KeepMask::All(_) => {
+                    data.borrow_into_series(
+                        name.as_ref(),
+                    )
                     .into()
+                }
+                KeepMask::Sparse(idx) => data
+                    .take_indices(idx)
+                    .into_series(name.as_ref())
+                    .into(),
+            };
+        }
+
+        let gathered = match keep {
+            KeepMask::All(_) => {
+                // Cannot zero-copy when encoding
+                // needs to transform data.
+                (*data).clone()
             }
-            KeepMask::Sparse(idx) => data
-                .take_indices(idx)
-                .into_series(name.as_ref())
-                .into(),
+            KeepMask::Sparse(idx) => {
+                data.take_indices(idx)
+            }
         };
+        return apply_encoding(
+            gathered,
+            name.as_ref(),
+            encoding,
+        );
     }
 
     // Slow path: map indices through dimension
@@ -379,16 +484,19 @@ pub(crate) fn build_var_column(
             .min(var_data_len.saturating_sub(1))
     };
 
-    match keep {
-        KeepMask::All(n) => data
-            .gather_by(*n, |i| {
-                compute_var_idx(i)
-            }),
-        KeepMask::Sparse(idx) => data
-            .gather_by(idx.len(), |i| {
+    let gathered = match keep {
+        KeepMask::All(n) => data.gather_by(*n, |i| {
+            compute_var_idx(i)
+        }),
+        KeepMask::Sparse(idx) => {
+            data.gather_by(idx.len(), |i| {
                 compute_var_idx(idx[i])
-            }),
-    }
-    .into_series(name.as_ref())
-    .into()
+            })
+        }
+    };
+    apply_encoding(
+        gathered,
+        name.as_ref(),
+        encoding,
+    )
 }

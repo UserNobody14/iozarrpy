@@ -18,8 +18,10 @@ use crate::errors::BackendError;
 use crate::reader::ShardedCacheSync;
 use crate::shared::normalize_path;
 
+use crate::errors::BackendResult;
 use crate::store::adapters::TokioBlockOn;
 use crate::store::array::OpenedArraySync;
+use snafu::ResultExt;
 
 pub struct OpenedStore {
     pub store: ReadableWritableListableStorage,
@@ -49,12 +51,7 @@ impl OpenedStore {
             )
         } else {
             Array::open(strtraits, &norm)
-        }
-        .map_err(|e| {
-            BackendError::ArrayOpenFailed(
-                e.to_string(),
-            )
-        })?;
+        }?;
         let array_arc = Arc::new(array);
         let cache = ShardedCacheSync::new(
             array_arc.as_ref(),
@@ -69,7 +66,7 @@ impl OpenedStore {
 pub fn open_store_from_object_store(
     store: Arc<dyn ObjectStore>,
     prefix: Option<String>,
-) -> Result<OpenedStore, String> {
+) -> BackendResult<OpenedStore> {
     if let Some(ref p) = prefix {
         let path = Path::new(p);
         if path.is_absolute() && path.exists() {
@@ -86,9 +83,12 @@ pub fn open_store_from_object_store(
     }
     let async_store: AsyncReadableWritableListableStorage =
         Arc::new(AsyncObjectStore::new(store));
-    let rt = Arc::new(Runtime::new().map_err(|e| {
-        format!("failed to create tokio runtime: {e}")
-    })?);
+    let rt = Arc::new(Runtime::new().context(
+        crate::errors::backend::CreateTokioRuntimeForSyncStoreSnafu {
+            store: prefix.clone().unwrap_or_default(),
+            prefix: prefix.clone().unwrap_or_default(),
+        }
+    )?);
     let sync_store =
         AsyncToSyncStorageAdapter::new(
             async_store,
@@ -119,18 +119,19 @@ pub fn open_store_from_object_store(
 /// If `zarr_url` is not a valid URL, it is treated as a local filesystem path.
 pub fn open_store(
     zarr_url: &str,
-) -> Result<OpenedStore, String> {
+) -> BackendResult<OpenedStore> {
     if !zarr_url.contains("://") {
         return open_filesystem_store(zarr_url);
     }
 
-    let url = Url::parse(zarr_url)
-        .map_err(|e| e.to_string())?;
+    let url = Url::parse(zarr_url)?;
 
     if url.scheme() == "file" {
         let path =
             url.to_file_path().map_err(|_| {
-                "invalid file:// URL".to_string()
+                BackendError::InvalidFileUrl {
+                    url: zarr_url.to_string(),
+                }
             })?;
         let path =
             path.to_string_lossy().to_string();
@@ -138,14 +139,16 @@ pub fn open_store(
     }
 
     let (store, prefix) =
-        object_store::parse_url(&url)
-            .map_err(|e| e.to_string())?;
+        object_store::parse_url(&url)?;
 
     let async_store: AsyncReadableWritableListableStorage =
         Arc::new(AsyncObjectStore::new(store));
-    let rt = Arc::new(Runtime::new().map_err(|e| {
-        format!("failed to create tokio runtime: {e}")
-    })?);
+    let rt = Arc::new(Runtime::new().context(
+        crate::errors::backend::CreateTokioRuntimeForSyncStoreSnafu {
+            prefix: prefix.clone(),
+            store: zarr_url.to_string(),
+        }
+    )?);
     let sync_store =
         AsyncToSyncStorageAdapter::new(
             async_store,
@@ -166,13 +169,12 @@ pub fn open_store(
 
 fn open_filesystem_store(
     path: &str,
-) -> Result<OpenedStore, String> {
+) -> BackendResult<OpenedStore> {
     let store_path: PathBuf = path.into();
     let store =
         zarrs::filesystem::FilesystemStore::new(
             &store_path,
-        )
-        .map_err(|e| e.to_string())?;
+        )?;
     Ok(OpenedStore {
         store: Arc::new(store),
         root: "/".to_string(),

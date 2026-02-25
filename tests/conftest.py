@@ -6,7 +6,9 @@ import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import numpy as np
 import pytest
+import xarray as xr
 from zarr.codecs import BloscCodec, BloscShuffle
 
 OUTPUT_DIR = Path(__file__).resolve().parent / "output-datasets"
@@ -733,6 +735,9 @@ def _generate_icechunk_datasets(output_dir: Path) -> dict[str, IcechunkDatasetIn
         get_comprehensive_3d_encoding,
         get_multi_var_encoding,
         get_orography_encoding,
+        get_orography_encoding_generic,
+        get_zlib_encoding_2d,
+        get_zlib_encoding_3d,
     )
 
     datasets: dict[str, IcechunkDatasetInfo] = {}
@@ -784,6 +789,77 @@ def _generate_icechunk_datasets(output_dir: Path) -> dict[str, IcechunkDatasetIn
         data_vars=["temp", "precip", "wind_u", "wind_v", "pressure", "surface"],
     )
 
+    # =========================================================================
+    # Zlib/Gzip codec datasets - for dtype preservation testing
+    # =========================================================================
+
+    # 2D float64 dataset with zlib (gzip) compression
+    na, nb = 20, 15
+    a_coords = np.arange(na, dtype=np.int64)
+    b_coords = np.arange(nb, dtype=np.int64)
+    rng = np.random.default_rng(42)
+    temp_data = rng.standard_normal((na, nb)).astype(np.float64) * 100.0
+
+    ds_zlib_2d = xr.Dataset(
+        data_vars={"temperature": (["a", "b"], temp_data)},
+        coords={"a": a_coords, "b": b_coords},
+    )
+    path = create_icechunk_repo_from_xarray_sync(
+        ds_zlib_2d,
+        icechunk_dir / "zlib_float64_2d.icechunk",
+        encoding=get_zlib_encoding_2d((10, 10)),
+    )
+    datasets["icechunk_zlib_float64_2d"] = IcechunkDatasetInfo(
+        path=path,
+        chunk_grid=(2, 2),
+        total_chunks=4,
+        dims=["a", "b"],
+        data_vars=["temperature"],
+    )
+
+    # 3D multi-dtype dataset with zlib (gzip) compression
+    na3, nb3, nc3 = 30, 20, 10
+    a3 = np.arange(na3, dtype=np.int64)
+    b3 = np.arange(nb3, dtype=np.int64)
+    c3 = np.arange(nc3, dtype=np.int64)
+    rng3 = np.random.default_rng(123)
+
+    ds_zlib_3d = xr.Dataset(
+        data_vars={
+            "data_f64": (["a", "b", "c"], rng3.standard_normal((na3, nb3, nc3)).astype(np.float64) * 1000.0),
+            "data_f32": (["a", "b", "c"], rng3.standard_normal((na3, nb3, nc3)).astype(np.float32) * 500.0),
+            "data_i32": (["a", "b", "c"], rng3.integers(-1000, 1000, size=(na3, nb3, nc3), dtype=np.int32)),
+            "data_i16": (["a", "b", "c"], rng3.integers(-500, 500, size=(na3, nb3, nc3), dtype=np.int16)),
+        },
+        coords={"a": a3, "b": b3, "c": c3},
+    )
+    path = create_icechunk_repo_from_xarray_sync(
+        ds_zlib_3d,
+        icechunk_dir / "zlib_multidtype_3d.icechunk",
+        encoding=get_zlib_encoding_3d(10),
+    )
+    datasets["icechunk_zlib_multidtype_3d"] = IcechunkDatasetInfo(
+        path=path,
+        chunk_grid=(3, 2, 1),
+        total_chunks=6,
+        dims=["a", "b", "c"],
+        data_vars=["data_f64", "data_f32", "data_i32", "data_i16"],
+    )
+
+    # Same 2D float64 data with blosc compression (control group)
+    path = create_icechunk_repo_from_xarray_sync(
+        ds_zlib_2d,
+        icechunk_dir / "blosc_float64_2d.icechunk",
+        encoding=get_orography_encoding_generic((10, 10)),
+    )
+    datasets["icechunk_blosc_float64_2d"] = IcechunkDatasetInfo(
+        path=path,
+        chunk_grid=(2, 2),
+        total_chunks=4,
+        dims=["a", "b"],
+        data_vars=["temperature"],
+    )
+
     return datasets
 
 
@@ -795,6 +871,9 @@ def icechunk_datasets() -> dict[str, IcechunkDatasetInfo]:
     - 'icechunk_orography': 2D orography dataset (2x2=4 chunks)
     - 'icechunk_comprehensive_3d': 3D dataset (7x5x3=105 chunks) for predicate testing
     - 'icechunk_multi_var': Multi-variable dataset (5x4x3=60 chunks)
+    - 'icechunk_zlib_float64_2d': 2D float64 dataset with zlib compression
+    - 'icechunk_zlib_multidtype_3d': 3D multi-dtype dataset with zlib compression
+    - 'icechunk_blosc_float64_2d': 2D float64 dataset with blosc (control)
     """
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     return _generate_icechunk_datasets(OUTPUT_DIR)

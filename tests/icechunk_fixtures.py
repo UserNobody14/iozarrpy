@@ -69,6 +69,14 @@ def get_orography_encoding(chunk_size: tuple[int, int] = (10, 10)) -> dict[str, 
     }
 
 
+def get_orography_encoding_generic(chunk_size: tuple[int, int] = (10, 10)) -> dict[str, Any]:
+    """Get blosc encoding for any single-variable 2D dataset (e.g. temperature)."""
+    blosc = get_default_blosc_codec()
+    return {
+        "temperature": {"chunks": chunk_size, "compressors": [blosc]},
+    }
+
+
 def get_comprehensive_3d_encoding(chunk_size: int = 10) -> dict[str, Any]:
     """Get standard encoding for comprehensive 3D datasets."""
     blosc = get_default_blosc_codec()
@@ -89,4 +97,25 @@ def get_multi_var_encoding(chunk_size: int = 10) -> dict[str, Any]:
         "wind_v": {"chunks": (chunk_size, chunk_size, chunk_size), "compressors": [blosc]},
         "pressure": {"chunks": (chunk_size, chunk_size, chunk_size), "compressors": [blosc]},
         "surface": {"chunks": (chunk_size, chunk_size), "compressors": [blosc]},
+    }
+
+
+def get_zlib_encoding_2d(chunk_size: tuple[int, int] = (10, 10)) -> dict[str, Any]:
+    """Get zlib/gzip encoding for 2D datasets."""
+    from zarr.codecs import GzipCodec
+    gzip = GzipCodec(level=5)
+    return {
+        "temperature": {"chunks": chunk_size, "compressors": [gzip]},
+    }
+
+
+def get_zlib_encoding_3d(chunk_size: int = 10) -> dict[str, Any]:
+    """Get zlib/gzip encoding for 3D datasets."""
+    from zarr.codecs import GzipCodec
+    gzip = GzipCodec(level=5)
+    return {
+        "data_f64": {"chunks": (chunk_size, chunk_size, chunk_size), "compressors": [gzip]},
+        "data_f32": {"chunks": (chunk_size, chunk_size, chunk_size), "compressors": [gzip]},
+        "data_i32": {"chunks": (chunk_size, chunk_size, chunk_size), "compressors": [gzip]},
+        "data_i16": {"chunks": (chunk_size, chunk_size, chunk_size), "compressors": [gzip]},
     }

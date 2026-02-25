@@ -1,127 +1,1076 @@
-//! Collection and materialization of lazy selections.
+//! Direct resolution and materialization of lazy selections.
 //!
-//! This module provides functions to:
-//! 1. Collect all resolution requests from a lazy selection
-//! 2. Materialize a lazy selection into a concrete selection using a resolution cache
+//! Resolves `LazyDimConstraint` values directly via the backend (binary search
+//! on coordinate arrays) rather than through a request/cache indirection.
+//! Coordinate chunk I/O is already cached by the Moka layer in the backend.
 
-use std::collections::{BTreeMap, HashSet};
-use std::ops::Range;
+use std::collections::BTreeMap;
+use std::ops::{Bound, Range};
 use std::sync::Arc;
 
+use smallvec::SmallVec;
 use zarrs::array::ArraySubset;
 
 use super::grouped_selection::GroupedSelection;
 use super::lazy_selection::{
-    LazyArraySelection, LazyDatasetSelection,
-    LazyDimConstraint, LazyHyperRectangle,
+    LazyArraySelection, LazyDimConstraint,
+    LazyHyperRectangle,
 };
 use super::resolver_traits::{
-    ResolutionCache, ResolutionError,
-    ResolutionRequest,
+    DimResolutionCtx, ResolutionError,
 };
 use super::selection::{
     DataArraySelection, DatasetSelection,
     Emptyable, SetOperations,
 };
-use super::types::DimSignature;
+use super::types::{
+    DimSignature, ValueRangePresent,
+};
+use crate::IStr;
+use crate::chunk_plan::exprs::expr_plan::{
+    ExprPlan, VarSet,
+};
+use crate::chunk_plan::indexing::selection::ArraySubsetList;
+use crate::meta::ZarrMeta;
 
-/// Materialize a lazy dataset selection into a concrete selection.
-///
-/// Uses the provided cache to resolve value ranges to index ranges.
-pub(crate) fn materialize(
-    selection: &LazyDatasetSelection,
-    meta: &ZarrDatasetMeta,
-    cache: &dyn ResolutionCache,
-) -> Result<DatasetSelection, ResolutionError> {
-    match selection {
-        LazyDatasetSelection::NoSelectionMade => {
-            Ok(DatasetSelection::NoSelectionMade)
+use super::types::CoordScalar;
+use crate::reader::ColumnData;
+
+/// Extract a coordinate value from a `ColumnData` chunk, preserving the
+/// original numeric type.  Float columns yield `CoordScalar::F64` (avoiding
+/// the lossy `f64 as i64` truncation that `get_i64` would apply), while
+/// integer/bool columns go through the existing time-encoding path.
+fn coord_scalar_from_chunk(
+    chunk: &ColumnData,
+    offset: usize,
+    time_enc: Option<&crate::meta::TimeEncoding>,
+) -> Option<CoordScalar> {
+    match chunk {
+        ColumnData::F64(v) => {
+            Some(CoordScalar::F64(v[offset]))
         }
-        LazyDatasetSelection::Empty => {
-            Ok(DatasetSelection::Empty)
+        ColumnData::F32(v) => {
+            Some(CoordScalar::F64(v[offset] as f64))
         }
-        LazyDatasetSelection::Selection(sel) => {
-            // Materialize once per dimension signature
-            let mut by_dims: BTreeMap<
-                Arc<DimSignature>,
-                DataArraySelection,
-            > = BTreeMap::new();
+        _ => chunk.get_i64(offset).map(|raw| {
+            crate::chunk_plan::apply_time_encoding(
+                raw, time_enc,
+            )
+        }),
+    }
+}
 
-            for (sig, array_sel) in
-                sel.by_signature()
-            {
-                // Use the signature's dims to determine shape
-                let dims = sig.dims();
-                let shape =
-                    dims_to_shape(dims, meta)?;
+// ============================================================================
+// Pure binary-search helpers (no I/O)
+// ============================================================================
 
-                let materialized =
-                    materialize_array(
-                        array_sel,
-                        &dims
-                            .iter()
-                            .cloned()
-                            .collect(),
-                        shape,
-                        cache,
-                    )?;
-                if !materialized.is_empty() {
-                    // We need an Arc for the key - find it from the lazy selection
-                    if let Some(arc_sig) =
-                        sel.by_dims().keys().find(
-                            |k| k.as_ref() == sig,
-                        )
-                    {
-                        by_dims.insert(
-                            arc_sig.clone(),
-                            materialized,
-                        );
-                    }
-                }
+use std::cmp::Ordering as Ord;
+
+#[inline(always)]
+fn lower_bound_should_go_left(
+    dir: Ord,
+    strict: bool,
+    cmp: Option<Ord>,
+) -> bool {
+    matches!(
+        (dir, strict, cmp),
+        (
+            Ord::Less | Ord::Equal,
+            false,
+            Some(Ord::Greater | Ord::Equal)
+        ) | (Ord::Less, true, Some(Ord::Greater))
+            | (
+                Ord::Greater | Ord::Equal,
+                false,
+                Some(Ord::Less | Ord::Equal)
+            )
+            | (
+                Ord::Greater,
+                true,
+                Some(Ord::Less)
+            )
+    )
+}
+
+#[inline(always)]
+fn upper_bound_should_go_right(
+    dir: Ord,
+    strict: bool,
+    cmp: Option<Ord>,
+) -> bool {
+    matches!(
+        (dir, strict, cmp),
+        (
+            Ord::Less | Ord::Equal,
+            false,
+            Some(Ord::Less | Ord::Equal)
+        ) | (Ord::Less, true, Some(Ord::Less))
+            | (
+                Ord::Greater | Ord::Equal,
+                false,
+                Some(Ord::Greater | Ord::Equal)
+            )
+            | (
+                Ord::Greater,
+                true,
+                Some(Ord::Greater)
+            )
+    )
+}
+
+fn monotonic_sample_indices(
+    n: u64,
+    chunk_size: u64,
+) -> [u64; 5] {
+    if n == 0 {
+        panic!("n cannot be 0");
+    }
+    let mut samples = [
+        0u64,
+        chunk_size.saturating_sub(1).min(n - 1),
+        chunk_size.min(n - 1),
+        (n / 2).min(n - 1),
+        n - 1,
+    ];
+    samples.sort();
+    samples
+}
+
+#[inline(always)]
+fn monotonic_ord_matches(
+    dir: Ord,
+    ord: Option<Ord>,
+) -> bool {
+    matches!(
+        (dir, ord),
+        (Ord::Less, Some(Ord::Less | Ord::Equal))
+            | (
+                Ord::Greater,
+                Some(Ord::Greater | Ord::Equal)
+            )
+    )
+}
+
+fn check_monotonic_from_samples(
+    first: &CoordScalar,
+    last: &CoordScalar,
+    samples: &[CoordScalar],
+) -> Option<Ord> {
+    let dir = match first.partial_cmp(last) {
+        Some(Ord::Less | Ord::Equal) => Ord::Less,
+        Some(Ord::Greater) => Ord::Greater,
+        None => return None,
+    };
+    let mut prev = None;
+    for v in samples {
+        if let Some(p) = prev {
+            if !monotonic_ord_matches(
+                dir,
+                CoordScalar::partial_cmp(p, v),
+            ) {
+                return None;
             }
+        }
+        prev = Some(v);
+    }
+    Some(dir)
+}
 
-            if by_dims.is_empty() {
-                Ok(DatasetSelection::Empty)
+#[inline(always)]
+fn should_go_right(
+    target: &CoordScalar,
+    v: &CoordScalar,
+    dir: Ord,
+    strict: bool,
+    is_upper: bool,
+) -> bool {
+    let cmp = v.partial_cmp(target);
+    if is_upper {
+        upper_bound_should_go_right(
+            dir, strict, cmp,
+        )
+    } else {
+        !lower_bound_should_go_left(
+            dir, strict, cmp,
+        )
+    }
+}
+
+// ============================================================================
+// Sync resolution
+// ============================================================================
+
+use crate::shared::ChunkedDataBackendSync;
+
+fn scalar_at_sync<B: ChunkedDataBackendSync>(
+    backend: &B,
+    dim: &IStr,
+    idx: u64,
+    n: u64,
+    chunk_size: u64,
+    time_enc: Option<&crate::meta::TimeEncoding>,
+) -> Option<CoordScalar> {
+    if idx >= n {
+        return None;
+    }
+    let chunk_idx = idx / chunk_size;
+    let offset = (idx % chunk_size) as usize;
+    let chunk = backend
+        .read_chunk_sync(dim, &[chunk_idx])
+        .ok()?;
+    coord_scalar_from_chunk(
+        &chunk, offset, time_enc,
+    )
+}
+
+fn check_monotonicity_sync<
+    B: ChunkedDataBackendSync,
+>(
+    backend: &B,
+    ctx: &DimResolutionCtx,
+) -> Option<Ord> {
+    if ctx.n < 2 {
+        return Some(Ord::Less);
+    }
+    let te = ctx.time_enc.as_ref();
+    let ap = &ctx.array_path;
+    let first = scalar_at_sync(
+        backend,
+        ap,
+        0,
+        ctx.n,
+        ctx.chunk_size,
+        te,
+    )?;
+    let last = scalar_at_sync(
+        backend,
+        ap,
+        ctx.n - 1,
+        ctx.n,
+        ctx.chunk_size,
+        te,
+    )?;
+    let indices = monotonic_sample_indices(
+        ctx.n,
+        ctx.chunk_size,
+    );
+    let mut samples =
+        Vec::with_capacity(indices.len());
+    for &i in &indices {
+        samples.push(scalar_at_sync(
+            backend,
+            ap,
+            i,
+            ctx.n,
+            ctx.chunk_size,
+            te,
+        )?);
+    }
+    check_monotonic_from_samples(
+        &first, &last, &samples,
+    )
+}
+
+fn sync_binary_search<
+    B: ChunkedDataBackendSync,
+>(
+    backend: &B,
+    ctx: &DimResolutionCtx,
+    target: &CoordScalar,
+    strict: bool,
+    dir: Ord,
+    is_upper: bool,
+) -> Option<u64> {
+    let te = ctx.time_enc.as_ref();
+    let ap = &ctx.array_path;
+    let mut lo = 0u64;
+    let mut hi = ctx.n;
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        let v = scalar_at_sync(
+            backend,
+            ap,
+            mid,
+            ctx.n,
+            ctx.chunk_size,
+            te,
+        )?;
+        if should_go_right(
+            target, &v, dir, strict, is_upper,
+        ) {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    Some(lo)
+}
+
+fn resolve_value_range_sync<
+    B: ChunkedDataBackendSync,
+>(
+    backend: &B,
+    ctx: &DimResolutionCtx,
+    vr: &ValueRangePresent,
+    dir: Ord,
+) -> Option<Range<u64>> {
+    use std::ops::Bound;
+    let start = match &vr.0 {
+        Bound::Included(s)
+        | Bound::Excluded(s) => {
+            let strict = matches!(
+                &vr.0,
+                Bound::Excluded(_)
+            );
+            sync_binary_search(
+                backend, ctx, s, strict, dir,
+                false,
+            )?
+        }
+        Bound::Unbounded => 0,
+    };
+    let end = match &vr.1 {
+        Bound::Included(s)
+        | Bound::Excluded(s) => {
+            let strict = matches!(
+                &vr.1,
+                Bound::Excluded(_)
+            );
+            sync_binary_search(
+                backend, ctx, s, strict, dir,
+                true,
+            )?
+        }
+        Bound::Unbounded => ctx.n,
+    };
+    Some(start..end)
+}
+
+/// Resolve a single `LazyDimConstraint` to index ranges synchronously.
+fn resolve_constraint_sync<
+    B: ChunkedDataBackendSync,
+>(
+    backend: &B,
+    dim: &IStr,
+    constraint: &LazyDimConstraint,
+    dim_range: Range<u64>,
+    meta: &ZarrMeta,
+) -> Result<Vec<Range<u64>>, ResolutionError> {
+    match constraint {
+        LazyDimConstraint::All => {
+            Ok(vec![dim_range])
+        }
+        LazyDimConstraint::Empty => Ok(vec![]),
+        LazyDimConstraint::Unresolved(vr) => {
+            if let Some(r) =
+                try_resolve_index_only(
+                    dim,
+                    meta,
+                    dim_range.end,
+                    vr,
+                )
+            {
+                return Ok(vec![r]);
+            }
+            let Some(ctx) =
+                DimResolutionCtx::from_meta(
+                    dim, meta,
+                )
+            else {
+                return Ok(vec![dim_range]);
+            };
+            let Some(dir) =
+                check_monotonicity_sync(
+                    backend, &ctx,
+                )
+            else {
+                return Ok(vec![dim_range]);
+            };
+            Ok(vec![
+                resolve_value_range_sync(
+                    backend, &ctx, vr, dir,
+                )
+                .unwrap_or(dim_range),
+            ])
+        }
+        LazyDimConstraint::InterpolationRange(
+            vr,
+        ) => {
+            if let Some(r) =
+                try_resolve_index_only(
+                    dim,
+                    meta,
+                    dim_range.end,
+                    vr,
+                )
+            {
+                let start =
+                    r.start.saturating_sub(1);
+                let end = r.end.saturating_add(1);
+                return Ok(vec![start..end]);
+            }
+            let Some(ctx) =
+                DimResolutionCtx::from_meta(
+                    dim, meta,
+                )
+            else {
+                // return Ok(vec![dim_range]);
+                return Err(
+                    ResolutionError::Unresolvable(
+                        "dimension not found in metadata".to_string(),
+                    )
+                );
+            };
+            let dim_expansion_size = 1u64;
+
+            let Some(dir) =
+                check_monotonicity_sync(
+                    backend, &ctx,
+                )
+            else {
+                // return Ok(vec![dim_range]);
+                return Err(
+                    ResolutionError::Unresolvable(
+                        "dimension not monotonic"
+                            .to_string(),
+                    ),
+                );
+            };
+            let r = resolve_value_range_sync(
+                backend, &ctx, vr, dir,
+            )
+            .unwrap_or(dim_range.clone());
+            let start = r
+                .start
+                .saturating_sub(
+                    dim_expansion_size,
+                )
+                .max(0);
+            let end = r
+                .end
+                .saturating_add(
+                    dim_expansion_size,
+                )
+                .min(ctx.n);
+            if start < end {
+                Ok(vec![start..end])
             } else {
-                // Preserve the var_to_sig mapping
-                let var_to_sig =
-                    sel.var_to_sig().clone();
-                let grouped =
-                    GroupedSelection::from_parts(
-                        by_dims, var_to_sig,
-                    );
-                Ok(DatasetSelection::Selection(
-                    grouped,
-                ))
+                Ok(vec![])
             }
         }
     }
 }
 
-/// Get shape for a dimension signature by looking up the first matching array.
-fn dims_to_shape(
-    dims: &[crate::IStr],
-    meta: &ZarrDatasetMeta,
-) -> Result<Arc<[u64]>, ResolutionError> {
-    // Find an array that has these dimensions
-    for (_, array_meta) in &meta.arrays {
-        if array_meta.dims.len() == dims.len()
-            && array_meta
-                .dims
-                .iter()
-                .zip(dims.iter())
-                .all(|(a, b)| a == b)
-        {
-            return Ok(array_meta.shape.clone());
+/// Resolve a `LazyArraySelection` to a `DataArraySelection` synchronously.
+fn resolve_array_sync<
+    B: ChunkedDataBackendSync,
+>(
+    backend: &B,
+    selection: &LazyArraySelection,
+    dims: &SmallVec<[IStr; 4]>,
+    shape: &[u64],
+    meta: &ZarrMeta,
+) -> Result<DataArraySelection, ResolutionError> {
+    match selection {
+        LazyArraySelection::Rectangles(rects) => {
+            let mut out = ArraySubsetList::new();
+            for rect in rects {
+                let materialized =
+                    resolve_rectangle_sync(
+                        backend, rect, dims,
+                        shape, meta,
+                    )?;
+                out = out.union(&materialized);
+            }
+            Ok(DataArraySelection::from_subsets(
+                dims, out,
+            ))
+        }
+        LazyArraySelection::Difference(a, b) => {
+            let a_mat = resolve_array_sync(
+                backend, a, dims, shape, meta,
+            )?;
+            let b_mat = resolve_array_sync(
+                backend, b, dims, shape, meta,
+            )?;
+            Ok(a_mat.difference(&b_mat))
+        }
+        LazyArraySelection::Union(a, b) => {
+            let a_mat = resolve_array_sync(
+                backend, a, dims, shape, meta,
+            )?;
+            let b_mat = resolve_array_sync(
+                backend, b, dims, shape, meta,
+            )?;
+            Ok(a_mat.union(&b_mat))
         }
     }
+}
 
-    // Fallback: construct shape from coordinate arrays
+fn resolve_rectangle_sync<
+    B: ChunkedDataBackendSync,
+>(
+    backend: &B,
+    rect: &LazyHyperRectangle,
+    dims: &SmallVec<[IStr; 4]>,
+    shape: &[u64],
+    meta: &ZarrMeta,
+) -> Result<ArraySubsetList, ResolutionError> {
+    if rect.is_empty() {
+        return Ok(ArraySubsetList::empty());
+    }
+    let mut current_subsets: Vec<
+        Vec<Range<u64>>,
+    > = vec![
+        (0..dims.len())
+            .map(|i| 0..shape[i])
+            .collect(),
+    ];
+
+    for (dim, constraint) in rect.dims() {
+        let dim_idx_option =
+            dims.iter().position(|d| d == dim);
+        if let Some(dim_idx) = dim_idx_option {
+            let range_list =
+                resolve_constraint_sync(
+                    backend,
+                    dim,
+                    constraint,
+                    0..shape[dim_idx],
+                    meta,
+                )?;
+            if range_list.is_empty() {
+                return Ok(
+                    ArraySubsetList::empty(),
+                );
+            }
+            let mut new_subsets = Vec::new();
+            for subset in current_subsets.iter() {
+                for range in range_list.iter() {
+                    if !range.is_empty() {
+                        let mut new_subset =
+                            subset.clone();
+                        new_subset[dim_idx] =
+                            range.clone();
+                        new_subsets
+                            .push(new_subset);
+                    }
+                }
+            }
+            if new_subsets.is_empty() {
+                return Ok(
+                    ArraySubsetList::empty(),
+                );
+            }
+            current_subsets = new_subsets;
+        }
+    }
+    let mut out_list = ArraySubsetList::new();
+    for subset in current_subsets {
+        out_list.push(
+            ArraySubset::new_with_ranges(&subset),
+        );
+    }
+    Ok(out_list)
+}
+
+// ============================================================================
+// Async resolution
+//
+// Uses per-step binary search (same as sync) but with parallelism where
+// independent work exists: concurrent monotonicity sample reads, concurrent
+// dimension resolution within rectangles, and concurrent Union/Difference arms.
+// ============================================================================
+
+use crate::shared::ChunkedDataBackendAsync;
+
+async fn scalar_at_async<
+    B: ChunkedDataBackendAsync,
+>(
+    backend: &B,
+    dim: &IStr,
+    idx: u64,
+    n: u64,
+    chunk_size: u64,
+    time_enc: Option<&crate::meta::TimeEncoding>,
+) -> Option<CoordScalar> {
+    if idx >= n {
+        return None;
+    }
+    let chunk_idx = idx / chunk_size;
+    let offset = (idx % chunk_size) as usize;
+    let chunk = backend
+        .read_chunk_async(dim, &[chunk_idx])
+        .await
+        .ok()?;
+    coord_scalar_from_chunk(
+        &chunk, offset, time_enc,
+    )
+}
+
+async fn check_monotonicity_async<
+    B: ChunkedDataBackendAsync,
+>(
+    backend: &B,
+    ctx: &DimResolutionCtx,
+) -> Option<Ord> {
+    if ctx.n < 2 {
+        return Some(Ord::Less);
+    }
+    let te = ctx.time_enc.as_ref();
+    let ap = &ctx.array_path;
+    let indices = monotonic_sample_indices(
+        ctx.n,
+        ctx.chunk_size,
+    );
+
+    // Fetch first, last, and sample points concurrently
+    let first_fut = scalar_at_async(
+        backend,
+        ap,
+        0,
+        ctx.n,
+        ctx.chunk_size,
+        te,
+    );
+    let last_fut = scalar_at_async(
+        backend,
+        ap,
+        ctx.n - 1,
+        ctx.n,
+        ctx.chunk_size,
+        te,
+    );
+    let sample_futs: Vec<_> = indices
+        .iter()
+        .map(|&i| {
+            scalar_at_async(
+                backend,
+                ap,
+                i,
+                ctx.n,
+                ctx.chunk_size,
+                te,
+            )
+        })
+        .collect();
+
+    let (first, last, sample_results) = tokio::join!(
+        first_fut,
+        last_fut,
+        futures::future::join_all(sample_futs)
+    );
+
+    let first = first?;
+    let last = last?;
+    let samples: Option<Vec<CoordScalar>> =
+        sample_results.into_iter().collect();
+    check_monotonic_from_samples(
+        &first, &last, &samples?,
+    )
+}
+
+async fn async_binary_search<
+    B: ChunkedDataBackendAsync,
+>(
+    backend: &B,
+    ctx: &DimResolutionCtx,
+    target: &CoordScalar,
+    strict: bool,
+    dir: Ord,
+    is_upper: bool,
+) -> Option<u64> {
+    let te = ctx.time_enc.as_ref();
+    let ap = &ctx.array_path;
+    let mut lo = 0u64;
+    let mut hi = ctx.n;
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        let v = scalar_at_async(
+            backend,
+            ap,
+            mid,
+            ctx.n,
+            ctx.chunk_size,
+            te,
+        )
+        .await?;
+        if should_go_right(
+            target, &v, dir, strict, is_upper,
+        ) {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    Some(lo)
+}
+
+async fn resolve_value_range_async<
+    B: ChunkedDataBackendAsync,
+>(
+    backend: &B,
+    ctx: &DimResolutionCtx,
+    vr: &ValueRangePresent,
+    dir: Ord,
+) -> Option<Range<u64>> {
+    use std::ops::Bound;
+    let start = match &vr.0 {
+        Bound::Included(s)
+        | Bound::Excluded(s) => {
+            let strict = matches!(
+                &vr.0,
+                Bound::Excluded(_)
+            );
+
+            // let searched_start =
+            //     async_binary_search(
+            //         backend, ctx, s, strict, dir,
+            //         false,
+            //     )
+            //     .await?;
+
+            // if matches!(&vr.0, Bound::Included(_))
+            //     && vr.1
+            //         == Bound::Included(s.clone())
+            // {
+            //     return Some(
+            //         searched_start
+            //             ..searched_start,
+            //     );
+            // }
+            // searched_start
+            async_binary_search(
+                backend, ctx, s, strict, dir,
+                false,
+            )
+            .await?
+        }
+        Bound::Unbounded => 0,
+    };
+    let end = match &vr.1 {
+        Bound::Included(s)
+        | Bound::Excluded(s) => {
+            let strict = matches!(
+                &vr.1,
+                Bound::Excluded(_)
+            );
+            async_binary_search(
+                backend, ctx, s, strict, dir,
+                true,
+            )
+            .await?
+        }
+        Bound::Unbounded => ctx.n,
+    };
+    Some(start..end)
+}
+
+async fn resolve_constraint_async<
+    B: ChunkedDataBackendAsync,
+>(
+    backend: &B,
+    dim: &IStr,
+    constraint: &LazyDimConstraint,
+    dim_range: Range<u64>,
+    meta: &ZarrMeta,
+) -> Result<Vec<Range<u64>>, ResolutionError> {
+    match constraint {
+        LazyDimConstraint::All => {
+            Ok(vec![dim_range])
+        }
+        LazyDimConstraint::Empty => Ok(vec![]),
+        LazyDimConstraint::Unresolved(vr) => {
+            if let Some(r) =
+                try_resolve_index_only(
+                    dim,
+                    meta,
+                    dim_range.end,
+                    vr,
+                )
+            {
+                return Ok(vec![r]);
+            }
+            let Some(ctx) =
+                DimResolutionCtx::from_meta(
+                    dim, meta,
+                )
+            else {
+                return Ok(vec![dim_range]);
+            };
+            let Some(dir) =
+                check_monotonicity_async(
+                    backend, &ctx,
+                )
+                .await
+            else {
+                return Ok(vec![dim_range]);
+            };
+            Ok(vec![
+                resolve_value_range_async(
+                    backend, &ctx, vr, dir,
+                )
+                .await
+                .unwrap_or(dim_range),
+            ])
+        }
+        LazyDimConstraint::InterpolationRange(
+            vr,
+        ) => {
+            if let Some(r) =
+                try_resolve_index_only(
+                    dim,
+                    meta,
+                    dim_range.end,
+                    vr,
+                )
+            {
+                let start =
+                    r.start.saturating_sub(1);
+                let end = r.end.saturating_add(1);
+                return Ok(vec![start..end]);
+            }
+            let Some(ctx) =
+                DimResolutionCtx::from_meta(
+                    dim, meta,
+                )
+            else {
+                // return Ok(vec![dim_range]);
+                return Err(
+                    ResolutionError::Unresolvable(
+                        "dimension not found in metadata".to_string(),
+                    )
+                );
+            };
+            let Some(dir) =
+                check_monotonicity_async(
+                    backend, &ctx,
+                )
+                .await
+            else {
+                // return Ok(vec![dim_range]);
+                return Err(
+                    ResolutionError::Unresolvable(
+                        "dimension not monotonic"
+                            .to_string(),
+                    ),
+                );
+            };
+            let r = resolve_value_range_async(
+                backend, &ctx, vr, dir,
+            )
+            .await
+            .unwrap_or(dim_range.clone());
+
+            let dim_expansion_size = 1u64;
+
+            let start = r
+                .start
+                .saturating_sub(
+                    dim_expansion_size,
+                )
+                .max(0);
+            let end = r
+                .end
+                .saturating_add(
+                    dim_expansion_size,
+                )
+                .min(ctx.n);
+            if start < end {
+                Ok(vec![start..end])
+            } else {
+                Ok(vec![])
+            }
+        }
+    }
+}
+
+fn resolve_array_async<
+    'a,
+    B: ChunkedDataBackendAsync,
+>(
+    backend: &'a B,
+    selection: &'a LazyArraySelection,
+    dims: &'a SmallVec<[IStr; 4]>,
+    shape: &'a [u64],
+    meta: &'a ZarrMeta,
+) -> std::pin::Pin<
+    Box<
+        dyn std::future::Future<
+                Output = Result<
+                    DataArraySelection,
+                    ResolutionError,
+                >,
+            > + Send
+            + 'a,
+    >,
+> {
+    Box::pin(async move {
+        match selection {
+            LazyArraySelection::Rectangles(
+                rects,
+            ) => {
+                let mut out =
+                    ArraySubsetList::new();
+                for rect in rects {
+                    let materialized =
+                        resolve_rectangle_async(
+                            backend, rect, dims,
+                            shape, meta,
+                        )
+                        .await?;
+                    out =
+                        out.union(&materialized);
+                }
+                Ok(
+                    DataArraySelection::from_subsets(
+                        dims, out,
+                    ),
+                )
+            }
+            LazyArraySelection::Difference(
+                a,
+                b,
+            ) => {
+                let (a_mat, b_mat) = tokio::join!(
+                    resolve_array_async(
+                        backend, a, dims, shape,
+                        meta,
+                    ),
+                    resolve_array_async(
+                        backend, b, dims, shape,
+                        meta,
+                    )
+                );
+                Ok(a_mat?.difference(&b_mat?))
+            }
+            LazyArraySelection::Union(a, b) => {
+                let (a_mat, b_mat) = tokio::join!(
+                    resolve_array_async(
+                        backend, a, dims, shape,
+                        meta,
+                    ),
+                    resolve_array_async(
+                        backend, b, dims, shape,
+                        meta,
+                    )
+                );
+                Ok(a_mat?.union(&b_mat?))
+            }
+        }
+    })
+}
+
+async fn resolve_rectangle_async<
+    B: ChunkedDataBackendAsync,
+>(
+    backend: &B,
+    rect: &LazyHyperRectangle,
+    dims: &SmallVec<[IStr; 4]>,
+    shape: &[u64],
+    meta: &ZarrMeta,
+) -> Result<ArraySubsetList, ResolutionError> {
+    if rect.is_empty() {
+        return Ok(ArraySubsetList::empty());
+    }
+
+    // Resolve all dimensions concurrently
+    let constraint_futs: Vec<_> = rect
+        .dims()
+        .filter_map(|(dim, constraint)| {
+            let dim_idx = dims
+                .iter()
+                .position(|d| d == dim)?;
+            Some(async move {
+                let range_list =
+                    resolve_constraint_async(
+                        backend,
+                        dim,
+                        constraint,
+                        0..shape[dim_idx],
+                        meta,
+                    )
+                    .await?;
+                Ok::<_, ResolutionError>((
+                    dim_idx, range_list,
+                ))
+            })
+        })
+        .collect();
+
+    let resolved_dims =
+        futures::future::join_all(
+            constraint_futs,
+        )
+        .await;
+
+    // Assemble the cross-product from resolved dimensions
+    let mut current_subsets: Vec<
+        Vec<Range<u64>>,
+    > = vec![
+        (0..dims.len())
+            .map(|i| 0..shape[i])
+            .collect(),
+    ];
+
+    for result in resolved_dims {
+        let (dim_idx, range_list) = result?;
+        if range_list.is_empty() {
+            return Ok(ArraySubsetList::empty());
+        }
+        let mut new_subsets = Vec::new();
+        for subset in current_subsets.iter() {
+            for range in range_list.iter() {
+                if !range.is_empty() {
+                    let mut new_subset =
+                        subset.clone();
+                    new_subset[dim_idx] =
+                        range.clone();
+                    new_subsets.push(new_subset);
+                }
+            }
+        }
+        if new_subsets.is_empty() {
+            return Ok(ArraySubsetList::empty());
+        }
+        current_subsets = new_subsets;
+    }
+    let mut out_list = ArraySubsetList::new();
+    for subset in current_subsets {
+        out_list.push(
+            ArraySubset::new_with_ranges(&subset),
+        );
+    }
+    Ok(out_list)
+}
+
+// ============================================================================
+// ExprPlan -> DatasetSelection (top-level entry points)
+// ============================================================================
+
+/// Get shape for a dimension signature by looking up dimension lengths from metadata.
+fn dims_to_shape(
+    dims: &[IStr],
+    meta: &ZarrMeta,
+) -> Result<Arc<[u64]>, ResolutionError> {
+    let dim_shape_reduced: Option<Vec<u64>> =
+        dims.iter()
+            .map(|dim| {
+                meta.dim_analysis
+                    .dim_lengths
+                    .get(dim)
+                    .copied()
+            })
+            .collect();
+
+    if let Some(reduced) = dim_shape_reduced {
+        return Ok(reduced.into());
+    }
     let mut shape =
         Vec::with_capacity(dims.len());
     for dim in dims {
         if let Some(coord_array) =
-            meta.arrays.get(dim)
+            meta.array_by_path(dim)
         {
             if let Some(&len) =
                 coord_array.shape.first()
@@ -148,510 +1097,230 @@ fn dims_to_shape(
             );
         }
     }
-
     Ok(shape.into())
 }
 
-fn materialize_array(
-    selection: &LazyArraySelection,
-    dims: &smallvec::SmallVec<[crate::IStr; 4]>,
-    shape: std::sync::Arc<[u64]>,
-    cache: &dyn ResolutionCache,
-) -> Result<DataArraySelection, ResolutionError> {
-    match selection {
-        LazyArraySelection::Rectangles(rects) => {
-            let mut out = ArraySubsetList::new();
-            for rect in rects {
-                let materialized =
-                    materialize_rectangle(
-                        rect,
-                        dims,
-                        shape.clone(),
-                        cache,
-                    )?;
-                out = out.union(&materialized);
-            }
-
-            Ok(DataArraySelection::from_subsets(
-                dims, out,
-            ))
+/// Build the var list and grouped signature map from an ExprPlan.
+fn build_var_grouping(
+    vars: &VarSet,
+    meta: &ZarrMeta,
+) -> Option<(
+    Vec<IStr>,
+    BTreeMap<Arc<DimSignature>, Vec<IStr>>,
+    BTreeMap<IStr, Arc<DimSignature>>,
+)> {
+    let var_list: Vec<IStr> = match vars {
+        VarSet::Specific(v) if v.is_empty() => {
+            return None;
         }
-        LazyArraySelection::Difference(a, b) => {
-            let a_mat = materialize_array(
-                a,
-                dims,
-                shape.clone(),
-                cache,
-            )?;
-            let b_mat = materialize_array(
-                b,
-                dims,
-                shape.clone(),
-                cache,
-            )?;
-            Ok(a_mat.difference(&b_mat))
+        VarSet::All => {
+            meta.all_array_paths().to_vec()
         }
-        LazyArraySelection::Union(a, b) => {
-            let a_mat = materialize_array(
-                a,
-                dims,
-                shape.clone(),
-                cache,
-            )?;
-            let b_mat = materialize_array(
-                b,
-                dims,
-                shape.clone(),
-                cache,
-            )?;
-            Ok(a_mat.union(&b_mat))
-        }
-    }
-}
+        VarSet::Specific(v) => v.to_vec(),
+    };
 
-fn materialize_rectangle(
-    rect: &LazyHyperRectangle,
-    dims: &smallvec::SmallVec<[crate::IStr; 4]>,
-    shape: std::sync::Arc<[u64]>,
-    cache: &dyn ResolutionCache,
-) -> Result<ArraySubsetList, ResolutionError> {
-    if rect.is_empty() {
-        return Ok(ArraySubsetList::empty());
-    }
+    let mut sig_cache: BTreeMap<
+        DimSignature,
+        Arc<DimSignature>,
+    > = BTreeMap::new();
+    let mut by_sig: BTreeMap<
+        Arc<DimSignature>,
+        Vec<IStr>,
+    > = BTreeMap::new();
+    let mut var_to_sig: BTreeMap<
+        IStr,
+        Arc<DimSignature>,
+    > = BTreeMap::new();
 
-    // Start with a single subset representing "all" for each dimension
-    // Each element in current_subsets is a vec of ranges, one per dimension
-    let mut current_subsets: Vec<
-        Vec<Range<u64>>,
-    > = vec![
-        (0..dims.len())
-            .map(|i| 0..shape[i])
-            .collect(),
-    ];
-
-    for (dim, constraint) in rect.dims() {
-        let dim_idx_option =
-            dims.iter().position(|d| d == dim);
-        if let Some(dim_idx) = dim_idx_option {
-            let range_list =
-                materialize_constraint_multi(
-                    dim,
-                    0..shape[dim_idx],
-                    constraint,
-                    cache,
-                )?;
-            if range_list.is_empty() {
-                return Ok(
-                    ArraySubsetList::empty(),
-                );
-            }
-
-            // For each (range, existing subset) pair, create a new subset
-            let mut new_subsets = Vec::new();
-            for subset in current_subsets.iter() {
-                for range in range_list.iter() {
-                    if !range.is_empty() {
-                        let mut new_subset =
-                            subset.clone();
-                        new_subset[dim_idx] =
-                            range.clone();
-                        new_subsets
-                            .push(new_subset);
-                    }
-                }
-            }
-
-            if new_subsets.is_empty() {
-                return Ok(
-                    ArraySubsetList::empty(),
-                );
-            }
-            current_subsets = new_subsets;
-        }
-    }
-
-    let mut out_list = ArraySubsetList::new();
-    for subset in current_subsets {
-        out_list.push(
-            ArraySubset::new_with_ranges(&subset),
-        );
-    }
-    Ok(out_list)
-}
-
-/// Materialize a constraint returning potentially multiple ranges.
-/// For interpolation points, each point may produce a disjoint range.
-fn materialize_constraint_multi(
-    dim: &crate::IStr,
-    dim_range: Range<u64>,
-    constraint: &LazyDimConstraint,
-    cache: &dyn ResolutionCache,
-) -> Result<Vec<Range<u64>>, ResolutionError> {
-    match constraint {
-        LazyDimConstraint::UnresolvedInterpolationPoints(points) => {
-            // For each point, compute bracketing indices and collect disjoint ranges
-            let mut ranges = Vec::new();
-
-            for point in points.iter() {
-                // Look up the <= v request (to find left bracket)
-                let vr_max = ValueRangePresent::from_max_exclusive(
-                    point.clone()
-                );
-                let req_max = ResolutionRequest::new(dim.as_ref(), Some(vr_max));
-
-                // Look up the >= v request (to find right bracket)
-                let vr_min = ValueRangePresent::from_min_inclusive(
-                    point.clone()
-                );
-                let req_min = ResolutionRequest::new(dim.as_ref(), Some(vr_min));
-
-                let left_end = match cache.get(&req_max) {
-                    Some(Some(r)) => r.end,
-                    Some(None) => return Ok(vec![dim_range]), // Can't resolve
-                    None => return Err(ResolutionError::NotFound(req_max)),
-                };
-
-                let right_start = match cache.get(&req_min) {
-                    Some(Some(r)) => r.start,
-                    Some(None) => return Ok(vec![dim_range]), // Can't resolve
-                    None => return Err(ResolutionError::NotFound(req_min)),
-                };
-
-                // Compute bracketing indices: left and right are the exact indices
-                // that bracket the interpolation point. No expansion - with sparse
-                // coords (e.g. [0, 1000, 2000, 3000, 4000]), adjacent indices may
-                // be far apart; expanding by ±1 would incorrectly include extra chunks.
-                let left_idx = if left_end == 0 { 0 } else { left_end - 1 };
-                let right_idx = right_start;
-
-                let start = left_idx.min(right_idx);
-                let end_exclusive = (left_idx.max(right_idx) + 1).min(dim_range.end);
-
-                ranges.push(start..end_exclusive);
-            }
-
-            // Merge adjacent/overlapping ranges for efficiency
-            ranges = merge_ranges(ranges);
-            Ok(ranges)
-        }
-        // For all other constraint types, delegate to the single-range version
-        _ => {
-            let single = materialize_constraint(dim, dim_range, constraint, cache)?;
-            Ok(vec![single])
-        }
-    }
-}
-
-/// Merge overlapping or adjacent ranges into a minimal set
-fn merge_ranges(
-    mut ranges: Vec<Range<u64>>,
-) -> Vec<Range<u64>> {
-    if ranges.is_empty() {
-        return ranges;
-    }
-
-    // Sort by start
-    ranges.sort_by_key(|r| r.start);
-
-    let mut result = Vec::new();
-    let mut current = ranges[0].clone();
-
-    for range in ranges.into_iter().skip(1) {
-        if range.start <= current.end {
-            // Overlapping or adjacent - extend current
-            current.end =
-                current.end.max(range.end);
+    for var in &var_list {
+        let sig = if let Some(array_meta) =
+            meta.array_by_path(var.clone())
+        {
+            DimSignature::from_dims_only(
+                array_meta.dims.clone(),
+            )
         } else {
-            // Disjoint - save current and start new
-            result.push(current);
-            current = range;
-        }
+            DimSignature::from_dims_only(
+                SmallVec::new(),
+            )
+        };
+        let sig_arc = sig_cache
+            .entry(sig.clone())
+            .or_insert_with(|| Arc::new(sig))
+            .clone();
+        var_to_sig
+            .insert(var.clone(), sig_arc.clone());
+        by_sig
+            .entry(sig_arc)
+            .or_default()
+            .push(var.clone());
     }
-    result.push(current);
 
-    result
+    Some((var_list, by_sig, var_to_sig))
 }
 
-fn materialize_constraint(
-    dim: &crate::IStr,
-    dim_range: Range<u64>,
-    constraint: &LazyDimConstraint,
-    cache: &dyn ResolutionCache,
-) -> Result<Range<u64>, ResolutionError> {
-    match constraint {
-        LazyDimConstraint::All => Ok(dim_range),
-        LazyDimConstraint::Empty => Ok(0..0),
-        LazyDimConstraint::Resolved(rl) => Ok(rl.clone()),
-        LazyDimConstraint::Unresolved(vr) => {
-            let request = ResolutionRequest::new(dim.as_ref(), vr.clone());
-            match cache.get(&request) {
-                Some(Some(idx_range)) => Ok(
-                    idx_range.clone()
-                ),
-                Some(None) => {
-                    // Resolution was attempted but couldn't determine a range
-                    // (e.g., non-monotonic array) - return All conservatively
-                    Ok(dim_range)
-                }
-                None => Err(ResolutionError::NotFound(request)),
-            }
+/// Resolve an `ExprPlan` to a `DatasetSelection` synchronously.
+pub(crate) fn resolve_expr_plan_sync<
+    B: ChunkedDataBackendSync,
+>(
+    plan: &ExprPlan,
+    meta: &ZarrMeta,
+    backend: &B,
+) -> Result<DatasetSelection, ResolutionError> {
+    match plan {
+        ExprPlan::NoConstraint => {
+            Ok(DatasetSelection::NoSelectionMade)
         }
-        LazyDimConstraint::UnresolvedInterpolation(vr) => {
-            // Interpolation needs bracketing indices - expand by 1 on each side.
-            let request = ResolutionRequest::new(dim.as_ref(), (**vr).clone());
-            match cache.get(&request) {
-                Some(Some(idx_range)) => {
-                    // Expand by 1 on each side for interpolation bracketing
-                    // TODO: This is not correct. We need to know the dimension length to expand correctly.\
-                    // Note: we don't know dim_len here, so we just add 1
-                    // The caller should clamp this if needed
-                    let start = idx_range.start.saturating_sub(1);
-                    let end = idx_range.end.saturating_add(1);
-                    let expanded = start..end;
-                    Ok(expanded)
-                }
-                Some(None) => {
-                    // Resolution was attempted but couldn't determine a range
-                    Ok(dim_range)
-                }
-                None => Err(ResolutionError::NotFound(request)),
-            }
+        ExprPlan::Empty => {
+            Ok(DatasetSelection::Empty)
         }
-        LazyDimConstraint::UnresolvedInterpolationPoints(_) => {
-            // This case is handled by materialize_constraint_multi, so if we reach here
-            // it means we were called through the wrong path. Return conservative dim_range.
-            Ok(dim_range)
-        }
-    }
-}
+        ExprPlan::Active {
+            vars,
+            constraints,
+        } => {
+            let Some((
+                _var_list,
+                by_sig,
+                var_to_sig,
+            )) = build_var_grouping(vars, meta)
+            else {
+                return Ok(
+                    DatasetSelection::Empty,
+                );
+            };
 
-// ============================================================================
-// Collection with context for index-only dimensions
-// ============================================================================
+            let mut by_dims: BTreeMap<
+                Arc<DimSignature>,
+                DataArraySelection,
+            > = BTreeMap::new();
 
-use crate::chunk_plan::indexing::selection::ArraySubsetList;
-use crate::chunk_plan::indexing::types::ValueRangePresent;
-use crate::meta::ZarrDatasetMeta;
-
-/// Collect requests and handle index-only dimensions.
-///
-/// For dimensions that don't have coordinate arrays (index-only dims),
-/// we can resolve them immediately using the dimension length.
-pub(crate) fn collect_requests_with_meta(
-    selection: &LazyDatasetSelection,
-    meta: &ZarrDatasetMeta,
-    dim_lengths: &[u64],
-    dims: &[crate::IStr],
-) -> (
-    Vec<ResolutionRequest>,
-    super::resolver_traits::HashMapCache,
-) {
-    let mut requests = HashSet::new();
-    let mut immediate_cache =
-        super::resolver_traits::HashMapCache::new(
-        );
-
-    match selection {
-        LazyDatasetSelection::NoSelectionMade
-        | LazyDatasetSelection::Empty => {}
-        LazyDatasetSelection::Selection(sel) => {
-            // Iterate over unique selections by signature
-            for (_, array_sel) in
-                sel.by_signature()
+            for (sig_arc, _vars_for_sig) in
+                &by_sig
             {
-                collect_array_requests_with_meta(
-                    array_sel,
-                    meta,
-                    dim_lengths,
-                    dims,
-                    &mut requests,
-                    &mut immediate_cache,
-                );
-            }
-        }
-    }
-
-    (
-        requests.into_iter().collect(),
-        immediate_cache,
-    )
-}
-
-fn collect_array_requests_with_meta(
-    selection: &LazyArraySelection,
-    meta: &ZarrDatasetMeta,
-    dim_lengths: &[u64],
-    dims: &[crate::IStr],
-    requests: &mut HashSet<ResolutionRequest>,
-    immediate_cache: &mut super::resolver_traits::HashMapCache,
-) {
-    match selection {
-        LazyArraySelection::Rectangles(rects) => {
-            for rect in rects {
-                collect_rectangle_requests_with_meta(
-                    rect,
-                    meta,
-                    dim_lengths,
-                    dims,
-                    requests,
-                    immediate_cache,
-                );
-            }
-        }
-        LazyArraySelection::Difference(a, b)
-        | LazyArraySelection::Union(a, b) => {
-            collect_array_requests_with_meta(
-                a,
-                meta,
-                dim_lengths,
-                dims,
-                requests,
-                immediate_cache,
-            );
-            collect_array_requests_with_meta(
-                b,
-                meta,
-                dim_lengths,
-                dims,
-                requests,
-                immediate_cache,
-            );
-        }
-    }
-}
-
-fn collect_rectangle_requests_with_meta(
-    rect: &LazyHyperRectangle,
-    meta: &ZarrDatasetMeta,
-    dim_lengths: &[u64],
-    dims: &[crate::IStr],
-    requests: &mut HashSet<ResolutionRequest>,
-    immediate_cache: &mut super::resolver_traits::HashMapCache,
-) {
-    for (dim, constraint) in rect.dims() {
-        match constraint {
-            LazyDimConstraint::Unresolved(vr) => {
-                let request = ResolutionRequest::new(dim.as_ref(), vr.clone());
-
-                // Check if this is an index-only dimension (no coordinate array)
-                if meta.arrays.get(dim).is_none() {
-                    // Index-only dimension - resolve immediately
-                    if let Some(dim_idx) = dims.iter().position(|d| d == dim) {
-                        if let Some(&dim_len) = dim_lengths.get(dim_idx) {
-                            if let Some(vr) = vr {
-                                if let Some(idx_range) = vr.index_range_for_index_dim(dim_len) {
-                                    immediate_cache.insert(request.clone(), Some(idx_range));
-                                    continue;
-                                }
-                            }
-                        }
-                    }
-                    // Couldn't resolve - add to requests (will fail later)
-                    requests.insert(request);
-                } else {
-                    // Has coordinate array - needs resolution
-                    requests.insert(request);
-                }
-            }
-            LazyDimConstraint::UnresolvedInterpolation(vr_arc) => {
-                let vr = (**vr_arc).clone();
-                let request = ResolutionRequest::new(dim.as_ref(), vr.clone());
-
-                // Check if this is an index-only dimension (no coordinate array)
-                if meta.arrays.get(dim).is_none() {
-                    // Index-only dimension - resolve immediately
-                    if let Some(dim_idx) = dims.iter().position(|d| d == dim) {
-                        if let Some(&dim_len) = dim_lengths.get(dim_idx) {
-                            if let Some(vr) = vr {
-                                if let Some(idx_range) = vr.index_range_for_index_dim(dim_len) {
-                                    immediate_cache.insert(request.clone(), Some(idx_range));
-                                    continue;
-                                }
-                            }
-                        }
-                    }
-                    // Couldn't resolve - add to requests (will fail later)
-                    requests.insert(request);
-                } else {
-                    // Has coordinate array - needs resolution
-                    requests.insert(request);
-                }
-            }
-            LazyDimConstraint::UnresolvedInterpolationPoints(points) => {
-                // For interpolation points, create bracketing requests
-                for point in points.iter() {
-                    let vr_max = ValueRangePresent::from_max_exclusive(
-                        point.clone()
+                let dims = sig_arc.dims();
+                let shape =
+                    dims_to_shape(dims, meta)?;
+                let dims_sv: SmallVec<[IStr; 4]> =
+                    dims.iter().cloned().collect();
+                let resolved =
+                    resolve_array_sync(
+                        backend,
+                        constraints,
+                        &dims_sv,
+                        &shape,
+                        meta,
+                    )?;
+                if !resolved.is_empty() {
+                    by_dims.insert(
+                        sig_arc.clone(),
+                        resolved,
                     );
-                    let vr_min = ValueRangePresent::from_min_inclusive(
-                        point.clone()
-                    );
-
-                    // Check if this is an index-only dimension
-                    if meta.arrays.get(dim).is_none() {
-                        if let Some(dim_idx) = dims.iter().position(|d| d == dim) {
-                            if let Some(&dim_len) = dim_lengths.get(dim_idx) {
-                                // For index-only dims, resolve immediately
-                                if let Some(r) = vr_max.index_range_for_index_dim(dim_len) {
-                                    immediate_cache.insert(
-                                        ResolutionRequest::new(dim.as_ref(), Some(vr_max.clone())),
-                                        Some(r),
-                                    );
-                                }
-                                if let Some(r) = vr_min.index_range_for_index_dim(dim_len) {
-                                    immediate_cache.insert(
-                                        ResolutionRequest::new(dim.as_ref(), Some(vr_min.clone())),
-                                        Some(r),
-                                    );
-                                }
-                                continue;
-                            }
-                        }
-                    }
-
-                    requests.insert(ResolutionRequest::new(dim.as_ref(), Some(vr_max.clone())));
-                    requests.insert(ResolutionRequest::new(dim.as_ref(), Some(vr_min.clone())));
                 }
             }
-            _ => {}
+
+            if by_dims.is_empty() {
+                Ok(DatasetSelection::Empty)
+            } else {
+                let grouped =
+                    GroupedSelection::from_parts(
+                        by_dims, var_to_sig,
+                    );
+                Ok(DatasetSelection::Selection(
+                    grouped,
+                ))
+            }
         }
     }
 }
 
-/// Merge two resolution caches.
-///
-/// Creates a combined cache that first checks the primary cache, then falls back
-/// to the secondary.
-pub(crate) struct MergedCache<'a> {
-    primary: &'a dyn ResolutionCache,
-    secondary: &'a dyn ResolutionCache,
-}
+/// Resolve an `ExprPlan` to a `DatasetSelection` asynchronously.
+pub(crate) async fn resolve_expr_plan_async<
+    B: ChunkedDataBackendAsync,
+>(
+    plan: &ExprPlan,
+    meta: &ZarrMeta,
+    backend: &B,
+) -> Result<DatasetSelection, ResolutionError> {
+    match plan {
+        ExprPlan::NoConstraint => {
+            Ok(DatasetSelection::NoSelectionMade)
+        }
+        ExprPlan::Empty => {
+            Ok(DatasetSelection::Empty)
+        }
+        ExprPlan::Active {
+            vars,
+            constraints,
+        } => {
+            let Some((
+                _var_list,
+                by_sig,
+                var_to_sig,
+            )) = build_var_grouping(vars, meta)
+            else {
+                return Ok(
+                    DatasetSelection::Empty,
+                );
+            };
 
-impl<'a> MergedCache<'a> {
-    pub(crate) fn new(
-        primary: &'a dyn ResolutionCache,
-        secondary: &'a dyn ResolutionCache,
-    ) -> Self {
-        Self { primary, secondary }
+            let mut by_dims: BTreeMap<
+                Arc<DimSignature>,
+                DataArraySelection,
+            > = BTreeMap::new();
+
+            for (sig_arc, _vars_for_sig) in
+                &by_sig
+            {
+                let dims = sig_arc.dims();
+                let shape =
+                    dims_to_shape(dims, meta)?;
+                let dims_sv: SmallVec<[IStr; 4]> =
+                    dims.iter().cloned().collect();
+                let resolved =
+                    resolve_array_async(
+                        backend,
+                        constraints,
+                        &dims_sv,
+                        &shape,
+                        meta,
+                    )
+                    .await?;
+                if !resolved.is_empty() {
+                    by_dims.insert(
+                        sig_arc.clone(),
+                        resolved,
+                    );
+                }
+            }
+
+            if by_dims.is_empty() {
+                Ok(DatasetSelection::Empty)
+            } else {
+                let grouped =
+                    GroupedSelection::from_parts(
+                        by_dims, var_to_sig,
+                    );
+                Ok(DatasetSelection::Selection(
+                    grouped,
+                ))
+            }
+        }
     }
 }
 
-impl std::fmt::Debug for MergedCache<'_> {
-    fn fmt(
-        &self,
-        f: &mut std::fmt::Formatter<'_>,
-    ) -> std::fmt::Result {
-        f.debug_struct("MergedCache").finish()
-    }
-}
+// ============================================================================
+// Shared helpers
+// ============================================================================
 
-impl ResolutionCache for MergedCache<'_> {
-    fn get(
-        &self,
-        request: &ResolutionRequest,
-    ) -> Option<Option<Range<u64>>> {
-        self.primary.get(request).or_else(|| {
-            self.secondary.get(request)
-        })
+/// Try to resolve a value range immediately for an index-only dimension (no coordinate array).
+fn try_resolve_index_only(
+    dim: &IStr,
+    meta: &ZarrMeta,
+    dim_len: u64,
+    vr: &ValueRangePresent,
+) -> Option<Range<u64>> {
+    if meta.array_by_path_contains(dim) {
+        return None;
     }
+    vr.index_range_for_index_dim(dim_len)
 }

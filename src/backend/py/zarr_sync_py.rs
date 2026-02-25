@@ -10,9 +10,11 @@ use pyo3::types::PyAny;
 use pyo3::{IntoPyObjectExt, prelude::*};
 use pyo3_async_runtimes::tokio::future_into_py;
 use pyo3_polars::{PyDataFrame, PySchema};
+use snafu::ResultExt;
 
 use crate::IntoIStr;
 use crate::backend::implementation::scan_zarr_with_backend_sync;
+use crate::errors::PolarsSnafu;
 use crate::py::expr_extract::extract_expr;
 use crate::shared::{
     EvictableChunkCacheSync,
@@ -131,12 +133,7 @@ impl PyZarrBackendSync {
             .lazy()
             .filter(prd)
             .collect()
-            .map_err(|e| {
-                PyErr::new::<
-                    pyo3::exceptions::PyRuntimeError,
-                    _,
-                >(e.to_string())
-            })?;
+            .context(PolarsSnafu)?;
         Ok(PyDataFrame(filtered)
             .into_pyobject(py)
             .map_err(|e| {
