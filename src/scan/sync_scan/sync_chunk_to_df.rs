@@ -23,7 +23,6 @@ use std::collections::BTreeSet;
 
 use crate::scan::shared::{
     build_coord_column, build_var_column,
-    compute_actual_chunk_shape,
     compute_in_bounds_mask,
     compute_var_chunk_indices,
     should_include_column,
@@ -239,13 +238,11 @@ fn read_var_chunks<B: ChunkedDataBackendSync>(
                 &var_meta.shape,
             );
 
-        // Get actual chunk shape (may differ for edge chunks)
+        // Use the regular (metadata) chunk shape for stride
+        // computation: read_chunk_sync always returns data
+        // in the full chunk layout, even for edge chunks.
         let var_chunk_shape =
-            compute_actual_chunk_shape(
-                &var_chunk_indices,
-                &var_meta.chunk_shape,
-                &var_meta.shape,
-            );
+            var_meta.chunk_shape.to_vec();
 
         // Read the chunk using the full path from metadata
         let data = backend.read_chunk_sync(
