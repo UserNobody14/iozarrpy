@@ -1,6 +1,6 @@
 [project]
 name = "rainbear"
-version = "2.1.0"
+version = "2.2.0"
 description = "Build lazy Zarr scans with Polars"
 readme = "README.md"
 authors = [
