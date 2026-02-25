@@ -619,3 +619,20 @@ pub struct ZarrArrayMeta {
     pub array_metadata:
         Option<Arc<zarrs::array::ArrayMetadata>>,
 }
+
+impl ZarrArrayMeta {
+    pub fn chunking_at_dim(
+        &self,
+        dim: &IStr,
+    ) -> Option<u64> {
+        let dim_idx = self
+            .dims
+            .iter()
+            .position(|d| d == dim)?;
+        if dim_idx >= self.chunk_shape.len() {
+            None
+        } else {
+            Some(self.chunk_shape[dim_idx])
+        }
+    }
+}

@@ -32,6 +32,7 @@ impl std::error::Error for ResolutionError {}
 pub(crate) struct DimResolutionCtx {
     pub(crate) n: u64,
     pub(crate) chunk_size: u64,
+    pub(crate) chunk_on_array: Option<u64>,
     pub(crate) time_enc:
         Option<crate::meta::TimeEncoding>,
     pub(crate) array_path: IStr,
@@ -55,6 +56,13 @@ impl DimResolutionCtx {
                 .first()
                 .copied()
                 .unwrap_or(n),
+            // What chunking is actually applied on the array for this dimension
+            chunk_on_array: meta
+                .array_by_path(dim.clone())
+                .and_then(|a| {
+                    a.chunking_at_dim(dim)
+                }),
+
             time_enc: coord_meta
                 .encoding
                 .as_ref()

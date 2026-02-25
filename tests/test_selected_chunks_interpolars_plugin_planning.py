@@ -265,6 +265,64 @@ def test_interpolate_nd_date_coords_plan_and_clamp(tmp_path: Path) -> None:
     assert idxs == {(0,), (9,)}
 
 
+
+def test_interpolate_nd_date_coords_plan_and_clamp_low_only(tmp_path: Path) -> None:
+    """Validate planning when the interpolation axis is Date-like."""
+    import numpy as np
+    import xarray as xr
+
+    n = 100
+    d = np.array([np.datetime64("2020-01-01") + np.timedelta64(i, "D") for i in range(n)])
+    ds = xr.Dataset(
+        data_vars={"value": (["d"], np.arange(n, dtype=np.float64))},
+        coords={"d": d},
+    )
+
+    zarr_path = tmp_path / "interp_date_1d.zarr"
+    ds.to_zarr(
+        zarr_path,
+        zarr_format=3,
+        encoding={
+            "value": {
+                "chunks": (10,),
+                # "shards": (50,),  # Zarr shards - must be evenly divisible by chunks
+                "compressors": [BloscCodec(cname="zstd", clevel=5, shuffle=BloscShuffle.shuffle)],
+            }
+        },
+    )
+
+    # Print ds:
+    print(ds.value.values)
+
+
+    target = pl.DataFrame(
+        {
+            "d": pl.Series("d", [date(1900, 1, 1)], dtype=pl.Date),
+            "label": ["lo"],
+        }
+    )
+
+    expr = interpolate_nd(["d"], ["value"], target)
+    chunks = ZarrBackend.from_url(str(zarr_path)).selected_chunks_debug( expr)
+    assert chunks == {
+        "coord_reads": 0,
+        "grids": [ {
+            "chunks": [
+                {
+                    "indices": [0],
+                    "origin": [0],
+                    "shape": [10],
+                }
+            ],
+            "dims": ["d"],
+            "variables": ["value"],
+        }],
+    }
+
+
+
+
+
 def test_interpolate_nd_duration_coords_plan_and_clamp(tmp_path: Path) -> None:
     """Validate planning when the interpolation axis is Duration-like."""
     import numpy as np

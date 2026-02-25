@@ -4,7 +4,7 @@
 //! dimension constraints from variable tracking. The expensive `GroupedSelection`
 //! construction is deferred to `ExprPlan::into_lazy_dataset_selection`.
 
-use snafu::ResultExt;
+use snafu::{ResultExt, ensure};
 
 use super::compile_ctx::LazyCompileCtx;
 use super::compile_node::{
@@ -1080,21 +1080,44 @@ fn interpolate_selection_nd_lazy(
         return Ok(ExprPlan::NoConstraint);
     }
 
-    let mut constraints: std::collections::BTreeMap<IStr, LazyDimConstraint> =
-        std::collections::BTreeMap::new();
+    let mut constraints: Vec<
+        std::collections::BTreeMap<
+            IStr,
+            LazyDimConstraint,
+        >,
+    > = vec![];
 
-    for (dim_name, values) in dim_values {
-        constraints.insert(
-            dim_name,
-            LazyDimConstraint::InterpolationPoints(values.into()),
-        );
+    // Transform dim_values (dim -> Vec<CoordScalar>) to row-wise constraints.
+    // Assume all vecs have the same length.
+    let num_rows = dim_values
+        .values()
+        .next()
+        .map(|v| v.len())
+        .unwrap_or(0);
+    for i in 0..num_rows {
+        let mut constraint =
+            std::collections::BTreeMap::new();
+        for (dim_name, values) in
+            dim_values.iter()
+        {
+            let value = values[i].clone();
+            constraint.insert(dim_name.clone(), LazyDimConstraint::InterpolationRange(
+                ValueRangePresent::from_equal_case(value),
+            ));
+        }
+        constraints.push(constraint);
     }
 
-    let rect = LazyHyperRectangle::with_dims(
-        constraints,
+    let rects: Vec<LazyHyperRectangle> =
+        constraints
+            .into_iter()
+            .map(|c| {
+                LazyHyperRectangle::with_dims(c)
+            })
+            .collect();
+    let sel = LazyArraySelection::Rectangles(
+        rects.into(),
     );
-    let sel =
-        LazyArraySelection::from_rectangle(rect);
 
     let (retrieve_vars, filter_plan) =
         match source_values {

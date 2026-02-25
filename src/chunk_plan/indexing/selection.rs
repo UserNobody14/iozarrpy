@@ -372,6 +372,7 @@ impl SetOperations for ArraySubsetList {
                 {
                     if !overlap.is_empty() {
                         out.push(overlap);
+                        // Generate true intersection (?)
                     }
                 }
             }

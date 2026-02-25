@@ -5,7 +5,7 @@
 //! Coordinate chunk I/O is already cached by the Moka layer in the backend.
 
 use std::collections::BTreeMap;
-use std::ops::Range;
+use std::ops::{Bound, Range};
 use std::sync::Arc;
 
 use smallvec::SmallVec;
@@ -34,6 +34,31 @@ use crate::chunk_plan::indexing::selection::ArraySubsetList;
 use crate::meta::ZarrMeta;
 
 use super::types::CoordScalar;
+use crate::reader::ColumnData;
+
+/// Extract a coordinate value from a `ColumnData` chunk, preserving the
+/// original numeric type.  Float columns yield `CoordScalar::F64` (avoiding
+/// the lossy `f64 as i64` truncation that `get_i64` would apply), while
+/// integer/bool columns go through the existing time-encoding path.
+fn coord_scalar_from_chunk(
+    chunk: &ColumnData,
+    offset: usize,
+    time_enc: Option<&crate::meta::TimeEncoding>,
+) -> Option<CoordScalar> {
+    match chunk {
+        ColumnData::F64(v) => {
+            Some(CoordScalar::F64(v[offset]))
+        }
+        ColumnData::F32(v) => {
+            Some(CoordScalar::F64(v[offset] as f64))
+        }
+        _ => chunk.get_i64(offset).map(|raw| {
+            crate::chunk_plan::apply_time_encoding(
+                raw, time_enc,
+            )
+        }),
+    }
+}
 
 // ============================================================================
 // Pure binary-search helpers (no I/O)
@@ -97,6 +122,9 @@ fn monotonic_sample_indices(
     n: u64,
     chunk_size: u64,
 ) -> [u64; 5] {
+    if n == 0 {
+        panic!("n cannot be 0");
+    }
     let mut samples = [
         0u64,
         chunk_size.saturating_sub(1).min(n - 1),
@@ -190,11 +218,9 @@ fn scalar_at_sync<B: ChunkedDataBackendSync>(
     let chunk = backend
         .read_chunk_sync(dim, &[chunk_idx])
         .ok()?;
-    chunk.get_i64(offset).map(|raw| {
-        crate::chunk_plan::apply_time_encoding(
-            raw, time_enc,
-        )
-    })
+    coord_scalar_from_chunk(
+        &chunk, offset, time_enc,
+    )
 }
 
 fn check_monotonicity_sync<
@@ -335,9 +361,6 @@ fn resolve_constraint_sync<
             Ok(vec![dim_range])
         }
         LazyDimConstraint::Empty => Ok(vec![]),
-        LazyDimConstraint::Resolved(rl) => {
-            Ok(vec![rl.clone()])
-        }
         LazyDimConstraint::Unresolved(vr) => {
             if let Some(r) =
                 try_resolve_index_only(
@@ -363,10 +386,12 @@ fn resolve_constraint_sync<
             else {
                 return Ok(vec![dim_range]);
             };
-            Ok(vec![resolve_value_range_sync(
-                backend, &ctx, vr, dir,
-            )
-            .unwrap_or(dim_range)])
+            Ok(vec![
+                resolve_value_range_sync(
+                    backend, &ctx, vr, dir,
+                )
+                .unwrap_or(dim_range),
+            ])
         }
         LazyDimConstraint::InterpolationRange(
             vr,
@@ -381,8 +406,7 @@ fn resolve_constraint_sync<
             {
                 let start =
                     r.start.saturating_sub(1);
-                let end =
-                    r.end.saturating_add(1);
+                let end = r.end.saturating_add(1);
                 return Ok(vec![start..end]);
             }
             let Some(ctx) =
@@ -390,72 +414,49 @@ fn resolve_constraint_sync<
                     dim, meta,
                 )
             else {
-                return Ok(vec![dim_range]);
+                // return Ok(vec![dim_range]);
+                return Err(
+                    ResolutionError::Unresolvable(
+                        "dimension not found in metadata".to_string(),
+                    )
+                );
             };
+            let dim_expansion_size = 1u64;
+
             let Some(dir) =
                 check_monotonicity_sync(
                     backend, &ctx,
                 )
             else {
-                return Ok(vec![dim_range]);
+                // return Ok(vec![dim_range]);
+                return Err(
+                    ResolutionError::Unresolvable(
+                        "dimension not monotonic"
+                            .to_string(),
+                    ),
+                );
             };
             let r = resolve_value_range_sync(
                 backend, &ctx, vr, dir,
             )
             .unwrap_or(dim_range.clone());
-            let start = r.start.saturating_sub(1);
-            let end = r.end.saturating_add(1);
-            Ok(vec![start..end])
-        }
-        LazyDimConstraint::InterpolationPoints(
-            points,
-        ) => {
-            let Some(ctx) =
-                DimResolutionCtx::from_meta(
-                    dim, meta,
+            let start = r
+                .start
+                .saturating_sub(
+                    dim_expansion_size,
                 )
-            else {
-                return Ok(vec![dim_range]);
-            };
-            let Some(dir) =
-                check_monotonicity_sync(
-                    backend, &ctx,
+                .max(0);
+            let end = r
+                .end
+                .saturating_add(
+                    dim_expansion_size,
                 )
-            else {
-                return Ok(vec![dim_range]);
-            };
-            let mut ranges = Vec::with_capacity(
-                points.len(),
-            );
-            for point in points.iter() {
-                let vr_max = ValueRangePresent::from_max_exclusive(point.clone());
-                let vr_min = ValueRangePresent::from_min_inclusive(point.clone());
-                let left_r =
-                    resolve_value_range_sync(
-                        backend, &ctx, &vr_max,
-                        dir,
-                    )
-                    .unwrap_or(dim_range.clone());
-                let right_r =
-                    resolve_value_range_sync(
-                        backend, &ctx, &vr_min,
-                        dir,
-                    )
-                    .unwrap_or(dim_range.clone());
-                let left_idx = left_r
-                    .end
-                    .saturating_sub(1);
-                let right_idx = right_r.start;
-                let start =
-                    left_idx.min(right_idx);
-                let end_exclusive = (left_idx
-                    .max(right_idx)
-                    + 1)
-                .min(dim_range.end);
-                ranges
-                    .push(start..end_exclusive);
+                .min(ctx.n);
+            if start < end {
+                Ok(vec![start..end])
+            } else {
+                Ok(vec![])
             }
-            Ok(merge_ranges(ranges))
         }
     }
 }
@@ -602,11 +603,9 @@ async fn scalar_at_async<
         .read_chunk_async(dim, &[chunk_idx])
         .await
         .ok()?;
-    chunk.get_i64(offset).map(|raw| {
-        crate::chunk_plan::apply_time_encoding(
-            raw, time_enc,
-        )
-    })
+    coord_scalar_from_chunk(
+        &chunk, offset, time_enc,
+    )
 }
 
 async fn check_monotonicity_async<
@@ -723,6 +722,24 @@ async fn resolve_value_range_async<
                 &vr.0,
                 Bound::Excluded(_)
             );
+
+            // let searched_start =
+            //     async_binary_search(
+            //         backend, ctx, s, strict, dir,
+            //         false,
+            //     )
+            //     .await?;
+
+            // if matches!(&vr.0, Bound::Included(_))
+            //     && vr.1
+            //         == Bound::Included(s.clone())
+            // {
+            //     return Some(
+            //         searched_start
+            //             ..searched_start,
+            //     );
+            // }
+            // searched_start
             async_binary_search(
                 backend, ctx, s, strict, dir,
                 false,
@@ -763,9 +780,6 @@ async fn resolve_constraint_async<
             Ok(vec![dim_range])
         }
         LazyDimConstraint::Empty => Ok(vec![]),
-        LazyDimConstraint::Resolved(rl) => {
-            Ok(vec![rl.clone()])
-        }
         LazyDimConstraint::Unresolved(vr) => {
             if let Some(r) =
                 try_resolve_index_only(
@@ -792,11 +806,13 @@ async fn resolve_constraint_async<
             else {
                 return Ok(vec![dim_range]);
             };
-            Ok(vec![resolve_value_range_async(
-                backend, &ctx, vr, dir,
-            )
-            .await
-            .unwrap_or(dim_range)])
+            Ok(vec![
+                resolve_value_range_async(
+                    backend, &ctx, vr, dir,
+                )
+                .await
+                .unwrap_or(dim_range),
+            ])
         }
         LazyDimConstraint::InterpolationRange(
             vr,
@@ -811,8 +827,7 @@ async fn resolve_constraint_async<
             {
                 let start =
                     r.start.saturating_sub(1);
-                let end =
-                    r.end.saturating_add(1);
+                let end = r.end.saturating_add(1);
                 return Ok(vec![start..end]);
             }
             let Some(ctx) =
@@ -820,7 +835,12 @@ async fn resolve_constraint_async<
                     dim, meta,
                 )
             else {
-                return Ok(vec![dim_range]);
+                // return Ok(vec![dim_range]);
+                return Err(
+                    ResolutionError::Unresolvable(
+                        "dimension not found in metadata".to_string(),
+                    )
+                );
             };
             let Some(dir) =
                 check_monotonicity_async(
@@ -828,75 +848,39 @@ async fn resolve_constraint_async<
                 )
                 .await
             else {
-                return Ok(vec![dim_range]);
+                // return Ok(vec![dim_range]);
+                return Err(
+                    ResolutionError::Unresolvable(
+                        "dimension not monotonic"
+                            .to_string(),
+                    ),
+                );
             };
             let r = resolve_value_range_async(
                 backend, &ctx, vr, dir,
             )
             .await
             .unwrap_or(dim_range.clone());
-            let start = r.start.saturating_sub(1);
-            let end = r.end.saturating_add(1);
-            Ok(vec![start..end])
-        }
-        LazyDimConstraint::InterpolationPoints(
-            points,
-        ) => {
-            let Some(ctx) =
-                DimResolutionCtx::from_meta(
-                    dim, meta,
+
+            let dim_expansion_size = 1u64;
+
+            let start = r
+                .start
+                .saturating_sub(
+                    dim_expansion_size,
                 )
-            else {
-                return Ok(vec![dim_range]);
-            };
-            let Some(dir) =
-                check_monotonicity_async(
-                    backend, &ctx,
+                .max(0);
+            let end = r
+                .end
+                .saturating_add(
+                    dim_expansion_size,
                 )
-                .await
-            else {
-                return Ok(vec![dim_range]);
-            };
-            let mut ranges = Vec::with_capacity(
-                points.len(),
-            );
-            for point in points.iter() {
-                let vr_max =
-                    ValueRangePresent::from_max_exclusive(
-                        point.clone(),
-                    );
-                let vr_min =
-                    ValueRangePresent::from_min_inclusive(
-                        point.clone(),
-                    );
-                let left_r =
-                    resolve_value_range_async(
-                        backend, &ctx, &vr_max,
-                        dir,
-                    )
-                    .await
-                    .unwrap_or(dim_range.clone());
-                let right_r =
-                    resolve_value_range_async(
-                        backend, &ctx, &vr_min,
-                        dir,
-                    )
-                    .await
-                    .unwrap_or(dim_range.clone());
-                let left_idx = left_r
-                    .end
-                    .saturating_sub(1);
-                let right_idx = right_r.start;
-                let start =
-                    left_idx.min(right_idx);
-                let end_exclusive = (left_idx
-                    .max(right_idx)
-                    + 1)
-                .min(dim_range.end);
-                ranges
-                    .push(start..end_exclusive);
+                .min(ctx.n);
+            if start < end {
+                Ok(vec![start..end])
+            } else {
+                Ok(vec![])
             }
-            Ok(merge_ranges(ranges))
         }
     }
 }
@@ -1339,28 +1323,4 @@ fn try_resolve_index_only(
         return None;
     }
     vr.index_range_for_index_dim(dim_len)
-}
-
-/// Merge overlapping or adjacent ranges into a minimal set.
-fn merge_ranges(
-    mut ranges: Vec<Range<u64>>,
-) -> Vec<Range<u64>> {
-    if ranges.len() <= 1 {
-        return ranges;
-    }
-    ranges.sort_unstable_by_key(|r| r.start);
-    let mut result =
-        Vec::with_capacity(ranges.len());
-    let mut current = ranges[0].clone();
-    for range in ranges.into_iter().skip(1) {
-        if range.start <= current.end {
-            current.end =
-                current.end.max(range.end);
-        } else {
-            result.push(current);
-            current = range;
-        }
-    }
-    result.push(current);
-    result
 }

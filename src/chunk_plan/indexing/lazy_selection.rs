@@ -5,7 +5,6 @@
 //! resolution.
 
 use std::collections::BTreeMap;
-use std::sync::Arc;
 
 use smallvec::SmallVec;
 
@@ -24,16 +23,9 @@ pub(crate) enum LazyDimConstraint {
     Empty,
     /// Needs resolution from value-space to index-space.
     Unresolved(ValueRangePresent),
-    /// Needs resolution with interpolation expansion (expand by 1 on each side).
+    /// Needs resolution with interpolation expansion (expand to chunk boundaries, or across 2 chunks if at boundary).
     /// Used for interpolation operations that need bracketing indices.
     InterpolationRange(ValueRangePresent),
-    /// Interpolation with multiple target points - each needs bracketing indices.
-    /// The resolution will union the bracketing ranges for each point with clamping.
-    InterpolationPoints(
-        Arc<[super::types::CoordScalar]>,
-    ),
-    /// Already resolved (optimization for pre-computed constraints).
-    Resolved(Range<u64>),
 }
 
 impl LazyDimConstraint {
@@ -41,8 +33,6 @@ impl LazyDimConstraint {
     #[inline]
     pub(crate) fn is_empty(&self) -> bool {
         matches!(self, LazyDimConstraint::Empty)
-            || matches!(self, LazyDimConstraint::Resolved(r) if r.is_empty())
-            || matches!(self, LazyDimConstraint::InterpolationPoints(pts) if pts.is_empty())
     }
 }
 
@@ -221,7 +211,6 @@ impl LazyArraySelection {
     }
 }
 
-
 // ============================================================================
 // SetOperations implementations for lazy types
 // ============================================================================
@@ -275,12 +264,6 @@ impl SetOperations for LazyDimConstraint {
             | (_, LazyDimConstraint::All) => {
                 LazyDimConstraint::All
             }
-            (
-                LazyDimConstraint::Resolved(a),
-                LazyDimConstraint::Resolved(b),
-            ) => LazyDimConstraint::Resolved(
-                a.union(b),
-            ),
             // Can't merge unresolved constraints without resolution - return All conservatively
             _ => LazyDimConstraint::All,
         }
@@ -292,20 +275,17 @@ impl SetOperations for LazyDimConstraint {
                 LazyDimConstraint::Empty
             }
             (LazyDimConstraint::All, x) | (x, LazyDimConstraint::All) => x.clone(),
-            (LazyDimConstraint::Resolved(a), LazyDimConstraint::Resolved(b)) => {
-                let result = a.intersect(b);
-                if result.is_empty() {
-                    LazyDimConstraint::Empty
-                } else {
-                    LazyDimConstraint::Resolved(result)
-                }
-            }
+
             (LazyDimConstraint::Unresolved(a), LazyDimConstraint::Unresolved(b)) => {
                 match a.intersect(b) {
                     Some(vr) => LazyDimConstraint::Unresolved(vr),
                     None => LazyDimConstraint::Empty,
                 }
             }
+            
+
+
+
             (LazyDimConstraint::InterpolationRange(a), LazyDimConstraint::InterpolationRange(b))
             | (LazyDimConstraint::InterpolationRange(a), LazyDimConstraint::Unresolved(b))
             | (LazyDimConstraint::Unresolved(b), LazyDimConstraint::InterpolationRange(a)) => {
@@ -313,18 +293,6 @@ impl SetOperations for LazyDimConstraint {
                     Some(vr) => LazyDimConstraint::InterpolationRange(vr),
                     None => LazyDimConstraint::Empty,
                 }
-            }
-            // Mixed resolved/unresolved: keep the unresolved one (conservative)
-            (LazyDimConstraint::Unresolved(vr), _) | (_, LazyDimConstraint::Unresolved(vr)) => {
-                LazyDimConstraint::Unresolved(vr.clone())
-            }
-            (LazyDimConstraint::InterpolationRange(vr), _)
-            | (_, LazyDimConstraint::InterpolationRange(vr)) => {
-                LazyDimConstraint::InterpolationRange(vr.clone())
-            }
-            (LazyDimConstraint::InterpolationPoints(pts), _)
-            | (_, LazyDimConstraint::InterpolationPoints(pts)) => {
-                LazyDimConstraint::InterpolationPoints(pts.clone())
             }
         }
     }
@@ -343,19 +311,6 @@ impl SetOperations for LazyDimConstraint {
             (LazyDimConstraint::All, _) => {
                 LazyDimConstraint::All
             } // Can't compute A \ B without knowing B
-            (
-                LazyDimConstraint::Resolved(a),
-                LazyDimConstraint::Resolved(b),
-            ) => {
-                let result = a.difference(b);
-                if result.is_empty() {
-                    LazyDimConstraint::Empty
-                } else {
-                    LazyDimConstraint::Resolved(
-                        result,
-                    )
-                }
-            }
             // Can't compute difference with unresolved - return self conservatively
             _ => self.clone(),
         }
