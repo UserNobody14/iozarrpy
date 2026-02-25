@@ -22,6 +22,7 @@ pub(crate) use indexing::lazy_materialize::{
     resolve_expr_plan_async,
     resolve_expr_plan_sync,
 };
+pub(crate) use indexing::plan::ConsolidatedGridGroup;
 pub(crate) use indexing::resolver_traits::ResolutionError;
 pub(crate) use indexing::selection_to_chunks::selection_to_grouped_chunk_plan_unified_from_meta;
 pub(crate) use indexing::types::ChunkGridSignature;

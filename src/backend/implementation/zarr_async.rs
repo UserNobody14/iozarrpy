@@ -5,9 +5,10 @@ use snafu::ensure;
 use crate::IStr;
 use crate::errors::BackendError;
 use crate::errors::MaxChunksToReadExceededSnafu;
+use crate::meta::ZarrMeta;
 use crate::scan::async_scan::chunk_to_df_from_grid_with_backend;
+use crate::shared::ChunkedDataBackendAsync;
 use crate::shared::ChunkedExpressionCompilerAsync;
-use crate::shared::FullyCachedZarrBackendAsync;
 use crate::shared::HasMetadataBackendAsync;
 use crate::shared::{
     combine_chunk_dataframes,
@@ -17,15 +18,23 @@ use crate::shared::{
 /// Internal: Async scan using the backend.
 ///
 /// This uses the backend's cached metadata and chunk reading directly.
-pub(crate) async fn scan_zarr_with_backend_async(
-    backend: Arc<FullyCachedZarrBackendAsync>,
+/// Internal: Async scan using any backend that implements the required traits.
+pub(crate) async fn scan_with_backend_async<B>(
+    backend: Arc<B>,
     expr: polars::prelude::Expr,
     max_concurrency: Option<usize>,
     max_chunks_to_read: Option<usize>,
 ) -> Result<
     polars::prelude::DataFrame,
     BackendError,
-> {
+>
+where
+    B: ChunkedDataBackendAsync
+        + HasMetadataBackendAsync<ZarrMeta>
+        + ChunkedExpressionCompilerAsync
+        + Send
+        + Sync,
+{
     use futures::stream::{
         FuturesUnordered, StreamExt,
     };

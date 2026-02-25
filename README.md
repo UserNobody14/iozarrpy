@@ -212,16 +212,16 @@ samply record -- uv run python -m pytest tests/test_benchmark_novel_queries.py -
 - [ ] Geospatial support via ewkb and polars-st
 - [x] Interpolation support
 - [ ] Tests against cloud storage backends
-- [ ] Benchmarks
+- [x] Benchmarks
 - [ ] Documentation
 
 ### Longer Term
 - [ ] Improved manner of application to take full advantage of Polars' lazy engine
-- [ ] Caching Support?
+- [x] Caching Support?
 - [ ] Writing to zarr?
-- [ ] Capability to work with datatrees
+- [x] Capability to work with datatrees
 - [ ] Allow output to arrow/pandas/etc.
-- [ ] Icechunk support
+- [x] Icechunk support
 - [ ] Zarr V2 support (backwards compatibility)
 
 
