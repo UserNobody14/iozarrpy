@@ -1,0 +1,73 @@
+# When code is merged to main, check if pyproject.toml version was bumped.
+# If so, create and push a v*.*.* tag, which triggers the Publish workflow.
+name: Version Tag
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write  # needed to push tags
+
+jobs:
+  tag-version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0  # full history for tag comparison
+          fetch-tags: true
+
+      - uses: astral-sh/setup-uv@v7
+
+      - name: Get version from pyproject.toml
+        id: version
+        run: |
+          VERSION=$(uv run python -c "
+          import tomllib
+          with open('pyproject.toml', 'rb') as f:
+              data = tomllib.load(f)
+          print(data['project']['version'])
+          ")
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Get latest tag
+        id: latest
+        run: |
+          LATEST=$(git describe --tags --abort-on-unmatch 2>/dev/null || echo "")
+          if [ -n "$LATEST" ]; then
+            # Strip v prefix for comparison
+            LATEST="${LATEST#v}"
+            LATEST="${LATEST%%-*}"  # strip -g<sha> if present
+          fi
+          echo "tag=$LATEST" >> $GITHUB_OUTPUT
+
+      - name: Compare versions and create tag
+        env:
+          CURRENT: ${{ steps.version.outputs.version }}
+          LATEST: ${{ steps.latest.outputs.tag }}
+        run: |
+          # Simple semver comparison (major.minor.patch)
+          ver_gt() {
+            local v1="$1" v2="$2"
+            [ -z "$v2" ] && return 0  # no previous tag = always tag
+            local IFS=.
+            local i a=(${v1%%-*}) b=(${v2%%-*})
+            for ((i=0; i<${#a[@]} || i<${#b[@]}; i++)); do
+              ((10#${a[i]:-0} > 10#${b[i]:-0})) && return 0
+              ((10#${a[i]:-0} < 10#${b[i]:-0})) && return 1
+            done
+            return 1  # equal = don't tag
+          }
+
+          if ver_gt "$CURRENT" "$LATEST"; then
+            TAG="v$CURRENT"
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git tag "$TAG"
+            git push origin "$TAG"
+            echo "Created and pushed tag $TAG"
+          else
+            echo "Version $CURRENT not greater than $LATEST, skipping tag"
+          fi
