@@ -7,6 +7,10 @@ on:
     branches:
       - main
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: write  # needed to push tags
 
@@ -19,12 +23,11 @@ jobs:
           fetch-depth: 0  # full history for tag comparison
           fetch-tags: true
 
-      - uses: astral-sh/setup-uv@v7
-
       - name: Get version from pyproject.toml
         id: version
         run: |
-          VERSION=$(uv run python -c "
+          # Use system Python (no uv/project build - tomllib is stdlib in 3.11+)
+          VERSION=$(python3 -c "
           import tomllib
           with open('pyproject.toml', 'rb') as f:
               data = tomllib.load(f)
