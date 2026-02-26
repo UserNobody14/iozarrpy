@@ -1052,17 +1052,14 @@ fn interpolate_selection_nd_lazy(
     let mut dim_values: std::collections::BTreeMap<IStr, Vec<CoordScalar>> =
         std::collections::BTreeMap::new();
 
-    for name in &coord_names {
-        if !ctx.dims.iter().any(|d| d == name) {
+    // Include all target dimensions that match ctx.dims, not just coord_names.
+    // Extra dims (e.g. time in target when interpolating lat/lon) must be
+    // constrained to exact match so we load only the relevant slice.
+    for s in target_fields.iter() {
+        let name = s.name().as_str().istr();
+        if !ctx.dims.iter().any(|d| d == &name) {
             continue;
         }
-
-        let Some(s) = target_fields
-            .iter()
-            .find(|s| s.name() == <IStr as AsRef<str>>::as_ref(name))
-        else {
-            continue;
-        };
 
         let Some(values) =
             series_values_scalar_lazy(s)
@@ -1071,8 +1068,7 @@ fn interpolate_selection_nd_lazy(
         };
 
         if !values.is_empty() {
-            dim_values
-                .insert(name.clone(), values);
+            dim_values.insert(name, values);
         }
     }
 
@@ -1088,7 +1084,8 @@ fn interpolate_selection_nd_lazy(
     > = vec![];
 
     // Transform dim_values (dim -> Vec<CoordScalar>) to row-wise constraints.
-    // Assume all vecs have the same length.
+    // Use InterpolationRange (with expansion) only for coord_names; use Unresolved
+    // (no expansion) for filter dimensions so we load only the exact slice.
     let num_rows = dim_values
         .values()
         .next()
@@ -1101,9 +1098,17 @@ fn interpolate_selection_nd_lazy(
             dim_values.iter()
         {
             let value = values[i].clone();
-            constraint.insert(dim_name.clone(), LazyDimConstraint::InterpolationRange(
-                ValueRangePresent::from_equal_case(value),
-            ));
+            let vr = ValueRangePresent::from_equal_case(value);
+            let is_interp_dim = coord_names
+                .iter()
+                .any(|c| c == dim_name);
+            let c = if is_interp_dim {
+                LazyDimConstraint::InterpolationRange(vr)
+            } else {
+                LazyDimConstraint::Unresolved(vr)
+            };
+            constraint
+                .insert(dim_name.clone(), c);
         }
         constraints.push(constraint);
     }

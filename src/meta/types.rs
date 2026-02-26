@@ -540,6 +540,30 @@ impl TimeEncoding {
         }
     }
 
+    /// Decode a float value (e.g. CF "days since epoch" stored as float64)
+    /// to nanoseconds. Used when coordinate arrays are stored as float.
+    #[inline]
+    pub fn decode_f64(
+        &self,
+        raw: f64,
+    ) -> Option<i64> {
+        if !raw.is_finite() {
+            return None;
+        }
+        let unit_ns_f = self.unit_ns as f64;
+        let scaled = raw * unit_ns_f;
+        let ns = scaled.clamp(
+            i64::MIN as f64,
+            i64::MAX as f64,
+        ) as i64;
+        let ns = if self.is_duration {
+            ns
+        } else {
+            ns.saturating_add(self.epoch_ns)
+        };
+        Some(ns)
+    }
+
     pub fn to_polars_dtype(&self) -> PlDataType {
         if self.is_duration {
             PlDataType::Duration(

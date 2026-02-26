@@ -47,10 +47,32 @@ fn coord_scalar_from_chunk(
 ) -> Option<CoordScalar> {
     match chunk {
         ColumnData::F64(v) => {
-            Some(CoordScalar::F64(v[offset]))
+            let val = v[offset];
+            if let Some(enc) = time_enc {
+                enc.decode_f64(val).map(|ns| {
+                    if enc.is_duration {
+                        CoordScalar::DurationNs(ns)
+                    } else {
+                        CoordScalar::DatetimeNs(ns)
+                    }
+                })
+            } else {
+                Some(CoordScalar::F64(val))
+            }
         }
         ColumnData::F32(v) => {
-            Some(CoordScalar::F64(v[offset] as f64))
+            let val = v[offset] as f64;
+            if let Some(enc) = time_enc {
+                enc.decode_f64(val).map(|ns| {
+                    if enc.is_duration {
+                        CoordScalar::DurationNs(ns)
+                    } else {
+                        CoordScalar::DatetimeNs(ns)
+                    }
+                })
+            } else {
+                Some(CoordScalar::F64(val))
+            }
         }
         _ => chunk.get_i64(offset).map(|raw| {
             crate::chunk_plan::apply_time_encoding(
