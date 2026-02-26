@@ -282,10 +282,6 @@ impl SetOperations for LazyDimConstraint {
                     None => LazyDimConstraint::Empty,
                 }
             }
-            
-
-
-
             (LazyDimConstraint::InterpolationRange(a), LazyDimConstraint::InterpolationRange(b))
             | (LazyDimConstraint::InterpolationRange(a), LazyDimConstraint::Unresolved(b))
             | (LazyDimConstraint::Unresolved(b), LazyDimConstraint::InterpolationRange(a)) => {
