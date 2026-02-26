@@ -18,11 +18,9 @@ use crate::shared::{
 };
 
 use super::iterating_common::{
-    collect_chunks_for_batch,
+    DEFAULT_BATCH_SIZE, IteratorState,
+    OwnedGridGroup, collect_chunks_for_batch,
     combine_and_postprocess_batch,
-    IteratorState,
-    OwnedGridGroup,
-    DEFAULT_BATCH_SIZE,
 };
 
 /// Version of scan zarr sync that returns an iterator
@@ -82,7 +80,8 @@ impl ZarrIteratorInner {
             expr,
             with_columns,
             max_chunks_to_read,
-            batch_size: batch_size.unwrap_or(DEFAULT_BATCH_SIZE),
+            batch_size: batch_size
+                .unwrap_or(DEFAULT_BATCH_SIZE),
             num_rows,
             state: None,
         }
@@ -182,14 +181,16 @@ impl ZarrIteratorInner {
         while state.current_group_idx
             < state.grid_groups.len()
         {
-            let group = &state.grid_groups[state.current_group_idx];
+            let group = &state.grid_groups
+                [state.current_group_idx];
 
-            let chunks_to_read = collect_chunks_for_batch(
-                group,
-                &mut state.current_chunk_idx,
-                state.current_batch_rows,
-                self.batch_size,
-            );
+            let chunks_to_read =
+                collect_chunks_for_batch(
+                    group,
+                    &mut state.current_chunk_idx,
+                    state.current_batch_rows,
+                    self.batch_size,
+                );
 
             if !chunks_to_read.is_empty() {
                 let vars: Vec<IStr> =
@@ -248,10 +249,15 @@ impl ZarrIteratorInner {
 
         // If we have accumulated any data, return it
         if !state.current_batch.is_empty() {
-            let batch_dfs = std::mem::take(&mut state.current_batch);
+            let batch_dfs = std::mem::take(
+                &mut state.current_batch,
+            );
             state.current_batch_rows = 0;
 
-            let result = combine_and_postprocess_batch(batch_dfs, state)?;
+            let result =
+                combine_and_postprocess_batch(
+                    batch_dfs, state,
+                )?;
             Ok(Some(result))
         } else {
             // No more data

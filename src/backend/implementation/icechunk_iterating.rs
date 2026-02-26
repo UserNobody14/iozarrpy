@@ -7,7 +7,9 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use futures::stream::{FuturesUnordered, StreamExt};
+use futures::stream::{
+    FuturesUnordered, StreamExt,
+};
 use polars::prelude::*;
 use pyo3::PyErr;
 use pyo3::prelude::*;
@@ -24,14 +26,12 @@ use crate::shared::ChunkedExpressionCompilerAsync;
 use crate::shared::HasMetadataBackendAsync;
 use crate::shared::expand_projection_to_flat_paths;
 
-use super::iterating_common::{
-    collect_chunks_for_batch,
-    combine_and_postprocess_batch,
-    IteratorState,
-    OwnedGridGroup,
-    DEFAULT_BATCH_SIZE,
-};
 use super::FullyCachedIcechunkBackendAsync;
+use super::iterating_common::{
+    DEFAULT_BATCH_SIZE, IteratorState,
+    OwnedGridGroup, collect_chunks_for_batch,
+    combine_and_postprocess_batch,
+};
 
 const DEFAULT_MAX_CONCURRENCY: usize = 32;
 
@@ -82,7 +82,8 @@ impl IcechunkIterator {
             with_columns,
             max_chunks_to_read,
             num_rows,
-            batch_size: batch_size.unwrap_or(DEFAULT_BATCH_SIZE),
+            batch_size: batch_size
+                .unwrap_or(DEFAULT_BATCH_SIZE),
             max_concurrency: max_concurrency
                 .filter(|&v| v > 0)
                 .unwrap_or(
@@ -165,14 +166,16 @@ impl IcechunkIterator {
         while state.current_group_idx
             < state.grid_groups.len()
         {
-            let group = &state.grid_groups[state.current_group_idx];
+            let group = &state.grid_groups
+                [state.current_group_idx];
 
-            let chunks_to_read = collect_chunks_for_batch(
-                group,
-                &mut state.current_chunk_idx,
-                state.current_batch_rows,
-                self.batch_size,
-            );
+            let chunks_to_read =
+                collect_chunks_for_batch(
+                    group,
+                    &mut state.current_chunk_idx,
+                    state.current_batch_rows,
+                    self.batch_size,
+                );
 
             if !chunks_to_read.is_empty() {
                 let vars = group.vars.clone();
@@ -246,10 +249,15 @@ impl IcechunkIterator {
         }
 
         if !state.current_batch.is_empty() {
-            let batch_dfs = std::mem::take(&mut state.current_batch);
+            let batch_dfs = std::mem::take(
+                &mut state.current_batch,
+            );
             state.current_batch_rows = 0;
 
-            let result = combine_and_postprocess_batch(batch_dfs, state)?;
+            let result =
+                combine_and_postprocess_batch(
+                    batch_dfs, state,
+                )?;
             Ok(Some(result))
         } else {
             Ok(None)

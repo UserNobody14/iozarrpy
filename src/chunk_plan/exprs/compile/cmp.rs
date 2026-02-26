@@ -3,6 +3,7 @@
 use super::super::compile_ctx::LazyCompileCtx;
 use super::super::expr_plan::{ExprPlan, VarSet};
 use super::super::literals::literal_to_scalar;
+use crate::ensure_some;
 use crate::chunk_plan::indexing::lazy_selection::{
     LazyArraySelection, LazyDimConstraint, LazyHyperRectangle,
 };
@@ -39,9 +40,7 @@ pub(super) fn compile_value_range_to_plan(
     vr: &ValueRangePresent,
     ctx: &LazyCompileCtx<'_>,
 ) -> LazyResult {
-    if ctx.dim_index(col).is_none() {
-        return Ok(ExprPlan::NoConstraint);
-    }
+    ensure_some!(ctx.dim_index(col));
 
     let constraint =
         LazyDimConstraint::Unresolved(vr.clone());

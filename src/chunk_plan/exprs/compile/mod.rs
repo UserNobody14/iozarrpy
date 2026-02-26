@@ -4,11 +4,12 @@
 //! dimension constraints from variable tracking. The expensive `GroupedSelection`
 //! construction is deferred to `ExprPlan::into_lazy_dataset_selection`.
 
+mod utils;
+
 mod boolean;
 mod cmp;
 mod expr;
 mod interpolate;
 mod selector;
-mod utils;
 
 pub(crate) use expr::compile_expr;

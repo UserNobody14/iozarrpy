@@ -36,6 +36,12 @@ pub enum BackendError {
     UnsupportedLiteral { lit: LiteralValue },
 
     #[snafu(display(
+        "unsupported any value: {msg}",
+        msg = msg,
+    ))]
+    UnsupportedAnyValue { msg: String },
+
+    #[snafu(display(
         "unsupported boolean function: {:?}",
         function
     ))]

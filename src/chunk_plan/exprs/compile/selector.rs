@@ -18,29 +18,58 @@ pub(super) fn compile_selector_lazy(
 
     match selector {
         Selector::Union(left, right) => {
-            let l = compile_selector_lazy(left.as_ref(), ctx)?;
-            let r = compile_selector_lazy(right.as_ref(), ctx)?;
+            let l = compile_selector_lazy(
+                left.as_ref(),
+                ctx,
+            )?;
+            let r = compile_selector_lazy(
+                right.as_ref(),
+                ctx,
+            )?;
             Ok(l.union(&r))
         }
         Selector::Difference(left, right) => {
-            let l = compile_selector_lazy(left.as_ref(), ctx)?;
-            let r = compile_selector_lazy(right.as_ref(), ctx)?;
+            let l = compile_selector_lazy(
+                left.as_ref(),
+                ctx,
+            )?;
+            let r = compile_selector_lazy(
+                right.as_ref(),
+                ctx,
+            )?;
             Ok(l.difference(&r))
         }
         Selector::ExclusiveOr(left, right) => {
-            let l = compile_selector_lazy(left.as_ref(), ctx)?;
-            let r = compile_selector_lazy(right.as_ref(), ctx)?;
+            let l = compile_selector_lazy(
+                left.as_ref(),
+                ctx,
+            )?;
+            let r = compile_selector_lazy(
+                right.as_ref(),
+                ctx,
+            )?;
             Ok(l.exclusive_or(&r))
         }
         Selector::Intersect(left, right) => {
-            let l = compile_selector_lazy(left.as_ref(), ctx)?;
-            let r = compile_selector_lazy(right.as_ref(), ctx)?;
+            let l = compile_selector_lazy(
+                left.as_ref(),
+                ctx,
+            )?;
+            let r = compile_selector_lazy(
+                right.as_ref(),
+                ctx,
+            )?;
             Ok(l.intersect(&r))
         }
         Selector::Empty => Ok(ExprPlan::Empty),
         Selector::ByName { names, .. } => {
-            let vars: Vec<IStr> = names.iter().map(|s| s.istr()).collect();
-            Ok(ExprPlan::unconstrained_vars(VarSet::from_vec(vars)))
+            let vars: Vec<IStr> = names
+                .iter()
+                .map(|s| s.istr())
+                .collect();
+            Ok(ExprPlan::unconstrained_vars(
+                VarSet::from_vec(vars),
+            ))
         }
         Selector::Matches(pattern) => {
             let re = Regex::new(pattern.as_str())
@@ -51,13 +80,19 @@ pub(super) fn compile_selector_lazy(
                 .meta
                 .all_array_paths()
                 .iter()
-                .filter(|v| re.is_match(v.as_ref()))
+                .filter(|v| {
+                    re.is_match(v.as_ref())
+                })
                 .cloned()
                 .collect();
             if matching_vars.is_empty() {
                 Ok(ExprPlan::Empty)
             } else {
-                Ok(ExprPlan::unconstrained_vars(VarSet::from_vec(matching_vars)))
+                Ok(ExprPlan::unconstrained_vars(
+                    VarSet::from_vec(
+                        matching_vars,
+                    ),
+                ))
             }
         }
         Selector::ByDType(dtype_selector) => {
@@ -66,8 +101,14 @@ pub(super) fn compile_selector_lazy(
                 .all_array_paths()
                 .iter()
                 .filter(|v| {
-                    if let Some(array_meta) = ctx.meta.array_by_path(v.istr()) {
-                        dtype_selector.matches(&array_meta.polars_dtype)
+                    if let Some(array_meta) = ctx
+                        .meta
+                        .array_by_path(v.istr())
+                    {
+                        dtype_selector.matches(
+                            &array_meta
+                                .polars_dtype,
+                        )
                     } else {
                         true
                     }
@@ -77,13 +118,24 @@ pub(super) fn compile_selector_lazy(
             if matching_vars.is_empty() {
                 Ok(ExprPlan::Empty)
             } else {
-                Ok(ExprPlan::unconstrained_vars(VarSet::from_vec(matching_vars)))
+                Ok(ExprPlan::unconstrained_vars(
+                    VarSet::from_vec(
+                        matching_vars,
+                    ),
+                ))
             }
         }
-        Selector::ByIndex { .. } => Ok(ExprPlan::NoConstraint),
+        Selector::ByIndex { .. } => {
+            Ok(ExprPlan::NoConstraint)
+        }
         Selector::Wildcard => {
-            let all_vars = ctx.meta.all_array_paths().to_vec();
-            Ok(ExprPlan::unconstrained_vars(VarSet::from_vec(all_vars)))
+            let all_vars = ctx
+                .meta
+                .all_array_paths()
+                .to_vec();
+            Ok(ExprPlan::unconstrained_vars(
+                VarSet::from_vec(all_vars),
+            ))
         }
     }
 }

@@ -346,5 +346,4 @@ impl ExprPlan {
         self.difference(other)
             .union(&other.difference(self))
     }
-
 }
