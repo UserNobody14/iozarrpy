@@ -279,6 +279,79 @@ async def test_interp_cf_datetime_2d_with_time_filter2(tmp_path: Path) -> None:
     )
 
 
+
+
+@pytest.mark.asyncio
+async def test_interp_cf_datetime_2d_with_time_filter_and_multiple_columns(tmp_path: Path) -> None:
+    """2D interpolation (lat, lon) with CF-coded time as filter dimension."""
+    nlat, nlon = 8, 10
+    lat_coords = np.linspace(-0.5, 1.5, nlat)
+    lon_coords = np.linspace(-0.5, 3.5, nlon)
+
+    # 3 time steps with CF int64 encoding
+    epoch = np.datetime64("1970-01-01T00:00:00", "ns")
+    times_ns = np.array(
+        [
+            np.datetime64("2025-02-01T16:00:00", "ns"),
+            np.datetime64("2025-02-01T17:00:00", "ns"),
+            np.datetime64("2025-02-01T18:00:00", "ns"),
+        ]
+    )
+    time_seconds = ((times_ns - epoch) / np.timedelta64(1, "s")).astype(np.int64)
+
+    rng = np.random.default_rng(42)
+    data = rng.standard_normal((3, nlat, nlon)).astype(np.float64)
+
+    ds = xr.Dataset(
+        data_vars={
+            "CAL": (["time", "lat", "lon"], data),
+            "CAL2": (["time", "lat", "lon"], data),
+        },
+        coords={
+            "time": (["time"], time_seconds),
+            "lat": lat_coords,
+            "lon": lon_coords,
+        },
+    )
+    ds["time"].attrs["units"] = "seconds since 1970-01-01 00:00:00"
+
+    zarr_path = tmp_path / "cf_time_2d.zarr"
+    ds.to_zarr(
+        str(zarr_path),
+        zarr_format=3,
+        encoding={
+            "CAL": {"chunks": (1, 4, 5), "compressors": [BLOSC_ZSTD]},
+        },
+    )
+
+    # Interpolate at (lat=0.33, lon=0.14) with time filter at 17:00
+    target_df = pl.DataFrame({"lat": [0.33], "lon": [0.14]})
+    expr = interpolate_nd(
+        ["lat", "lon"],
+        [
+            pl.col("CAL", "CAL2").filter(
+                pl.col("time") == datetime.datetime(2025, 2, 1, 17, 0, 0)
+            )
+        ],
+        target_df,
+    )
+    result = await rainbear.scan_zarr_async(str(zarr_path), expr)
+    unnested = result.unnest("interpolated")
+    actual = float(unnested["CAL"][0])
+
+    # Compare with xarray for value correctness
+    ds_decoded = xr.decode_cf(ds)
+    sel_ds = ds_decoded.sel(time="2025-02-01T17:00:00")
+    expected = _xr_interp_single_point(sel_ds, "CAL", {"lat": 0.33, "lon": 0.14})
+
+    assert actual == pytest.approx(expected, abs=1e-10), (
+        f"rainbear={actual}, xarray={expected}"
+    )
+
+
+
+
+
 # ---------------------------------------------------------------------------
 # Planner: chunk selection for CF datetime
 # ---------------------------------------------------------------------------
