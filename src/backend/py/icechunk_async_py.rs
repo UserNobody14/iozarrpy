@@ -14,29 +14,21 @@ use pyo3::prelude::*;
 use pyo3::types::PyAny;
 use pyo3_async_runtimes::tokio::future_into_py;
 use pyo3_polars::PySchema;
-use zarrs::array::Array;
 
 use crate::backend::implementation::{
     FullyCachedIcechunkBackendAsync,
     IcechunkBackendAsync, IcechunkIterator,
+    scan_with_backend_async,
     to_fully_cached_icechunk_async,
 };
-use crate::meta::ZarrMeta;
+use crate::backend::py::debug::extract_grids;
+use crate::backend::py::debug::grids_to_python;
 use crate::py::expr_extract::extract_expr;
-use crate::scan::async_scan::chunk_to_df_from_grid_with_backend;
-use crate::shared::ChunkedExpressionCompilerAsync;
-use crate::shared::normalize_path;
 use crate::shared::{
-    ChunkedDataBackendAsync,
-    EvictableChunkCacheAsync, HasAsyncStore,
+    EvictableChunkCacheAsync,
     HasMetadataBackendAsync,
 };
 use crate::{IStr, IntoIStr};
-
-use crate::shared::{
-    combine_chunk_dataframes,
-    restructure_to_structs,
-};
 
 /// Extract session bytes from a Python session object.
 ///
@@ -406,226 +398,17 @@ impl PyIcechunkBackend {
         let backend = self.inner.clone();
         let expr = extract_expr(predicate)?;
 
-        #[derive(Clone)]
-        struct ChunkInfo {
-            indices: Vec<u64>,
-            origin: Vec<u64>,
-            shape: Vec<u64>,
-        }
-
-        #[derive(Clone)]
-        struct GridInfo {
-            dims: Vec<String>,
-            variables: Vec<String>,
-            chunks: Vec<ChunkInfo>,
-        }
-
+        // Create a runtime to block on async operations (same pattern as schema())
         let runtime = tokio::runtime::Runtime::new().map_err(|e| {
             PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string())
         })?;
 
-        let (grids, coord_reads): (Vec<GridInfo>, u64) =
-            runtime.block_on(async {
-                let (grouped_plan, stats) = backend
-                    .clone()
-                    .compile_expression_async(&expr)
-                    .await?;
+        let (grids, coord_reads) = runtime
+            .block_on(extract_grids(
+                backend, expr,
+            ))?;
 
-                let mut grids: Vec<GridInfo> = Vec::new();
-
-                for (sig, vars, subsets, chunkgrid) in
-                    grouped_plan.iter_grids()
-                {
-                    let dims: Vec<String> =
-                        sig.dims().iter().map(|d| d.to_string()).collect();
-                    let variables: Vec<String> =
-                        vars.iter().map(|v| v.to_string()).collect();
-
-                    // For sharded arrays, the planner produces *inner* chunk indices
-                    // but remote access happens at the shard-file level.
-                    let inner_chunk_shape: Vec<u64> =
-                        sig.chunk_shape().to_vec();
-
-                    let mut outer_chunk_shape: Option<Vec<u64>> = None;
-                    let mut array_shape: Option<Vec<u64>> = None;
-                    if let Some(var) = vars.first() {
-                        if let Ok(arr) = Array::async_open(
-                            backend.async_store().clone(),
-                            &normalize_path(var),
-                        )
-                        .await
-                        {
-                            let zero =
-                                vec![0u64; arr.dimensionality()];
-                            outer_chunk_shape = arr
-                                .chunk_grid()
-                                .chunk_shape_u64(&zero)
-                                .ok()
-                                .flatten();
-                            array_shape = Some(arr.shape().to_vec());
-                        }
-                    }
-
-                    let is_sharded = outer_chunk_shape
-                        .as_ref()
-                        .is_some_and(|outer| outer != &inner_chunk_shape);
-
-                    let mut chunks: Vec<ChunkInfo> = Vec::new();
-                    let mut seen_outer: BTreeSet<Vec<u64>> = BTreeSet::new();
-
-                    for subset in subsets.subsets_iter() {
-                        let chunk_indices = chunkgrid
-                            .chunks_in_array_subset(subset)
-                            .map_err(|e| {
-                                PyErr::new::<
-                                    pyo3::exceptions::PyValueError,
-                                    _,
-                                >(e.to_string())
-                            })?;
-
-                        if let Some(indices) = chunk_indices {
-                            for idx in indices.indices() {
-                                let inner_idx = idx.to_vec();
-
-                                if is_sharded {
-                                    let Some(outer_shape) =
-                                        outer_chunk_shape.as_ref()
-                                    else {
-                                        continue;
-                                    };
-                                    let outer_idx: Vec<u64> =
-                                        inner_idx
-                                            .iter()
-                                            .zip(inner_chunk_shape.iter())
-                                            .zip(outer_shape.iter())
-                                            .map(
-                                                |((&i, &inner_sz), &outer_sz)| {
-                                                    if outer_sz == 0 {
-                                                        0
-                                                    } else {
-                                                        i.saturating_mul(inner_sz)
-                                                            / outer_sz
-                                                    }
-                                                },
-                                            )
-                                            .collect();
-
-                                    if !seen_outer.insert(outer_idx.clone()) {
-                                        continue;
-                                    }
-
-                                    let origin: Vec<u64> = outer_idx
-                                        .iter()
-                                        .zip(outer_shape.iter())
-                                        .map(|(&i, &sz)| i.saturating_mul(sz))
-                                        .collect();
-
-                                    let shape: Vec<u64> = match array_shape.as_ref() {
-                                        Some(a_shape) if a_shape.len() == outer_shape.len() => {
-                                            origin
-                                                .iter()
-                                                .zip(a_shape.iter())
-                                                .zip(outer_shape.iter())
-                                                .map(|((&o, &a), &s)| {
-                                                    if o >= a {
-                                                        0
-                                                    } else {
-                                                        (a - o).min(s)
-                                                    }
-                                                })
-                                                .collect()
-                                        }
-                                        _ => outer_shape.clone(),
-                                    };
-
-                                    chunks.push(ChunkInfo {
-                                        indices: outer_idx,
-                                        origin,
-                                        shape,
-                                    });
-                                } else {
-                                    let chunk_shape = sig.chunk_shape();
-                                    let origin = chunkgrid
-                                        .chunk_origin(&idx)
-                                        .map_err(|e| {
-                                            PyErr::new::<
-                                                pyo3::exceptions::PyValueError,
-                                                _,
-                                            >(e.to_string())
-                                        })?
-                                        .unwrap_or_else(|| {
-                                            vec![0; chunk_shape.len()]
-                                        });
-
-                                    chunks.push(ChunkInfo {
-                                        indices: inner_idx,
-                                        origin,
-                                        shape: chunk_shape.to_vec(),
-                                    });
-                                }
-                            }
-                        }
-                    }
-
-                    grids.push(GridInfo {
-                        dims,
-                        variables,
-                        chunks,
-                    });
-                }
-
-                Ok::<_, PyErr>((grids, stats.coord_reads))
-            })?;
-
-        // Convert to Python objects
-        let py_grids =
-            pyo3::types::PyList::empty(py);
-
-        for grid in grids {
-            let grid_dict =
-                pyo3::types::PyDict::new(py);
-            grid_dict
-                .set_item("dims", &grid.dims)?;
-            grid_dict.set_item(
-                "variables",
-                &grid.variables,
-            )?;
-
-            let chunks_list =
-                pyo3::types::PyList::empty(py);
-            for chunk in grid.chunks {
-                let chunk_dict =
-                    pyo3::types::PyDict::new(py);
-                chunk_dict.set_item(
-                    "indices",
-                    &chunk.indices,
-                )?;
-                chunk_dict.set_item(
-                    "origin",
-                    &chunk.origin,
-                )?;
-                chunk_dict.set_item(
-                    "shape",
-                    &chunk.shape,
-                )?;
-                chunks_list.append(chunk_dict)?;
-            }
-            grid_dict.set_item(
-                "chunks",
-                chunks_list,
-            )?;
-
-            py_grids.append(grid_dict)?;
-        }
-
-        let result = pyo3::types::PyDict::new(py);
-        result.set_item("grids", py_grids)?;
-        result.set_item(
-            "coord_reads",
-            coord_reads,
-        )?;
-
-        Ok(result.into_any().unbind())
+        grids_to_python(py, grids, coord_reads)
     }
 
     /// Get the store root path.
@@ -690,140 +473,5 @@ impl PyIcechunkBackend {
             "IcechunkBackend(root='{}')",
             self.inner
         )
-    }
-}
-
-/// Internal: Async scan using any backend that implements the required traits.
-async fn scan_with_backend_async<B>(
-    backend: Arc<B>,
-    expr: polars::prelude::Expr,
-    max_concurrency: Option<usize>,
-    max_chunks_to_read: Option<usize>,
-) -> Result<polars::prelude::DataFrame, PyErr>
-where
-    B: ChunkedDataBackendAsync
-        + HasMetadataBackendAsync<ZarrMeta>
-        + ChunkedExpressionCompilerAsync
-        + Send
-        + Sync
-        + 'static,
-{
-    use futures::stream::{
-        FuturesUnordered, StreamExt,
-    };
-    use std::sync::Arc as StdArc;
-
-    const DEFAULT_MAX_CONCURRENCY: usize = 32;
-    let meta = backend.metadata().await?;
-
-    // // Expand struct column names to flat paths for chunk reading
-    // let expanded_with_columns =
-    //     with_columns.as_ref().map(|cols| {
-    //         expand_projection_to_flat_paths(
-    //             cols, &meta,
-    //         )
-    //     });
-
-    // Compile grouped chunk plan using backend-based resolver
-    let (grouped_plan, _stats) = backend
-        .clone()
-        .compile_expression_async(&expr)
-        .await?;
-
-    // Check max_chunks_to_read limit before doing any I/O
-    if let Some(max_chunks) = max_chunks_to_read {
-        let total_chunks =
-            grouped_plan.total_unique_chunks()?;
-        if total_chunks > max_chunks {
-            return Err(PyErr::new::<
-                pyo3::exceptions::PyRuntimeError,
-                _,
-            >(format!(
-                "max_chunks_to_read exceeded: {} chunks needed, limit is {}",
-                total_chunks, max_chunks
-            )));
-        }
-    }
-
-    let max_conc = max_concurrency
-        .filter(|&v| v > 0)
-        .unwrap_or(DEFAULT_MAX_CONCURRENCY);
-    let semaphore = StdArc::new(
-        tokio::sync::Semaphore::new(max_conc),
-    );
-
-    // Read chunks using consolidated (deduplicated) iteration
-    let mut futs = FuturesUnordered::new();
-    for group in
-        grouped_plan.iter_consolidated_chunks()
-    {
-        let group = group?;
-        let vars: Vec<IStr> =
-            group.vars.iter().cloned().collect();
-
-        for (idx, subset) in group
-            .chunk_indices
-            .into_iter()
-            .zip(group.chunk_subsets)
-        {
-            let sem = semaphore.clone();
-            let backend = backend.clone();
-            let sig = group.sig.clone();
-            let array_shape =
-                group.array_shape.clone();
-            let vars = vars.clone();
-            let meta = meta.clone();
-
-            futs.push(async move {
-                let _permit = sem
-                    .acquire_owned()
-                    .await
-                    .expect("semaphore closed");
-                chunk_to_df_from_grid_with_backend(
-                    backend.as_ref(),
-                    idx.into(),
-                    &sig,
-                    &array_shape,
-                    &vars,
-                    None,
-                    subset.as_ref(),
-                    &meta,
-                )
-                .await
-            });
-        }
-    }
-
-    // Collect all chunk DataFrames
-    let mut dfs: Vec<polars::prelude::DataFrame> =
-        Vec::new();
-    while let Some(r) = futs.next().await {
-        let df = r?;
-        dfs.push(df);
-    }
-
-    // Combine all chunk DataFrames
-    let result = if dfs.is_empty() {
-        let keys: Vec<IStr> = grouped_plan
-            .var_to_grid()
-            .keys()
-            .cloned()
-            .collect();
-        polars::prelude::DataFrame::empty_with_schema(
-            &meta.tidy_schema(Some(keys.as_slice())),
-        )
-    } else if dfs.len() == 1 {
-        dfs.into_iter().next().unwrap()
-    } else {
-        combine_chunk_dataframes(dfs, &meta)?
-    };
-
-    // For hierarchical data, convert flat path columns to struct columns
-    if meta.is_hierarchical() {
-        Ok(restructure_to_structs(
-            &result, &meta,
-        )?)
-    } else {
-        Ok(result)
     }
 }

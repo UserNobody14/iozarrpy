@@ -2,6 +2,7 @@
 mod icechunk;
 mod icechunk_iterating;
 mod iterating;
+mod iterating_common;
 mod lazy;
 mod zarr_async;
 
@@ -13,4 +14,4 @@ pub(crate) use icechunk::{
 pub(crate) use icechunk_iterating::IcechunkIterator;
 pub(crate) use iterating::ZarrIterator;
 pub(crate) use lazy::scan_zarr_with_backend_sync;
-pub(crate) use zarr_async::scan_zarr_with_backend_async;
+pub(crate) use zarr_async::scan_with_backend_async;

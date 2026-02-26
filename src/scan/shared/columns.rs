@@ -97,25 +97,6 @@ pub(crate) fn compute_var_chunk_indices(
     (var_chunk_indices, var_offsets)
 }
 
-/// Compute actual chunk shape (handling edge chunks).
-pub(crate) fn compute_actual_chunk_shape(
-    chunk_indices: &[u64],
-    regular_chunk_shape: &[u64],
-    array_shape: &[u64],
-) -> Vec<u64> {
-    chunk_indices
-        .iter()
-        .zip(regular_chunk_shape.iter())
-        .zip(array_shape.iter())
-        .map(|((idx, chunk_size), array_size)| {
-            let start = idx * chunk_size;
-            let remaining =
-                array_size.saturating_sub(start);
-            (*chunk_size).min(remaining)
-        })
-        .collect()
-}
-
 pub(crate) fn should_include_column(
     name: &IStr,
     with_columns: Option<&BTreeSet<IStr>>,
@@ -152,14 +133,17 @@ pub(crate) fn build_coord_column(
         if let Some(enc) = encoding {
             match enc {
                 VarEncoding::Time(te) => {
-                    let decoded = coord
-                        .map_i64(|v| te.decode(v));
+                    let decoded =
+                        coord.map_i64(|v| {
+                            te.decode(v)
+                        });
                     let gathered = match keep {
                         KeepMask::All(n) => {
-                            let tile_count =
-                                *n / (cs * stride);
+                            let tile_count = *n
+                                / (cs * stride);
                             decoded.repeat_tile(
-                                stride, tile_count,
+                                stride,
+                                tile_count,
                             )
                         }
                         KeepMask::Sparse(idx) => {
@@ -194,18 +178,19 @@ pub(crate) fn build_coord_column(
                     add_offset,
                     fill_value,
                 } => {
-                    let decoded =
-                        coord.to_f64_scaled(
+                    let decoded = coord
+                        .to_f64_scaled(
                             *scale_factor,
                             *add_offset,
                             *fill_value,
                         );
                     let gathered = match keep {
                         KeepMask::All(n) => {
-                            let tile_count =
-                                *n / (cs * stride);
+                            let tile_count = *n
+                                / (cs * stride);
                             decoded.repeat_tile(
-                                stride, tile_count,
+                                stride,
+                                tile_count,
                             )
                         }
                         KeepMask::Sparse(idx) => {
@@ -406,12 +391,11 @@ pub(crate) fn build_var_column(
     {
         if encoding.is_none() {
             return match keep {
-                KeepMask::All(_) => {
-                    data.borrow_into_series(
+                KeepMask::All(_) => data
+                    .borrow_into_series(
                         name.as_ref(),
                     )
-                    .into()
-                }
+                    .into(),
                 KeepMask::Sparse(idx) => data
                     .take_indices(idx)
                     .into_series(name.as_ref())
@@ -485,14 +469,14 @@ pub(crate) fn build_var_column(
     };
 
     let gathered = match keep {
-        KeepMask::All(n) => data.gather_by(*n, |i| {
-            compute_var_idx(i)
-        }),
-        KeepMask::Sparse(idx) => {
-            data.gather_by(idx.len(), |i| {
+        KeepMask::All(n) => data
+            .gather_by(*n, |i| {
+                compute_var_idx(i)
+            }),
+        KeepMask::Sparse(idx) => data
+            .gather_by(idx.len(), |i| {
                 compute_var_idx(idx[i])
-            })
-        }
+            }),
     };
     apply_encoding(
         gathered,

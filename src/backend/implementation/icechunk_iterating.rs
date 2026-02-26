@@ -7,9 +7,7 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use futures::stream::{
-    FuturesUnordered, StreamExt,
-};
+use futures::stream::{FuturesUnordered, StreamExt};
 use polars::prelude::*;
 use pyo3::PyErr;
 use pyo3::prelude::*;
@@ -18,52 +16,24 @@ use snafu::ensure;
 use tokio::sync::Semaphore;
 
 use crate::IStr;
-use crate::chunk_plan::ChunkSubset;
 use crate::errors::BackendError;
 use crate::errors::CreateTokioRuntimeForSyncStoreSnafu;
 use crate::errors::MaxChunksToReadExceededSnafu;
-use crate::meta::ZarrMeta;
 use crate::scan::async_scan::chunk_to_df_from_grid_with_backend;
 use crate::shared::ChunkedExpressionCompilerAsync;
 use crate::shared::HasMetadataBackendAsync;
-use crate::shared::{
-    combine_chunk_dataframes,
-    expand_projection_to_flat_paths,
-    restructure_to_structs,
-};
+use crate::shared::expand_projection_to_flat_paths;
 
+use super::iterating_common::{
+    collect_chunks_for_batch,
+    combine_and_postprocess_batch,
+    IteratorState,
+    OwnedGridGroup,
+    DEFAULT_BATCH_SIZE,
+};
 use super::FullyCachedIcechunkBackendAsync;
 
 const DEFAULT_MAX_CONCURRENCY: usize = 32;
-const DEFAULT_BATCH_SIZE: usize = 10_000;
-
-/// Owned version of ConsolidatedGridGroup for storage in iterator state
-struct OwnedGridGroup {
-    sig: Arc<
-        crate::chunk_plan::ChunkGridSignature,
-    >,
-    vars: Vec<IStr>,
-    chunk_indices: Vec<Vec<u64>>,
-    chunk_subsets: Vec<Option<ChunkSubset>>,
-    array_shape: Vec<u64>,
-}
-
-struct IteratorState {
-    grid_groups: Vec<OwnedGridGroup>,
-    current_group_idx: usize,
-    current_chunk_idx: usize,
-
-    current_batch: Vec<DataFrame>,
-    current_batch_rows: usize,
-
-    total_rows_yielded: usize,
-    num_rows_limit: Option<usize>,
-
-    meta: Arc<ZarrMeta>,
-    expanded_with_columns: Option<BTreeSet<IStr>>,
-
-    predicate: Expr,
-}
 
 /// Streaming iterator for Icechunk-backed zarr that yields DataFrames in batches.
 ///
@@ -112,8 +82,7 @@ impl IcechunkIterator {
             with_columns,
             max_chunks_to_read,
             num_rows,
-            batch_size: batch_size
-                .unwrap_or(DEFAULT_BATCH_SIZE),
+            batch_size: batch_size.unwrap_or(DEFAULT_BATCH_SIZE),
             max_concurrency: max_concurrency
                 .filter(|&v| v > 0)
                 .unwrap_or(
@@ -156,13 +125,7 @@ impl IcechunkIterator {
                 .iter_consolidated_chunks()
                 .collect::<Result<Vec<_>, _>>()?
                 .into_iter()
-                .map(|group| OwnedGridGroup {
-                    sig: Arc::new(group.sig.clone()),
-                    vars: group.vars,
-                    chunk_indices: group.chunk_indices,
-                    chunk_subsets: group.chunk_subsets,
-                    array_shape: group.array_shape,
-                })
+                .map(OwnedGridGroup::from_consolidated)
                 .collect();
 
             Ok::<_, BackendError>((grid_groups, meta, expanded_with_columns))
@@ -202,31 +165,14 @@ impl IcechunkIterator {
         while state.current_group_idx
             < state.grid_groups.len()
         {
-            let group = &state.grid_groups
-                [state.current_group_idx];
+            let group = &state.grid_groups[state.current_group_idx];
 
-            let mut chunks_to_read: Vec<(
-                Vec<u64>,
-                Option<ChunkSubset>,
-            )> = Vec::new();
-            while state.current_chunk_idx
-                < group.chunk_indices.len()
-                && state.current_batch_rows
-                    < self.batch_size
-            {
-                let ci = state.current_chunk_idx;
-                chunks_to_read.push((
-                    group.chunk_indices[ci]
-                        .clone(),
-                    group.chunk_subsets[ci]
-                        .clone(),
-                ));
-                state.current_chunk_idx += 1;
-
-                if chunks_to_read.len() >= 100 {
-                    break;
-                }
-            }
+            let chunks_to_read = collect_chunks_for_batch(
+                group,
+                &mut state.current_chunk_idx,
+                state.current_batch_rows,
+                self.batch_size,
+            );
 
             if !chunks_to_read.is_empty() {
                 let vars = group.vars.clone();
@@ -300,72 +246,10 @@ impl IcechunkIterator {
         }
 
         if !state.current_batch.is_empty() {
-            let batch_dfs = std::mem::take(
-                &mut state.current_batch,
-            );
+            let batch_dfs = std::mem::take(&mut state.current_batch);
             state.current_batch_rows = 0;
 
-            let combined = if batch_dfs.is_empty()
-            {
-                let keys: Vec<IStr> =
-                    state.meta.all_array_paths();
-                DataFrame::empty_with_schema(
-                    &state.meta.tidy_schema(
-                        Some(keys.as_slice()),
-                    ),
-                )
-            } else if batch_dfs.len() == 1 {
-                batch_dfs
-                    .into_iter()
-                    .next()
-                    .unwrap()
-            } else {
-                combine_chunk_dataframes(
-                    batch_dfs,
-                    &state.meta,
-                )?
-            };
-
-            let result = combined
-                .lazy()
-                .filter(state.predicate.clone())
-                .collect()
-                .map_err(|e| {
-                    PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
-                        "Failed to filter data: {}",
-                        e
-                    ))
-                })?;
-
-            let result = if let Some(limit) =
-                state.num_rows_limit
-            {
-                let remaining = limit
-                    .saturating_sub(
-                        state.total_rows_yielded,
-                    );
-                if remaining < result.height() {
-                    result.slice(0, remaining)
-                } else {
-                    result
-                }
-            } else {
-                result
-            };
-
-            state.total_rows_yielded +=
-                result.height();
-
-            let result =
-                if state.meta.is_hierarchical() {
-                    restructure_to_structs(
-                        &result,
-                        &state.meta,
-                    )?
-                } else {
-                    result
-                };
-
+            let result = combine_and_postprocess_batch(batch_dfs, state)?;
             Ok(Some(result))
         } else {
             Ok(None)
