@@ -1137,7 +1137,7 @@ fn interpolate_selection_nd_lazy(
                         );
                     let mut filter_plan_acc: Option<ExprPlan> = None;
                     for n in input {
-                        let Some((name, filter_pred)) =
+                        let Some((names, filter_pred)) =
                         extract_var_from_source_value_expr(n)
                     else {
                         return Err(BackendError::compile_polars(format!(
@@ -1146,7 +1146,7 @@ fn interpolate_selection_nd_lazy(
                             source_values
                         )));
                     };
-                        vars.push(name);
+                        vars.extend(names);
                         if let Some(pred) =
                             filter_pred
                         {

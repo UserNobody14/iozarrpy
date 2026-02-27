@@ -80,31 +80,60 @@ pub(super) fn expr_to_col_name(
     }
 }
 
-/// Extract variable name and optional filter predicate from a source_values element.
-/// Handles: `col("x")`, `col("x").filter(predicate)`, and wrappers like alias.
-/// Returns `(var_name, filter_predicate)` where filter_predicate is `Some(by)` when
+/// Extract variable name(s) and optional filter predicate from a source_values element.
+/// Handles: `col("x")`, `col("x").filter(predicate)`, `cs.by_name("a","b")`,
+/// `cs.by_name("a","b").filter(predicate)`, and wrappers like alias.
+/// Returns `(var_names, filter_predicate)` where filter_predicate is `Some(by)` when
 /// the expression is a Filter.
 pub(super) fn extract_var_from_source_value_expr(
     e: &Expr,
-) -> Option<(IStr, Option<&Expr>)> {
+) -> Option<(Vec<IStr>, Option<&Expr>)> {
     let e = strip_wrappers(e);
     match e {
         Expr::Column(name) => {
-            Some((name.istr(), None))
+            Some((vec![name.istr()], None))
+        }
+        Expr::Selector(selector) => {
+            extract_names_from_selector(selector)
+                .map(|names| (names, None))
         }
         Expr::Filter { input, by } => {
             let inner =
                 strip_wrappers(input.as_ref());
             if let Expr::Column(name) = inner {
                 Some((
-                    name.istr(),
+                    vec![name.istr()],
                     Some(by.as_ref()),
                 ))
+            } else if let Expr::Selector(
+                selector,
+            ) = inner
+            {
+                extract_names_from_selector(
+                    selector,
+                )
+                .map(|names| {
+                    (names, Some(by.as_ref()))
+                })
             } else {
                 extract_var_from_source_value_expr(input)
-                    .map(|(name, _)| (name, Some(by.as_ref())))
+                    .map(|(names, _)| (names, Some(by.as_ref())))
             }
         }
+        _ => None,
+    }
+}
+
+fn extract_names_from_selector(
+    selector: &Selector,
+) -> Option<Vec<IStr>> {
+    match selector {
+        Selector::ByName { names, .. } => Some(
+            names
+                .iter()
+                .map(|n| n.istr())
+                .collect(),
+        ),
         _ => None,
     }
 }
