@@ -1110,13 +1110,41 @@ wheels = [
 
 [[package]]
 name = "interpolars"
-version = "0.1.0"
+version = "1.1.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "polars" },
 ]
+sdist = { url = "https://files.pythonhosted.org/packages/fa/3e/104fb3fd1cd9ad8a58cdac2aae14db43ccdda644f7fef027dae3e5e94b82/interpolars-1.1.0.tar.gz", hash = "sha256:c6587ed507e71a0c697228d1011812c4e56e504d9e4ee1d7e68f3abc6b6ecaa8", size = 55240, upload-time = "2026-02-25T04:22:03.449Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/a7/2c/968ad0fd3f49ffe3f0011f264c739c0988558d4f15241515970aa685287c/interpolars-0.1.0-cp39-abi3-manylinux_2_24_x86_64.whl", hash = "sha256:ed04314b9dafec57fc656670c42dd8fd98ddd90b112144c70e2358eadd79e0ea", size = 6769150, upload-time = "2026-01-17T19:20:58.758Z" },
+    { url = "https://files.pythonhosted.org/packages/a7/ad/49d87201a3f29c32410865afb133903f5eb1a23484d4925bba0376f7bcce/interpolars-1.1.0-cp314-cp314t-macosx_10_12_x86_64.whl", hash = "sha256:11655df53719adb6022beaea36224b69d9c2d861483926c584a03c17ef715799", size = 6045909, upload-time = "2026-02-25T04:22:31.578Z" },
+    { url = "https://files.pythonhosted.org/packages/cb/fd/80062bc088384ed694ca22620cb5b5c4f41281dd6ffc72593a19f5d0ae44/interpolars-1.1.0-cp314-cp314t-macosx_11_0_arm64.whl", hash = "sha256:f8e50876d7ea04fc05bd263fb1d7637ee2a47a12dd10f61212cf9ffdf85e50f3", size = 5722007, upload-time = "2026-02-25T04:22:20.748Z" },
+    { url = "https://files.pythonhosted.org/packages/b9/32/77e3504e2a581e67aa341c0160aae2cc532c3e597769f8a1b518cb01b3ef/interpolars-1.1.0-cp314-cp314t-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:bfd1aaba6128ea1e6434f23e52f0c3a3d4ef1993582068892c4c77a1b48f987b", size = 6086609, upload-time = "2026-02-25T04:22:01.889Z" },
+    { url = "https://files.pythonhosted.org/packages/42/71/04c6e69b8c0384bcab3b0d9d6782298ba3efd06d2c1a9add144e231b4bd9/interpolars-1.1.0-cp314-cp314t-manylinux_2_17_armv7l.manylinux2014_armv7l.whl", hash = "sha256:f29abfaaeea932f8a4eccae05bec2704f17717be91f9db4e00b8ab57ba46169a", size = 6241330, upload-time = "2026-02-25T04:22:38.286Z" },
+    { url = "https://files.pythonhosted.org/packages/2f/78/050193e516dcd6d97a08eb861fed730f8069aa9560cd7bb374f830de6a9d/interpolars-1.1.0-cp314-cp314t-manylinux_2_17_i686.manylinux2014_i686.whl", hash = "sha256:a88d2633dc49b930cd1b201983b3d38f154622afa82a435eec974af295fb775a", size = 6992320, upload-time = "2026-02-25T04:22:28.444Z" },
+    { url = "https://files.pythonhosted.org/packages/ec/57/e48e8519f38f360f86db14745a914b7ed926e4eb625cb01f7838b9c867ce/interpolars-1.1.0-cp314-cp314t-manylinux_2_17_ppc64le.manylinux2014_ppc64le.whl", hash = "sha256:7979f41cc803ec21941b15c2a82cc814eacc114fe728a6f572a9e90630f44da7", size = 7844613, upload-time = "2026-02-25T04:22:16.941Z" },
+    { url = "https://files.pythonhosted.org/packages/b1/f2/97783f23ab56ec9ea4644e63170c206e041be6f5d67fd4dd7ea7fd55d152/interpolars-1.1.0-cp314-cp314t-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:d79a59074b62466e6f9307cb6282c102012fb8fc4bfa2b355fe4680500a80fe8", size = 6895041, upload-time = "2026-02-25T04:22:29.865Z" },
+    { url = "https://files.pythonhosted.org/packages/d1/69/3269d512368e264449f76fb73f89bc84bcacb0de000d27e659e70a51f9bd/interpolars-1.1.0-cp314-cp314t-musllinux_1_2_aarch64.whl", hash = "sha256:cad1e9a4288003d1d19e2e6d9e6d3bde120788d224a09b990ecb1ed36f69ecb9", size = 6263203, upload-time = "2026-02-25T04:22:39.805Z" },
+    { url = "https://files.pythonhosted.org/packages/66/73/501c6717d5f88f395006c07cd2a7bf292f37a91438770090f466c88e3695/interpolars-1.1.0-cp314-cp314t-musllinux_1_2_armv7l.whl", hash = "sha256:c2f25b42bf73b0aad0529c9e0022277f19a0cdcff54a175455b2bc7f846016b6", size = 6516814, upload-time = "2026-02-25T04:22:07.85Z" },
+    { url = "https://files.pythonhosted.org/packages/ec/0d/f4e6f667eb37aa801315986bd79a3a4525e4a8262bfd1e4b9142288fc1e0/interpolars-1.1.0-cp314-cp314t-musllinux_1_2_i686.whl", hash = "sha256:4c42b071b450dbab9a3bfa0c2258570bc25e0c8964edeca5552f44f69cd091cb", size = 6871093, upload-time = "2026-02-25T04:22:36.499Z" },
+    { url = "https://files.pythonhosted.org/packages/15/1c/feb86470aec82a6be32367efe8af6736b7e7d1e406497720382b476d1ee7/interpolars-1.1.0-cp314-cp314t-musllinux_1_2_x86_64.whl", hash = "sha256:7288c3d5c62e01a3028fc6a169e98fae30e618fafbee20555fb61a6aa7f38a2f", size = 6827746, upload-time = "2026-02-25T04:22:26.972Z" },
+    { url = "https://files.pythonhosted.org/packages/bc/05/d5caaf47813bc8277a3960fb4b7054251903af27337b9ac6fb6e7b860ab3/interpolars-1.1.0-cp314-cp314t-win32.whl", hash = "sha256:a3695ed143de6e567430c564bc44b890fe662a6af964106762b7e977c6544358", size = 4565255, upload-time = "2026-02-25T04:22:13.926Z" },
+    { url = "https://files.pythonhosted.org/packages/31/a2/0586eaa6b2bd8eed6b332cf07186f24d227ff210857d8042dbeecabf36c5/interpolars-1.1.0-cp314-cp314t-win_amd64.whl", hash = "sha256:fa362f39ade72196cbdfdbe056d90750f21f3bfb95b2b9378491c72ad1dd5ec6", size = 5595078, upload-time = "2026-02-25T04:22:04.336Z" },
+    { url = "https://files.pythonhosted.org/packages/ef/0b/50feea6eb560401121a598cdaea4356fb88dd949063c8933d95897a92b04/interpolars-1.1.0-cp314-cp314t-win_arm64.whl", hash = "sha256:33e9b345c3c35d61eeb4b52212b09b908b91cc49c22b0783eef66360301cb83c", size = 4912938, upload-time = "2026-02-25T04:22:19.406Z" },
+    { url = "https://files.pythonhosted.org/packages/f9/30/768b50d01ac6fffa612b38a42a239c161b3cbb3f432485840508b219a064/interpolars-1.1.0-cp39-abi3-macosx_10_12_x86_64.whl", hash = "sha256:ffca47985a52b0aa0a8bdddac78fd61d397fc9fe6a6adc7bd4ec35ed591d860b", size = 6052185, upload-time = "2026-02-25T04:22:12.153Z" },
+    { url = "https://files.pythonhosted.org/packages/d3/35/e34b04ab7389315d1bb360e08ebfa1b5efdf50ba48babad181cd5c05e984/interpolars-1.1.0-cp39-abi3-macosx_11_0_arm64.whl", hash = "sha256:d1cb91922991ec1004f732d4b75c15c712e526562814a531cc0b967fb5e48c68", size = 5748287, upload-time = "2026-02-25T04:22:23.784Z" },
+    { url = "https://files.pythonhosted.org/packages/63/9e/c56675062806f6a2d9609bfa384431e1b1795f1014169b54a7d8dbdd25aa/interpolars-1.1.0-cp39-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:6f561098e5ccd58b007fecbaf7cb1de44dcd2ebc6cef8dd70fe94fcd5398d553", size = 6105191, upload-time = "2026-02-25T04:22:41.638Z" },
+    { url = "https://files.pythonhosted.org/packages/c6/6e/5095c77262a87387e2ea8e7f317178e12bb88842abf1c2035558d40da7ed/interpolars-1.1.0-cp39-abi3-manylinux_2_17_armv7l.manylinux2014_armv7l.whl", hash = "sha256:eec1932b1647f4c0c97b06fc25fcce1606163096035d10002846c2487cf1d2df", size = 6247474, upload-time = "2026-02-25T04:21:56.751Z" },
+    { url = "https://files.pythonhosted.org/packages/69/b9/cef962c26084e0111c90623abe5b5108a5e7d559eede164499719f85f76f/interpolars-1.1.0-cp39-abi3-manylinux_2_17_i686.manylinux2014_i686.whl", hash = "sha256:6559adccd099477aa2f83ba4ed53fff56799d333e744d2d4c1ff04ace9a65684", size = 7015438, upload-time = "2026-02-25T04:21:58.838Z" },
+    { url = "https://files.pythonhosted.org/packages/18/81/cb5740af8b3ce4ad4b11db43194e9c781fbcad8c681fb696e360949be03b/interpolars-1.1.0-cp39-abi3-manylinux_2_17_ppc64le.manylinux2014_ppc64le.whl", hash = "sha256:79432420a274adda8a067d28d8dba8d3a7cd289a7fd9ddc2eecc78b8147472dc", size = 7890062, upload-time = "2026-02-25T04:22:33.027Z" },
+    { url = "https://files.pythonhosted.org/packages/18/5f/4895d1d2ea02888326e2108dc0c8ba39cb4e287c7b430780af4cef6e80f0/interpolars-1.1.0-cp39-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:38d887d924ab5b811655da17cc4cdff0272cf3be657c63942d4ba673f04a8d18", size = 6916906, upload-time = "2026-02-25T04:22:09.281Z" },
+    { url = "https://files.pythonhosted.org/packages/a3/10/b57ebd8f2d9722d6b5a2275cd1936eb784f2fa66294c31f61c4de7d917d8/interpolars-1.1.0-cp39-abi3-musllinux_1_2_aarch64.whl", hash = "sha256:5e7b46d8ef0d2bf8899745c438b75265f3aa063a3996c26511bea12cd0a072a3", size = 6279485, upload-time = "2026-02-25T04:22:06.156Z" },
+    { url = "https://files.pythonhosted.org/packages/27/2a/d3f2f9a98e752f2275bf9fcd620ce7367e0629bef98f73c51e69155d7384/interpolars-1.1.0-cp39-abi3-musllinux_1_2_armv7l.whl", hash = "sha256:93f5b25e36698eafc6c85545455f9e73e6d057e968d016860f6c133699a0e8b7", size = 6528192, upload-time = "2026-02-25T04:22:10.806Z" },
+    { url = "https://files.pythonhosted.org/packages/6f/84/1fbb95d541099225fb1d9ebeb14bca90628ed41189f306b909841e303d0c/interpolars-1.1.0-cp39-abi3-musllinux_1_2_i686.whl", hash = "sha256:51ad50dfd14e6a9a55f380920c80e75d708f38c588b1f79f7ddccc4b4de216aa", size = 6897123, upload-time = "2026-02-25T04:22:25.456Z" },
+    { url = "https://files.pythonhosted.org/packages/17/63/3f1c1b8f01442230809ef39c692c8c278a9e58b5090f03a3da4fb604cb06/interpolars-1.1.0-cp39-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:b89a76351941a5e83e107a62b468a6c317e5dbbac1983650b999aa1629773bc3", size = 6844487, upload-time = "2026-02-25T04:22:43.428Z" },
+    { url = "https://files.pythonhosted.org/packages/d2/dc/faf9452702e14bc218efe3e8106a248ef1db1744c1582ab982d98cecc5b8/interpolars-1.1.0-cp39-abi3-win32.whl", hash = "sha256:07d8a904ce867778b58b776fe2cfdcc79598d088d9493086720be43c5eee5fce", size = 4580189, upload-time = "2026-02-25T04:22:15.539Z" },
+    { url = "https://files.pythonhosted.org/packages/ad/ae/fc3357a8dc1d30f2a18b2d301fd069bada2da374f26f7be2b00cc6a3939e/interpolars-1.1.0-cp39-abi3-win_amd64.whl", hash = "sha256:fdf0b4cef73118d3f96c18ed1ea5adecaef200fba81ab5c60be9667ae94cb7c7", size = 5601217, upload-time = "2026-02-25T04:22:00.487Z" },
+    { url = "https://files.pythonhosted.org/packages/b1/24/6b8922f773e68e6ea3a3e8ec30cfdfd68f26a56255bf4bc509115e2de3ed/interpolars-1.1.0-cp39-abi3-win_arm64.whl", hash = "sha256:04b4a4a4956e9d980c43a270d9552a7d071d0aca93b1694f626fc4d0a8a6ba4c", size = 4920630, upload-time = "2026-02-25T04:22:34.892Z" },
 ]
 
 [[package]]
@@ -2766,7 +2794,7 @@ wheels = [
 
 [[package]]
 name = "rainbear"
-version = "2.3.0"
+version = "2.4.0"
 source = { editable = "." }
 dependencies = [
     { name = "polars" },
@@ -2812,7 +2840,7 @@ dev = [
     { name = "fsspec", specifier = ">=2026.1.0" },
     { name = "gcsfs", specifier = ">=2026.1.0" },
     { name = "icechunk", specifier = ">=1.1.18" },
-    { name = "interpolars", specifier = ">=0.1.0" },
+    { name = "interpolars", specifier = ">=1.1.0" },
     { name = "marimo", specifier = ">=0.20.2" },
     { name = "maturin", specifier = ">=1.10.2" },
     { name = "numcodecs", specifier = ">=0.13.0" },
