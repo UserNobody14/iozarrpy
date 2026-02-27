@@ -56,10 +56,12 @@ pub(super) fn compile_boolean_function_lazy(
             if inner.is_empty() {
                 Ok(ExprPlan::NoConstraint)
             } else {
-                Ok(ExprPlan::NoConstraint)
+                Ok(inner.boolean_not())
             }
         }
         BooleanFunction::IsNull
+        | BooleanFunction::IsNotNan
+        | BooleanFunction::IsNan
         | BooleanFunction::IsNotNull => {
             let [arg] = input else {
                 return Err(BackendError::UnsupportedBooleanFunction {
@@ -76,6 +78,8 @@ pub(super) fn compile_boolean_function_lazy(
                 let keep = match bf {
                     BooleanFunction::IsNull => is_null,
                     BooleanFunction::IsNotNull => !is_null,
+                    BooleanFunction::IsNan => is_null,
+                    BooleanFunction::IsNotNan => !is_null,
                     _ => unreachable!(),
                 };
                 return Ok(if keep {
@@ -117,7 +121,29 @@ pub(super) fn compile_boolean_function_lazy(
             }
             Ok(acc)
         }
-        _ => Ok(ExprPlan::NoConstraint),
+        BooleanFunction::IsFinite => {
+            todo!()
+        }
+        BooleanFunction::Any { ignore_nulls } => {
+            todo!()
+        }
+        BooleanFunction::All { ignore_nulls } => {
+            todo!()
+        }
+        BooleanFunction::IsInfinite => todo!(),
+        BooleanFunction::IsFirstDistinct => {
+            todo!()
+        }
+        BooleanFunction::IsLastDistinct => {
+            todo!()
+        }
+        BooleanFunction::IsUnique => todo!(),
+        BooleanFunction::IsDuplicated => todo!(),
+        BooleanFunction::IsClose {
+            abs_tol,
+            rel_tol,
+            nans_equal,
+        } => todo!(),
     }
 }
 

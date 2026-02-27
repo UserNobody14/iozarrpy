@@ -5,11 +5,11 @@ use super::super::expr_plan::{ExprPlan, VarSet};
 use super::super::expr_utils::{
     extract_column_names_lazy,
     extract_literal_struct_series_lazy,
-    extract_var_from_source_value_expr,
     series_values_scalar_lazy,
 };
-use crate::try_extract;
-use super::expr::compile_expr;
+use crate::chunk_plan::exprs::compile::expr::compile_expr_list;
+use crate::chunk_plan::exprs::compile::utils::collect_refs_from_expr_list;
+use crate::{try_extract};
 use crate::chunk_plan::indexing::lazy_selection::{
     LazyArraySelection, LazyDimConstraint, LazyHyperRectangle,
 };
@@ -28,24 +28,13 @@ pub(super) fn interpolate_selection_nd_lazy(
     target_values: &Expr,
     ctx: &mut LazyCompileCtx<'_>,
 ) -> LazyResult {
-    let coord_names =
-        extract_column_names_lazy(source_coords);
-    if coord_names.is_empty() {
-        return Ok(ExprPlan::NoConstraint);
-    }
-
-    let Some(target_struct) =
+    try_extract!(let Some(coord_names) = extract_column_names_lazy(source_coords));
+    try_extract!(let Some(target_struct) =
         extract_literal_struct_series_lazy(
             target_values,
         )
-    else {
-        return Ok(ExprPlan::NoConstraint);
-    };
-
-    let Ok(target_sc) = target_struct.struct_()
-    else {
-        return Ok(ExprPlan::NoConstraint);
-    };
+    );
+    try_extract!(let Ok(target_sc) = target_struct.struct_());
     let target_fields =
         target_sc.fields_as_series();
 
@@ -127,38 +116,15 @@ pub(super) fn interpolate_selection_nd_lazy(
                 function,
             } => match function {
                 FunctionExpr::AsStruct => {
-                    let mut vars =
-                        Vec::with_capacity(
-                            input.len(),
+                    let filter_initial =
+                        compile_expr_list(
+                            input, ctx,
+                        )?;
+                    let vars =
+                    collect_refs_from_expr_list(
+                            input,
                         );
-                    let mut filter_plan_acc: Option<ExprPlan> = None;
-                    for n in input {
-                        let Some((names, filter_pred)) =
-                        extract_var_from_source_value_expr(n)
-                    else {
-                        return Err(BackendError::compile_polars(format!(
-                            "source_values must be an Expr::Function with FunctionExpr::AsStruct \
-                             containing column refs or col(...).filter(predicate): {:?}",
-                            source_values
-                        )));
-                    };
-                        vars.extend(names);
-                        if let Some(pred) =
-                            filter_pred
-                        {
-                            let fp =
-                                compile_expr(
-                                    pred, ctx,
-                                )?;
-                            if !fp.is_empty() {
-                                filter_plan_acc = Some(match filter_plan_acc.take() {
-                                None => fp,
-                                Some(acc) => acc.intersect(&fp),
-                            });
-                            }
-                        }
-                    }
-                    (vars, filter_plan_acc)
+                    (vars, Some(filter_initial))
                 }
                 _ => {
                     return Err(BackendError::compile_polars(format!(

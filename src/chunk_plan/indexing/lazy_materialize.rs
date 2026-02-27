@@ -526,6 +526,25 @@ fn resolve_array_sync<
             )?;
             Ok(a_mat.union(&b_mat))
         }
+        LazyArraySelection::BooleanNot(a) => {
+            // Treat as a difference operation against all
+            let all =
+                DataArraySelection::from_subsets(
+                    dims,
+                    vec![
+                        ArraySubset::new_with_ranges(
+                            &dims
+                                .iter().enumerate().map(|(i, _)| 0..shape[i])
+                                .collect::<Vec<_>>(),
+                            ),
+                ]
+                .into()
+            );
+            let a_mat = resolve_array_sync(
+                backend, a, dims, shape, meta,
+            )?;
+            Ok(all.difference(&a_mat))
+        }
     }
 }
 
@@ -978,6 +997,26 @@ fn resolve_array_async<
                     )
                 );
                 Ok(a_mat?.union(&b_mat?))
+            }
+            LazyArraySelection::BooleanNot(a) => {
+                // Treat as a difference operation against all
+                let all =
+                    DataArraySelection::from_subsets(
+                        dims,
+                        vec![
+                            ArraySubset::new_with_ranges(
+                                &dims
+                                    .iter().enumerate().map(|(i, _)| 0..shape[i])
+                                    .collect::<Vec<_>>(),
+                            ),
+                        ]
+                        .into()
+                    );
+                let a_mat = resolve_array_async(
+                    backend, a, dims, shape, meta,
+                )
+                .await?;
+                Ok(all.difference(&a_mat))
             }
         }
     })

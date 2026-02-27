@@ -11,7 +11,6 @@ use crate::{IStr, IntoIStr};
 /// Try to extract a column name and value range from a comparison expression.
 pub(super) fn try_expr_to_value_range_lazy(
     expr: &Expr,
-    ctx: &LazyCompileCtx<'_>,
 ) -> Option<(IStr, ValueRangePresent)> {
     let expr = strip_wrappers(expr);
     let Expr::BinaryExpr { left, op, right } =
@@ -50,13 +49,7 @@ pub(super) fn try_expr_to_value_range_lazy(
         return None;
     };
 
-    let time_encoding = ctx
-        .meta
-        .array_by_path(col.clone())
-        .and_then(|a| a.encoding.as_ref())
-        .and_then(|e| e.as_time_encoding());
-    let Ok(scalar) =
-        literal_to_scalar(lit, time_encoding)
+    let Ok(scalar) = literal_to_scalar(lit)
     else {
         return None;
     };
@@ -80,68 +73,10 @@ pub(super) fn expr_to_col_name(
     }
 }
 
-/// Extract variable name(s) and optional filter predicate from a source_values element.
-/// Handles: `col("x")`, `col("x").filter(predicate)`, `cs.by_name("a","b")`,
-/// `cs.by_name("a","b").filter(predicate)`, and wrappers like alias.
-/// Returns `(var_names, filter_predicate)` where filter_predicate is `Some(by)` when
-/// the expression is a Filter.
-pub(super) fn extract_var_from_source_value_expr(
-    e: &Expr,
-) -> Option<(Vec<IStr>, Option<&Expr>)> {
-    let e = strip_wrappers(e);
-    match e {
-        Expr::Column(name) => {
-            Some((vec![name.istr()], None))
-        }
-        Expr::Selector(selector) => {
-            extract_names_from_selector(selector)
-                .map(|names| (names, None))
-        }
-        Expr::Filter { input, by } => {
-            let inner =
-                strip_wrappers(input.as_ref());
-            if let Expr::Column(name) = inner {
-                Some((
-                    vec![name.istr()],
-                    Some(by.as_ref()),
-                ))
-            } else if let Expr::Selector(
-                selector,
-            ) = inner
-            {
-                extract_names_from_selector(
-                    selector,
-                )
-                .map(|names| {
-                    (names, Some(by.as_ref()))
-                })
-            } else {
-                extract_var_from_source_value_expr(input)
-                    .map(|(names, _)| (names, Some(by.as_ref())))
-            }
-        }
-        _ => None,
-    }
-}
-
-fn extract_names_from_selector(
-    selector: &Selector,
-) -> Option<Vec<IStr>> {
-    match selector {
-        Selector::ByName { names, .. } => Some(
-            names
-                .iter()
-                .map(|n| n.istr())
-                .collect(),
-        ),
-        _ => None,
-    }
-}
-
 /// Extract column names from an expression (for lazy interpolation).
 pub(super) fn extract_column_names_lazy(
     expr: &Expr,
-) -> Vec<IStr> {
+) -> Option<Vec<IStr>> {
     let mut out: Vec<IStr> = Vec::new();
     walk_expr(expr, &mut |e| {
         if let Expr::Column(name) = e {
@@ -150,7 +85,7 @@ pub(super) fn extract_column_names_lazy(
     });
     out.sort();
     out.dedup();
-    out
+    if out.is_empty() { None } else { Some(out) }
 }
 
 /// Extract a literal struct Series from an expression.
@@ -324,7 +259,34 @@ pub(super) fn series_values_scalar_lazy(
                 );
             }
         }
-        _ => return None,
+        DataType::Boolean => todo!(),
+        DataType::UInt128 => todo!(),
+        DataType::Int128 => todo!(),
+        DataType::Float16 => todo!(),
+        DataType::Decimal(_, _) => todo!(),
+        DataType::String => todo!(),
+        DataType::Binary => todo!(),
+        DataType::BinaryOffset => todo!(),
+        DataType::Array(data_type, _) => todo!(),
+        DataType::List(data_type) => todo!(),
+        DataType::Object(_) => todo!(),
+        DataType::Null => todo!(),
+        DataType::Categorical(
+            categories,
+            categorical_mapping,
+        ) => todo!(),
+        DataType::Enum(
+            frozen_categories,
+            categorical_mapping,
+        ) => todo!(),
+        DataType::Struct(fields) => todo!(),
+        DataType::Extension(
+            extension_type_instance,
+            data_type,
+        ) => todo!(),
+        DataType::Unknown(unknown_kind) => {
+            todo!()
+        }
     }
 
     Some(out)

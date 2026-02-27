@@ -137,47 +137,47 @@ pub(crate) fn compile_expr(
                 Operator::And
                 | Operator::LogicalAnd => {
                     // Special-case: A & !B => A \ B
-                    if let Expr::Function {
-                        input,
-                        function,
-                    } = strip_wrappers(
-                        right.as_ref(),
-                    ) {
-                        if matches!(function, FunctionExpr::Boolean(BooleanFunction::Not))
-                            && input.len() == 1
-                        {
-                            let a = compile_expr(left.as_ref(), ctx)?;
-                            let b = compile_expr(&input[0], ctx)?;
-                            return Ok(a.difference(&b));
-                        }
-                    }
-                    if let Expr::Function {
-                        input,
-                        function,
-                    } = strip_wrappers(
-                        left.as_ref(),
-                    ) {
-                        if matches!(function, FunctionExpr::Boolean(BooleanFunction::Not))
-                            && input.len() == 1
-                        {
-                            let a = compile_expr(right.as_ref(), ctx)?;
-                            let b = compile_expr(&input[0], ctx)?;
-                            return Ok(a.difference(&b));
-                        }
-                    }
+                    // if let Expr::Function {
+                    //     input,
+                    //     function,
+                    // } = strip_wrappers(
+                    //     right.as_ref(),
+                    // ) {
+                    //     if matches!(function, FunctionExpr::Boolean(BooleanFunction::Not))
+                    //         && input.len() == 1
+                    //     {
+                    //         let a = compile_expr(left.as_ref(), ctx)?;
+                    //         let b = compile_expr(&input[0], ctx)?;
+                    //         return Ok(a.difference(&b));
+                    //     }
+                    // }
+                    // if let Expr::Function {
+                    //     input,
+                    //     function,
+                    // } = strip_wrappers(
+                    //     left.as_ref(),
+                    // ) {
+                    //     if matches!(function, FunctionExpr::Boolean(BooleanFunction::Not))
+                    //         && input.len() == 1
+                    //     {
+                    //         let a = compile_expr(right.as_ref(), ctx)?;
+                    //         let b = compile_expr(&input[0], ctx)?;
+                    //         return Ok(a.difference(&b));
+                    //     }
+                    // }
 
-                    // Fast path: merge compatible comparisons on the same column
-                    if let (Some((col_a, vr_a)), Some((col_b, vr_b))) = (
-                        try_expr_to_value_range_lazy(left.as_ref(), ctx),
-                        try_expr_to_value_range_lazy(right.as_ref(), ctx),
-                    ) {
-                        if col_a == col_b {
-                            let Some(vr) = vr_a.intersect(&vr_b) else {
-                                return Ok(ExprPlan::Empty);
-                            };
-                            return compile_value_range_to_plan(&col_a, &vr, ctx);
-                        }
-                    }
+                    // // Fast path: merge compatible comparisons on the same column
+                    // if let (Some((col_a, vr_a)), Some((col_b, vr_b))) = (
+                    //     try_expr_to_value_range_lazy(left.as_ref()),
+                    //     try_expr_to_value_range_lazy(right.as_ref()),
+                    // ) {
+                    //     if col_a == col_b {
+                    //         let Some(vr) = vr_a.intersect(&vr_b) else {
+                    //             return Ok(ExprPlan::Empty);
+                    //         };
+                    //         return compile_value_range_to_plan(&col_a, &vr, ctx);
+                    //     }
+                    // }
 
                     let a = compile_expr(
                         left.as_ref(),
@@ -476,4 +476,19 @@ pub(crate) fn compile_expr(
             Ok(ExprPlan::NoConstraint)
         }
     }
+}
+
+// Helper for compiling a list of (presumably adjacent) columnar expressions
+pub(super) fn compile_expr_list(
+    exprs: &[Expr],
+    ctx: &mut LazyCompileCtx<'_>,
+) -> LazyResult {
+    let mut plans = Vec::new();
+    for expr in exprs {
+        plans.push(compile_expr(expr, ctx)?);
+    }
+    Ok(plans
+        .into_iter()
+        .reduce(|a, b| a.intersect(&b))
+        .unwrap_or(ExprPlan::NoConstraint))
 }

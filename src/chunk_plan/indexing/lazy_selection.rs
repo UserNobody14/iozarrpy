@@ -147,6 +147,8 @@ pub(crate) enum LazyArraySelection {
         Box<LazyArraySelection>,
         Box<LazyArraySelection>,
     ),
+    /// Deferred boolean NOT operation (!A).
+    BooleanNot(Box<LazyArraySelection>),
 }
 
 impl Default for LazyArraySelection {
@@ -195,6 +197,7 @@ impl LazyArraySelection {
             Self::Union(a, b) => {
                 a.is_empty() && b.is_empty()
             }
+            Self::BooleanNot(a) => a.is_all(),
         }
     }
 
@@ -205,6 +208,7 @@ impl LazyArraySelection {
                 rects.len() == 1
                     && rects[0].is_all()
             }
+            Self::BooleanNot(a) => a.is_empty(),
             Self::Difference(_, _)
             | Self::Union(_, _) => false,
         }
@@ -347,6 +351,29 @@ impl SetOperations for LazyArraySelection {
                     combined,
                 )
             }
+            // A | !B => A \ B
+            (
+                a,
+                LazyArraySelection::BooleanNot(b),
+            ) => LazyArraySelection::Difference(
+                Box::new(a.clone()),
+                Box::new(b.as_ref().to_owned()),
+            ),
+            // !A | B => B \ A
+            (
+                LazyArraySelection::BooleanNot(a),
+                b,
+            ) => LazyArraySelection::Difference(
+                Box::new(b.clone()),
+                Box::new(a.as_ref().to_owned()),
+            ),
+            // !A | !B => !A & !B
+            // (LazyArraySelection::BooleanNot(a), LazyArraySelection::BooleanNot(b)) => {
+            //     LazyArraySelection::Union(
+            //         Box::new(LazyArraySelection::BooleanNot(a.clone())),
+            //         Box::new(LazyArraySelection::BooleanNot(b.clone())),
+            //     )
+            // }
             // For complex cases with Difference/Union, store as deferred Union
             _ => LazyArraySelection::Union(
                 Box::new(self.clone()),
@@ -394,6 +421,29 @@ impl SetOperations for LazyArraySelection {
                     )
                 }
             }
+            // A & !B => A \ B
+            (
+                a,
+                LazyArraySelection::BooleanNot(b),
+            ) => LazyArraySelection::Difference(
+                Box::new(a.clone()),
+                Box::new(b.as_ref().to_owned()),
+            ),
+            // !A & B => B \ A
+            (
+                LazyArraySelection::BooleanNot(a),
+                b,
+            ) => LazyArraySelection::Difference(
+                Box::new(b.clone()),
+                Box::new(a.as_ref().to_owned()),
+            ),
+            // !A & !B => !A | !B
+            // (LazyArraySelection::BooleanNot(a), LazyArraySelection::BooleanNot(b)) => {
+            //     LazyArraySelection::Union(
+            //         Box::new(LazyArraySelection::BooleanNot(a.clone())),
+            //         Box::new(LazyArraySelection::BooleanNot(b.clone())),
+            //     )
+            // }
             // For Difference types, defer intersection
             _ => {
                 // Conservative: can't easily intersect with Difference
@@ -414,6 +464,16 @@ impl SetOperations for LazyArraySelection {
         // This is important for selector XOR operations where both sides select "all"
         if self.is_all() && other.is_all() {
             return LazyArraySelection::empty();
+        }
+
+        // if other is a boolean not, we can simplify the difference
+        if let LazyArraySelection::BooleanNot(b) =
+            other
+        {
+            return LazyArraySelection::Difference(
+                Box::new(self.clone()),
+                Box::new(b.as_ref().to_owned()),
+            );
         }
 
         // Store as deferred difference for materialization

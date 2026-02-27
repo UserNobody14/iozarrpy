@@ -69,3 +69,15 @@ pub(super) fn collect_refs_from_expr(
     refs.dedup();
     refs
 }
+
+pub(super) fn collect_refs_from_expr_list(
+    exprs: &[Expr],
+) -> Vec<IStr> {
+    let mut refs = Vec::new();
+    for expr in exprs {
+        collect_column_refs(expr, &mut refs);
+    }
+    refs.sort();
+    refs.dedup();
+    refs
+}

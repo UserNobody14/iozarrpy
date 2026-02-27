@@ -21,13 +21,7 @@ pub(super) fn compile_cmp_to_plan(
     lit: &LiteralValue,
     ctx: &LazyCompileCtx<'_>,
 ) -> LazyResult {
-    let time_encoding = ctx
-        .meta
-        .array_by_path(col.clone())
-        .and_then(|a| a.encoding.as_ref())
-        .and_then(|e| e.as_time_encoding());
-    let scalar =
-        literal_to_scalar(lit, time_encoding)?;
+    let scalar = literal_to_scalar(lit)?;
     let vr = ValueRangePresent::from_polars_op(
         op, scalar,
     )?;
@@ -74,11 +68,7 @@ pub(super) fn compile_struct_field_cmp(
         );
     }
 
-    let time_encoding = arr_meta_opt
-        .and_then(|a| a.encoding.as_ref())
-        .and_then(|e| e.as_time_encoding());
-    let scalar =
-        literal_to_scalar(lit, time_encoding)?;
+    let scalar = literal_to_scalar(lit)?;
     let vr = ValueRangePresent::from_polars_op(
         op, scalar,
     )?;

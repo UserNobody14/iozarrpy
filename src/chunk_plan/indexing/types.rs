@@ -8,7 +8,9 @@ use crate::IStr;
 use crate::errors::{
     BackendError, BackendResult,
 };
-use polars::prelude::Operator;
+use polars::prelude::{
+    AnyValue, Operator, Scalar,
+};
 
 /// Chunk grid signature - dimensions + chunk shape for grouping.
 ///
@@ -153,6 +155,117 @@ impl Hash for CoordScalar {
                 v.hash(state)
             }
         }
+    }
+}
+
+impl TryFrom<&Scalar> for CoordScalar {
+    type Error = BackendError;
+    fn try_from(
+        scalar: &Scalar,
+    ) -> Result<Self, Self::Error> {
+        let anyval = scalar.value();
+        CoordScalar::try_from(anyval)
+    }
+}
+
+impl<'a> TryFrom<AnyValue<'a>> for CoordScalar {
+    type Error = BackendError;
+    fn try_from(
+        anyval: AnyValue<'a>,
+    ) -> Result<Self, Self::Error> {
+        CoordScalar::try_from(&anyval)
+    }
+}
+
+impl<'a> TryFrom<&AnyValue<'a>> for CoordScalar {
+    type Error = BackendError;
+    fn try_from(
+        anyval: &AnyValue<'a>,
+    ) -> Result<Self, Self::Error> {
+        let parsed = match anyval {
+            AnyValue::Int64(v) => {
+                Some(CoordScalar::I64(*v))
+            }
+            AnyValue::Int32(v) => {
+                Some(CoordScalar::I64(*v as i64))
+            }
+            AnyValue::Int16(v) => {
+                Some(CoordScalar::I64(*v as i64))
+            }
+            AnyValue::Int8(v) => {
+                Some(CoordScalar::I64(*v as i64))
+            }
+            AnyValue::UInt64(v) => {
+                Some(CoordScalar::U64(*v))
+            }
+            AnyValue::UInt32(v) => {
+                Some(CoordScalar::U64(*v as u64))
+            }
+            AnyValue::UInt16(v) => {
+                Some(CoordScalar::U64(*v as u64))
+            }
+            AnyValue::UInt8(v) => {
+                Some(CoordScalar::U64(*v as u64))
+            }
+            AnyValue::Float64(v) => {
+                Some(CoordScalar::F64(*v))
+            }
+            AnyValue::Float32(v) => {
+                Some(CoordScalar::F64(*v as f64))
+            }
+            AnyValue::Datetime(
+                value,
+                time_unit,
+                _,
+            ) => {
+                let ns = match time_unit {
+                        polars::prelude::TimeUnit::Nanoseconds => *value,
+                        polars::prelude::TimeUnit::Microseconds => *value * 1_000,
+                        polars::prelude::TimeUnit::Milliseconds => *value * 1_000_000,
+                    };
+                Some(CoordScalar::DatetimeNs(ns))
+            }
+            AnyValue::DatetimeOwned(
+                value,
+                time_unit,
+                _,
+            ) => {
+                let ns = match time_unit {
+                        polars::prelude::TimeUnit::Nanoseconds => *value,
+                        polars::prelude::TimeUnit::Microseconds => *value * 1_000,
+                        polars::prelude::TimeUnit::Milliseconds => *value * 1_000_000,
+                    };
+                Some(CoordScalar::DatetimeNs(ns))
+            }
+            AnyValue::Date(days) => {
+                let ns = *days as i64
+                    * 86400
+                    * 1_000_000_000;
+                Some(CoordScalar::DatetimeNs(ns))
+            }
+            AnyValue::Duration(
+                value,
+                time_unit,
+            ) => {
+                let ns = match time_unit {
+                        polars::prelude::TimeUnit::Nanoseconds => *value,
+                        polars::prelude::TimeUnit::Microseconds => *value * 1_000,
+                        polars::prelude::TimeUnit::Milliseconds => *value * 1_000_000,
+                    };
+                Some(CoordScalar::DurationNs(ns))
+            }
+            other => {
+                if cfg!(debug_assertions) {
+                    eprintln!(
+                        "chunk_plan: unsupported AnyValue for planning: {other:?}"
+                    );
+                }
+                Err(BackendError::UnsupportedAnyValue {
+                        msg: format!("{other:?}"),
+                    })?
+            }
+        };
+        Ok(parsed.expect("match covers all None cases via other branch"))
     }
 }
 
