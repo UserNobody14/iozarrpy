@@ -80,12 +80,16 @@ pub(crate) fn extract_struct_field_path(
             ..
         } => {
             let inner = input.first()?;
-            if let Expr::Column(col_name) = inner {
+            if let Expr::Column(col_name) = inner
+            {
                 Some((
                     col_name.as_str().istr(),
                     field_name.as_str().istr(),
                 ))
-            } else if let Some((root, parent_path)) =
+            } else if let Some((
+                root,
+                parent_path,
+            )) =
                 extract_struct_field_path(inner)
             {
                 let joined = format!(

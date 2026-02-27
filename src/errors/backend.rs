@@ -36,6 +36,12 @@ pub enum BackendError {
     UnsupportedLiteral { lit: LiteralValue },
 
     #[snafu(display(
+        "unsupported any value: {msg}",
+        msg = msg,
+    ))]
+    UnsupportedAnyValue { msg: String },
+
+    #[snafu(display(
         "unsupported boolean function: {:?}",
         function
     ))]
@@ -111,7 +117,7 @@ pub enum BackendError {
 
     #[snafu(display("other error: {}", msg))]
     Other { msg: String },
-    
+
     #[snafu(
         display(
             "{source} for dimensions {dims:?} with shape {shape:?} at paths {paths:?}",
@@ -122,7 +128,7 @@ pub enum BackendError {
         ),
         visibility(pub(crate))
     )]
-    IncompatibleDimensionality { 
+    IncompatibleDimensionality {
         backtrace: Backtrace,
         source: zarrs::array::IncompatibleDimensionalityError,
         dims: Vec<IStr>,
@@ -152,19 +158,19 @@ pub enum BackendError {
         display("polars error: {}", source),
         visibility(pub(crate))
     )]
-    PolarsError { 
+    PolarsError {
         source: polars::error::PolarsError,
         backtrace: Backtrace,
     },
 
     #[snafu(context(false))]
-    ObjectStoreError { 
+    ObjectStoreError {
         #[snafu(source(from(zarrs_object_store::object_store::Error, Box::new)))]
         source: Box<zarrs_object_store::object_store::Error>
     },
 
     #[snafu(context(false))]
-    FilesystemStoreCreateError { 
+    FilesystemStoreCreateError {
         #[snafu(source(from(zarrs::filesystem::FilesystemStoreCreateError, Box::new)))]
         source: Box<zarrs::filesystem::FilesystemStoreCreateError>
     },
@@ -189,7 +195,7 @@ pub enum BackendError {
     ),
     visibility(pub(crate))
 )]
-    ChunkDimTooLarge { 
+    ChunkDimTooLarge {
         source: std::num::TryFromIntError,
         dim: u64, max: usize },
 
@@ -210,8 +216,7 @@ pub enum BackendError {
     CreateTokioRuntimeForSyncStore { source: std::io::Error,
     prefix: String,
     store: String,
-    
-     },
+    },
 }
 
 impl BackendError {

@@ -9,6 +9,7 @@ use polars::prelude::Expr;
 
 use crate::PlannerStats;
 use crate::chunk_plan::GroupedChunkPlan;
+use crate::chunk_plan::LazyCompileCtx;
 use crate::chunk_plan::compile_expr;
 use crate::chunk_plan::selection_to_grouped_chunk_plan_unified_from_meta;
 use crate::chunk_plan::{
@@ -16,7 +17,6 @@ use crate::chunk_plan::{
     resolve_expr_plan_async,
     resolve_expr_plan_sync,
 };
-use crate::chunk_plan::LazyCompileCtx;
 use crate::meta::ZarrMeta;
 
 /// Compile a Polars expression to a chunk plan synchronously.
@@ -68,12 +68,9 @@ impl<
             LazyCompileCtx::new(&meta, &dims);
         let expr_plan =
             compile_expr(expr, &mut ctx)?;
-        let selection =
-            resolve_expr_plan_sync(
-                &expr_plan,
-                &meta,
-                self,
-            )?;
+        let selection = resolve_expr_plan_sync(
+            &expr_plan, &meta, self,
+        )?;
         let stats =
             PlannerStats { coord_reads: 0 };
         let grouped_plan =
@@ -106,13 +103,10 @@ impl<
             LazyCompileCtx::new(&meta, &dims);
         let expr_plan =
             compile_expr(expr, &mut ctx)?;
-        let selection =
-            resolve_expr_plan_async(
-                &expr_plan,
-                &meta,
-                self,
-            )
-            .await?;
+        let selection = resolve_expr_plan_async(
+            &expr_plan, &meta, self,
+        )
+        .await?;
         let stats =
             PlannerStats { coord_reads: 0 };
         let grouped_plan =

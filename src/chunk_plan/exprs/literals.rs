@@ -19,20 +19,21 @@ pub(crate) fn apply_time_encoding(
     }
 }
 
-pub(super) fn literal_anyvalue(
-    lit: &LiteralValue,
-) -> Option<AnyValue<'static>> {
+pub(super) fn literal_anyvalue<'a>(
+    lit: &'a LiteralValue,
+) -> Option<AnyValue<'a>> {
     match lit {
-        LiteralValue::Scalar(s) => Some(
-            s.clone().into_value().into_static(),
-        ),
+        LiteralValue::Scalar(s) => {
+            Some(s.clone().into_value())
+        }
         LiteralValue::Series(s) => {
             // Polars may represent some Python literals (notably datetimes) as a length-1 Series literal.
             if s.len() != 1 {
                 return None;
             }
-            let v = s.get(0).ok()?;
-            Some(v.into_static())
+            let v: AnyValue<'a> =
+                s.get(0).ok()?;
+            Some(v)
         }
         LiteralValue::Dyn(d) => {
             // Polars (via pyo3-polars) commonly serializes Python literals as dyn literals
@@ -51,10 +52,7 @@ pub(super) fn literal_anyvalue(
                     .trim()
                     .parse::<i64>()
                     .ok()?;
-                return Some(
-                    AnyValue::Int64(v)
-                        .into_static(),
-                );
+                return Some(AnyValue::Int64(v));
             }
             if let Some(rest) =
                 s.strip_prefix("dyn float:")
@@ -63,10 +61,9 @@ pub(super) fn literal_anyvalue(
                     .trim()
                     .parse::<f64>()
                     .ok()?;
-                return Some(
-                    AnyValue::Float64(v)
-                        .into_static(),
-                );
+                return Some(AnyValue::Float64(
+                    v,
+                ));
             }
             if let Some(rest) =
                 s.strip_prefix("dyn bool:")
@@ -75,268 +72,28 @@ pub(super) fn literal_anyvalue(
                     .trim()
                     .parse::<bool>()
                     .ok()?;
-                return Some(
-                    AnyValue::Boolean(v)
-                        .into_static(),
-                );
+                return Some(AnyValue::Boolean(
+                    v,
+                ));
             }
             None
         }
-        other => {
-            // This is intentionally conservative, but we don’t want silent fallthrough.
-            if cfg!(debug_assertions) {
-                eprintln!(
-                    "chunk_plan: unsupported LiteralValue variant for planning: {other:?}"
-                );
-            }
-            None
+        LiteralValue::Range(range) => {
+            todo!()
         }
     }
 }
 
 pub(super) fn literal_to_scalar(
     lit: &LiteralValue,
-    time_encoding: Option<&TimeEncoding>,
 ) -> Result<CoordScalar, BackendError> {
-    let parse_temporal_from_str = |s: &str| -> Option<
-        CoordScalar,
-    > {
-        let s = s.trim();
-
-        // Datetime-like: "YYYY-MM-DD HH:MM:SS[.fffffffff]" or "YYYY-MM-DD"
-        // Treat as UTC for planning purposes.
-        {
-            use chrono::{
-                NaiveDate, NaiveDateTime,
-                TimeZone, Utc,
-            };
-            if let Ok(dt) =
-                NaiveDateTime::parse_from_str(
-                    s,
-                    "%Y-%m-%d %H:%M:%S",
-                )
-            {
-                return Some(
-                    CoordScalar::DatetimeNs(
-                        Utc.from_utc_datetime(
-                            &dt,
-                        )
-                        .timestamp_nanos_opt()?,
-                    ),
-                );
-            }
-            if let Ok(dt) =
-                NaiveDateTime::parse_from_str(
-                    s,
-                    "%Y-%m-%d %H:%M:%S%.f",
-                )
-            {
-                return Some(
-                    CoordScalar::DatetimeNs(
-                        Utc.from_utc_datetime(
-                            &dt,
-                        )
-                        .timestamp_nanos_opt()?,
-                    ),
-                );
-            }
-            if let Ok(d) =
-                NaiveDate::parse_from_str(
-                    s, "%Y-%m-%d",
-                )
-            {
-                let dt =
-                    d.and_hms_opt(0, 0, 0)?;
-                return Some(
-                    CoordScalar::DatetimeNs(
-                        Utc.from_utc_datetime(
-                            &dt,
-                        )
-                        .timestamp_nanos_opt()?,
-                    ),
-                );
-            }
-        }
-
-        // Duration-like: "1h" (we only need hours for our current predicates).
-        if let Some(hours) =
-            s.strip_suffix('h').and_then(|v| {
-                v.trim().parse::<i64>().ok()
-            })
-        {
-            return Some(
-                CoordScalar::DurationNs(
-                    hours.saturating_mul(
-                        3_600_000_000_000,
-                    ),
-                ),
-            );
-        }
-
-        None
-    };
-
-    match lit {
-        LiteralValue::Dyn(d) => {
-            // Parse common dyn literal debug formats that Polars uses for Python values.
-            // This is intentionally conservative; returning None will disable planning.
-            let s = format!("{d:?}");
-            let s = s.trim();
-
-            if let Some(rest) =
-                s.strip_prefix("dyn int:")
-            {
-                let v = rest
-                    .trim()
-                    .parse::<i64>()
-                    .or_else(|_| Err(BackendError::UnsupportedLiteral { lit: lit.clone() }
-                        ))?;
-                return Ok(CoordScalar::I64(v));
-            }
-            if let Some(rest) =
-                s.strip_prefix("dyn float:")
-            {
-                let v = rest
-                    .trim()
-                    .parse::<f64>()
-                    .or_else(|_| Err(BackendError::UnsupportedLiteral { lit: lit.clone() }
-                        ))?;
-                return Ok(CoordScalar::F64(v));
-            }
-            if let Some(rest) =
-                s.strip_prefix("dyn bool:")
-            {
-                let v = rest
-                    .trim()
-                    .parse::<bool>()
-                    .or_else(|_| Err(BackendError::UnsupportedLiteral { lit: lit.clone() }
-                    ))?;
-                return Ok(CoordScalar::I64(
-                    i64::from(v),
-                ));
-            }
-
-            parse_temporal_from_str(s).ok_or_else(|| BackendError::UnsupportedLiteral { lit: lit.clone() }                
-            )
-        }
-        _ => {
-            let anyval = literal_anyvalue(lit);
-            if let Some(anyval) = anyval {
-                let parsed = match anyval {
-                    AnyValue::Int64(v) => {
-                        Some(CoordScalar::I64(v))
-                    }
-                    AnyValue::Int32(v) => {
-                        Some(CoordScalar::I64(
-                            v as i64,
-                        ))
-                    }
-                    AnyValue::Int16(v) => {
-                        Some(CoordScalar::I64(
-                            v as i64,
-                        ))
-                    }
-                    AnyValue::Int8(v) => {
-                        Some(CoordScalar::I64(
-                            v as i64,
-                        ))
-                    }
-                    AnyValue::UInt64(v) => {
-                        Some(CoordScalar::U64(v))
-                    }
-                    AnyValue::UInt32(v) => {
-                        Some(CoordScalar::U64(
-                            v as u64,
-                        ))
-                    }
-                    AnyValue::UInt16(v) => {
-                        Some(CoordScalar::U64(
-                            v as u64,
-                        ))
-                    }
-                    AnyValue::UInt8(v) => {
-                        Some(CoordScalar::U64(
-                            v as u64,
-                        ))
-                    }
-                    AnyValue::Float64(v) => {
-                        Some(CoordScalar::F64(v))
-                    }
-                    AnyValue::Float32(v) => {
-                        Some(CoordScalar::F64(
-                            v as f64,
-                        ))
-                    }
-                    AnyValue::Datetime(
-                        value,
-                        time_unit,
-                        _,
-                    ) => {
-                        let ns = match time_unit {
-                            polars::prelude::TimeUnit::Nanoseconds => value,
-                            polars::prelude::TimeUnit::Microseconds => value * 1_000,
-                            polars::prelude::TimeUnit::Milliseconds => value * 1_000_000,
-                        };
-                        let _ = time_encoding;
-                        Some(CoordScalar::DatetimeNs(
-                            ns,
-                        ))
-                    }
-                    AnyValue::DatetimeOwned(
-                        value,
-                        time_unit,
-                        _,
-                    ) => {
-                        let ns = match time_unit {
-                            polars::prelude::TimeUnit::Nanoseconds => value,
-                            polars::prelude::TimeUnit::Microseconds => value * 1_000,
-                            polars::prelude::TimeUnit::Milliseconds => value * 1_000_000,
-                        };
-                        let _ = time_encoding;
-                        Some(CoordScalar::DatetimeNs(
-                            ns,
-                        ))
-                    }
-                    AnyValue::Date(days) => {
-                        let ns = days as i64
-                            * 86400
-                            * 1_000_000_000;
-                        let _ = time_encoding;
-                        Some(CoordScalar::DatetimeNs(
-                            ns,
-                        ))
-                    }
-                    AnyValue::Duration(
-                        value,
-                        time_unit,
-                    ) => {
-                        let ns = match time_unit {
-                            polars::prelude::TimeUnit::Nanoseconds => value,
-                            polars::prelude::TimeUnit::Microseconds => value * 1_000,
-                            polars::prelude::TimeUnit::Milliseconds => value * 1_000_000,
-                        };
-                        let _ = time_encoding;
-                        Some(CoordScalar::DurationNs(
-                            ns,
-                        ))
-                    }
-                    other => {
-                        if cfg!(debug_assertions)
-                        {
-                            eprintln!(
-                                "chunk_plan: unsupported AnyValue for planning: {other:?}"
-                            );
-                        }
-                        Err(BackendError::UnsupportedLiteral { lit: lit.clone() })?
-                    }
-                };
-                parsed.ok_or_else(|| BackendError::UnsupportedLiteral { lit: lit.clone() }                    
-                )
-            } else {
-                Err(BackendError::UnsupportedLiteral { lit: lit.clone() }                    
-                )
-            }
-        }
+    let anyval = literal_anyvalue(lit);
+    if let Some(anyval) = anyval {
+        Ok(CoordScalar::try_from(anyval)?)
+    } else {
+        Err(BackendError::UnsupportedLiteral {
+            lit: lit.clone(),
+        })
     }
 }
 

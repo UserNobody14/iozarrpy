@@ -347,4 +347,12 @@ impl ExprPlan {
             .union(&other.difference(self))
     }
 
+    pub(crate) fn boolean_not(&self) -> Self {
+        match self {
+            Self::NoConstraint => Self::NoConstraint,
+            Self::Empty => Self::Empty,
+            Self::Active { vars, constraints } => Self::Active { vars: vars.clone(), constraints: Box::new(LazyArraySelection::BooleanNot(Box::new(constraints.as_ref().to_owned()))),
+            },
+        }
+    }
 }
