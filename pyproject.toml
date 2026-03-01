@@ -1,6 +1,6 @@
 [project]
 name = "rainbear"
-version = "2.4.0"
+version = "2.5.0"
 description = "Build lazy Zarr scans with Polars"
 readme = "README.md"
 authors = [
@@ -62,7 +62,7 @@ dev = [
     "numcodecs>=0.13.0",
     "pytest-benchmark>=5.2.3",
     # Needed for FFI-plugin planning tests and for real-world Expr shapes.
-    "interpolars>=1.1.0",
+    "interpolars>=1.2.0",
     "gcsfs>=2026.1.0",
     "obstore>=0.8.2",
     "py-spy>=0.4.1",

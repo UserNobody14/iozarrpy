@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime
 import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -12,6 +13,8 @@ import xarray as xr
 from zarr.codecs import BloscCodec, BloscShuffle
 
 OUTPUT_DIR = Path(__file__).resolve().parent / "output-datasets"
+
+BLOSC_ZSTD = BloscCodec(cname="zstd", clevel=5, shuffle=BloscShuffle.shuffle)
 
 @pytest.fixture
 def output_dir() -> Path:
@@ -247,8 +250,6 @@ def _generate_baseline_datasets(output_dir: Path) -> dict[str, str]:
             shutil.rmtree(path)
         return str(path)
 
-    blosc_zstd = BloscCodec(cname="zstd", clevel=5, shuffle=BloscShuffle.shuffle)
-
     # =========================================================================
     # Grid datasets (4D)
     # =========================================================================
@@ -272,7 +273,7 @@ def _generate_baseline_datasets(output_dir: Path) -> dict[str, str]:
     ds = zarr_generators.create_grid_dataset()
     path = make_path("grid_chunked")
     encoding = {
-        var: {"chunks": (1, 2, 100, 100), "compressors": [blosc_zstd]}
+        var: {"chunks": (1, 2, 100, 100), "compressors": [BLOSC_ZSTD]}
         for var in ds.data_vars
     }
     ds.to_zarr(path, zarr_format=3, encoding=encoding)
@@ -282,7 +283,7 @@ def _generate_baseline_datasets(output_dir: Path) -> dict[str, str]:
     ds = zarr_generators.create_grid_dataset()
     path = make_path("grid_sharded")
     encoding = {
-        var: {"chunks": (1, 2, 100, 100), "shards": (1, 4, 200, 200), "compressors": [blosc_zstd]}
+        var: {"chunks": (1, 2, 100, 100), "shards": (1, 4, 200, 200), "compressors": [BLOSC_ZSTD]}
         for var in ds.data_vars
     }
     ds.to_zarr(path, zarr_format=3, encoding=encoding)
@@ -301,36 +302,36 @@ def _generate_baseline_datasets(output_dir: Path) -> dict[str, str]:
     ds = zarr_generators.create_orography_dataset(nx=20, ny=16, sigma=4.0, seed=1)
     path = make_path("orography_chunked_10x10")
     ds.to_zarr(path, zarr_format=3, encoding={
-        "geopotential_height": {"chunks": (10, 10), "compressors": [blosc_zstd]},
-        "latitude": {"chunks": (10, 10), "compressors": [blosc_zstd]},
-        "longitude": {"chunks": (10, 10), "compressors": [blosc_zstd]},
+        "geopotential_height": {"chunks": (10, 10), "compressors": [BLOSC_ZSTD]},
+        "latitude": {"chunks": (10, 10), "compressors": [BLOSC_ZSTD]},
+        "longitude": {"chunks": (10, 10), "compressors": [BLOSC_ZSTD]},
     })
     paths["orography_chunked_10x10"] = path
 
     ds = zarr_generators.create_orography_dataset(nx=18, ny=14, sigma=3.5, seed=2)
     path = make_path("orography_chunked_5x5")
     ds.to_zarr(path, zarr_format=3, encoding={
-        "geopotential_height": {"chunks": (5, 5), "compressors": [blosc_zstd]},
-        "latitude": {"chunks": (5, 5), "compressors": [blosc_zstd]},
-        "longitude": {"chunks": (5, 5), "compressors": [blosc_zstd]},
+        "geopotential_height": {"chunks": (5, 5), "compressors": [BLOSC_ZSTD]},
+        "latitude": {"chunks": (5, 5), "compressors": [BLOSC_ZSTD]},
+        "longitude": {"chunks": (5, 5), "compressors": [BLOSC_ZSTD]},
     })
     paths["orography_chunked_5x5"] = path
 
     ds = zarr_generators.create_orography_dataset(nx=16, ny=12, sigma=4.0, seed=4)
     path = make_path("orography_sharded_small")
     ds.to_zarr(path, zarr_format=3, encoding={
-        "geopotential_height": {"chunks": (4, 4), "shards": (8, 8), "compressors": [blosc_zstd]},
-        "latitude": {"chunks": (4, 4), "shards": (8, 8), "compressors": [blosc_zstd]},
-        "longitude": {"chunks": (4, 4), "shards": (8, 8), "compressors": [blosc_zstd]},
+        "geopotential_height": {"chunks": (4, 4), "shards": (8, 8), "compressors": [BLOSC_ZSTD]},
+        "latitude": {"chunks": (4, 4), "shards": (8, 8), "compressors": [BLOSC_ZSTD]},
+        "longitude": {"chunks": (4, 4), "shards": (8, 8), "compressors": [BLOSC_ZSTD]},
     })
     paths["orography_sharded_small"] = path
 
     ds = zarr_generators.create_orography_dataset(nx=24, ny=20, sigma=5.0, seed=5)
     path = make_path("orography_sharded_large")
     ds.to_zarr(path, zarr_format=3, encoding={
-        "geopotential_height": {"chunks": (5, 6), "shards": (10, 12), "compressors": [blosc_zstd]},
-        "latitude": {"chunks": (5, 6), "shards": (10, 12), "compressors": [blosc_zstd]},
-        "longitude": {"chunks": (5, 6), "shards": (10, 12), "compressors": [blosc_zstd]},
+        "geopotential_height": {"chunks": (5, 6), "shards": (10, 12), "compressors": [BLOSC_ZSTD]},
+        "latitude": {"chunks": (5, 6), "shards": (10, 12), "compressors": [BLOSC_ZSTD]},
+        "longitude": {"chunks": (5, 6), "shards": (10, 12), "compressors": [BLOSC_ZSTD]},
     })
     paths["orography_sharded_large"] = path
 
@@ -397,7 +398,6 @@ def _generate_comprehensive_datasets(output_dir: Path) -> dict[str, Comprehensiv
     from tests import zarr_generators
 
     paths: dict[str, ComprehensiveDatasetInfo] = {}
-    blosc_zstd = BloscCodec(cname="zstd", clevel=5, shuffle=BloscShuffle.shuffle)
 
     # 3D dataset with prime-factored chunk grid: 7x5x3 = 105 chunks
     # Dimensions: a=70 (7 chunks), b=50 (5 chunks), c=30 (3 chunks)
@@ -412,9 +412,9 @@ def _generate_comprehensive_datasets(output_dir: Path) -> dict[str, Comprehensiv
     if path.exists():
         shutil.rmtree(path)
     encoding = {
-        "data": {"chunks": (chunk_size, chunk_size, chunk_size), "compressors": [blosc_zstd]},
-        "data2": {"chunks": (chunk_size, chunk_size, chunk_size), "compressors": [blosc_zstd]},
-        "surface": {"chunks": (chunk_size, chunk_size), "compressors": [blosc_zstd]},
+        "data": {"chunks": (chunk_size, chunk_size, chunk_size), "compressors": [BLOSC_ZSTD]},
+        "data2": {"chunks": (chunk_size, chunk_size, chunk_size), "compressors": [BLOSC_ZSTD]},
+        "surface": {"chunks": (chunk_size, chunk_size), "compressors": [BLOSC_ZSTD]},
     }
     ds.to_zarr(str(path), zarr_format=3, encoding=encoding)
     paths["comprehensive_3d_fallback"] = ComprehensiveDatasetInfo(
@@ -447,8 +447,8 @@ def _generate_comprehensive_datasets(output_dir: Path) -> dict[str, Comprehensiv
     if path.exists():
         shutil.rmtree(path)
     encoding_4d = {
-        "temperature": {"chunks": (2, 2, 10, 10), "compressors": [blosc_zstd]},
-        "precipitation": {"chunks": (2, 2, 10, 10), "compressors": [blosc_zstd]},
+        "temperature": {"chunks": (2, 2, 10, 10), "compressors": [BLOSC_ZSTD]},
+        "precipitation": {"chunks": (2, 2, 10, 10), "compressors": [BLOSC_ZSTD]},
     }
     ds.to_zarr(str(path), zarr_format=3, encoding=encoding_4d)
     paths["comprehensive_4d"] = ComprehensiveDatasetInfo(
@@ -518,8 +518,6 @@ def _generate_multi_var_dataset(output_dir: Path) -> MultiVarDatasetInfo:
     """Generate multi-variable test dataset for advanced expression testing."""
     from tests import zarr_generators
 
-    blosc_zstd = BloscCodec(cname="zstd", clevel=5, shuffle=BloscShuffle.shuffle)
-
     ds = zarr_generators.create_multi_var_test_dataset()
     path = output_dir / "multi_var.zarr"
     if path.exists():
@@ -527,12 +525,12 @@ def _generate_multi_var_dataset(output_dir: Path) -> MultiVarDatasetInfo:
 
     chunk_size = 10
     encoding = {
-        "temp": {"chunks": (chunk_size, chunk_size, chunk_size), "compressors": [blosc_zstd]},
-        "precip": {"chunks": (chunk_size, chunk_size, chunk_size), "compressors": [blosc_zstd]},
-        "wind_u": {"chunks": (chunk_size, chunk_size, chunk_size), "compressors": [blosc_zstd]},
-        "wind_v": {"chunks": (chunk_size, chunk_size, chunk_size), "compressors": [blosc_zstd]},
-        "pressure": {"chunks": (chunk_size, chunk_size, chunk_size), "compressors": [blosc_zstd]},
-        "surface": {"chunks": (chunk_size, chunk_size), "compressors": [blosc_zstd]},
+        "temp": {"chunks": (chunk_size, chunk_size, chunk_size), "compressors": [BLOSC_ZSTD]},
+        "precip": {"chunks": (chunk_size, chunk_size, chunk_size), "compressors": [BLOSC_ZSTD]},
+        "wind_u": {"chunks": (chunk_size, chunk_size, chunk_size), "compressors": [BLOSC_ZSTD]},
+        "wind_v": {"chunks": (chunk_size, chunk_size, chunk_size), "compressors": [BLOSC_ZSTD]},
+        "pressure": {"chunks": (chunk_size, chunk_size, chunk_size), "compressors": [BLOSC_ZSTD]},
+        "surface": {"chunks": (chunk_size, chunk_size), "compressors": [BLOSC_ZSTD]},
     }
     ds.to_zarr(str(path), zarr_format=3, encoding=encoding)
 
@@ -877,3 +875,74 @@ def icechunk_datasets() -> dict[str, IcechunkDatasetInfo]:
     """
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     return _generate_icechunk_datasets(OUTPUT_DIR)
+
+
+# ---------------------------------------------------------------------------
+# CF datetime interpolation helpers and fixtures
+# ---------------------------------------------------------------------------
+
+
+def xr_interp_single_point(
+    ds: xr.Dataset,
+    var: str,
+    coords: dict[str, float | datetime.datetime],
+) -> float:
+    """Return the scalar result of xarray linear interpolation at one point."""
+    kw: dict[str, list[float | datetime.datetime]] = {k: [v] for k, v in coords.items()}
+    result = ds.interp(**kw).compute()  # type: ignore[call-overload]
+    return float(result[var].values.flat[0])
+
+
+@pytest.fixture
+def cf_latlon_time_zarr(tmp_path: Path) -> Path:
+    """Zarr v3 store with shape (time=3, lat=8, lon=10) and CF int64 time.
+
+    Coordinates:
+    - time: 2025-02-01 16:00, 17:00, 18:00 (seconds since 1970-01-01)
+    - lat: 8 points from -0.5 to 1.5
+    - lon: 10 points from -0.5 to 3.5
+
+    Variables (both share the same random data with seed 42):
+    - CAL: float64 (time, lat, lon)
+    - CAL2: float64 (time, lat, lon)
+    """
+    nlat, nlon = 8, 10
+    lat_coords = np.linspace(-0.5, 1.5, nlat)
+    lon_coords = np.linspace(-0.5, 3.5, nlon)
+
+    epoch = np.datetime64("1970-01-01T00:00:00", "ns")
+    times_ns = np.array(
+        [
+            np.datetime64("2025-02-01T16:00:00", "ns"),
+            np.datetime64("2025-02-01T17:00:00", "ns"),
+            np.datetime64("2025-02-01T18:00:00", "ns"),
+        ]
+    )
+    time_seconds = ((times_ns - epoch) / np.timedelta64(1, "s")).astype(np.int64)
+
+    rng = np.random.default_rng(42)
+    data = rng.standard_normal((3, nlat, nlon)).astype(np.float64)
+
+    ds = xr.Dataset(
+        data_vars={
+            "CAL": (["time", "lat", "lon"], data),
+            "CAL2": (["time", "lat", "lon"], data),
+        },
+        coords={
+            "time": (["time"], time_seconds),
+            "lat": lat_coords,
+            "lon": lon_coords,
+        },
+    )
+    ds["time"].attrs["units"] = "seconds since 1970-01-01 00:00:00"
+
+    zarr_path = tmp_path / "cf_time_2d.zarr"
+    ds.to_zarr(
+        str(zarr_path),
+        zarr_format=3,
+        encoding={
+            "CAL": {"chunks": (1, 4, 5), "compressors": [BLOSC_ZSTD]},
+            "CAL2": {"chunks": (1, 4, 5), "compressors": [BLOSC_ZSTD]},
+        },
+    )
+    return zarr_path
