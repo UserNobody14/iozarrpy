@@ -19,8 +19,7 @@ pub(crate) use shared::PlannerStats;
 use polars::prelude::*;
 
 /// Interned string type used throughout the codebase for dimension/variable names.
-/// Uses `ArcIntern` for automatic deduplication, O(1) equality, and reference counting.
-pub type IStr = internment::ArcIntern<str>;
+pub type IStr = internment::Intern<str>;
 
 /// Helper trait to create IStr from various string types
 pub trait IntoIStr {

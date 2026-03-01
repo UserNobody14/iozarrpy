@@ -287,7 +287,7 @@ impl GroupedChunkPlan {
                             dims: sig.dims().to_vec(),
                             shape: chunkgrid.array_shape().to_vec(),
                             paths: vars.iter().map(
-                                |v| -> internment::ArcIntern<str> {
+                                |v| -> IStr {
                                     v.clone()
                                 }
                             ).collect::<Vec<IStr>>(),
@@ -346,7 +346,7 @@ impl GroupedChunkPlan {
                                 dims: sig.dims().to_vec(),
                                 shape: chunkgrid.array_shape().to_vec(),
                                 paths: vars.iter().map(
-                                    |v| -> internment::ArcIntern<str> {
+                                    |v| -> IStr {
                                         v.clone()
                                     }
                                 ).collect::<Vec<IStr>>(),
