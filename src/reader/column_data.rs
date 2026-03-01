@@ -65,7 +65,7 @@ fn repeat_tile_slice<T: Copy>(
 }
 
 #[derive(Debug, Clone)]
-pub(crate) enum ColumnData {
+pub enum ColumnData {
     Bool(Vec<bool>),
     I8(Vec<i8>),
     I16(Vec<i16>),

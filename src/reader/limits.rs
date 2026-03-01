@@ -13,7 +13,7 @@ pub(crate) fn max_chunk_elems() -> usize {
         .unwrap_or(DEFAULT_MAX_CHUNK_ELEMS)
 }
 
-pub(crate) fn checked_chunk_len(
+pub fn checked_chunk_len(
     shape: &[u64],
 ) -> BackendResult<usize> {
     let mut acc: usize = 1;

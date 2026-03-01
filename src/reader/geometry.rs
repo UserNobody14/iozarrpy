@@ -2,7 +2,7 @@
 ///
 /// For shape [a, b, c], strides are [b*c, c, 1].
 #[inline]
-pub(crate) fn compute_strides(
+pub fn compute_strides(
     shape: &[u64],
 ) -> Vec<u64> {
     if shape.is_empty() {

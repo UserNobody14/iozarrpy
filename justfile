@@ -69,3 +69,8 @@ publish:
 [doc('Run the smoke test')]
 smoke-test:
     uv run --isolated --no-project --with target/wheels/*.whl tests/smoke_test.py
+
+[group: 'benches']
+[doc('Run the benchmarks')]
+microbench:
+    cargo bench --bench chunk_processing --no-default-features --features bench

@@ -35,7 +35,7 @@ type LazyResult = Result<ExprPlan, BackendError>;
 /// containing unresolved `ValueRange` constraints and variable references.
 /// These are later converted to `LazyDatasetSelection`, batch-resolved,
 /// and materialized into a concrete `DatasetSelection`.
-pub(crate) fn compile_expr(
+pub fn compile_expr(
     expr: impl std::borrow::Borrow<Expr>,
     ctx: &mut LazyCompileCtx<'_>,
 ) -> LazyResult {

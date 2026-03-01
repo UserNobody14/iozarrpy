@@ -5,7 +5,7 @@
 use crate::IStr;
 use crate::meta::ZarrMeta;
 
-pub(crate) fn compute_dims_and_lengths_unified(
+pub fn compute_dims_and_lengths_unified(
     meta: &ZarrMeta,
 ) -> (Vec<IStr>, Vec<u64>) {
     let dims = meta.dim_analysis.all_dims.clone();

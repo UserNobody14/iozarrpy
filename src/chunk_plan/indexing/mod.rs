@@ -25,5 +25,5 @@ pub mod resolver_traits;
 
 // Core types re-exports
 pub use plan::ChunkSubset;
-pub(crate) use plan::GroupedChunkPlan;
-pub(crate) use selection::DatasetSelection;
+pub use plan::GroupedChunkPlan;
+pub use selection::DatasetSelection;

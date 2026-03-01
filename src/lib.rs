@@ -10,6 +10,10 @@ mod scan;
 mod shared;
 mod store;
 
+#[cfg(feature = "bench")]
+#[doc(hidden)]
+pub mod bench_internals;
+
 pub(crate) use shared::PlannerStats;
 
 use polars::prelude::*;

@@ -12,17 +12,19 @@ mod exprs;
 mod indexing;
 
 mod selection;
-pub(crate) use compile_entry::compute_dims_and_lengths_unified;
-pub(crate) use exprs::LazyCompileCtx;
+pub use compile_entry::compute_dims_and_lengths_unified;
+pub use exprs::LazyCompileCtx;
 pub(crate) use exprs::apply_time_encoding;
-pub(crate) use exprs::compile_expr;
+pub use exprs::ExprPlan;
+pub use exprs::compile_expr;
 pub use indexing::ChunkSubset;
-pub(crate) use indexing::GroupedChunkPlan;
+pub use indexing::GroupedChunkPlan;
 pub(crate) use indexing::lazy_materialize::{
     resolve_expr_plan_async,
     resolve_expr_plan_sync,
 };
 pub(crate) use indexing::plan::ConsolidatedGridGroup;
 pub(crate) use indexing::resolver_traits::ResolutionError;
-pub(crate) use indexing::selection_to_chunks::selection_to_grouped_chunk_plan_unified_from_meta;
-pub(crate) use indexing::types::ChunkGridSignature;
+pub use indexing::selection_to_chunks::selection_to_grouped_chunk_plan_unified_from_meta;
+pub use indexing::types::ChunkGridSignature;
+pub use indexing::DatasetSelection;

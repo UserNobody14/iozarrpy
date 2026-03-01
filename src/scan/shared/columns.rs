@@ -1,4 +1,4 @@
-pub(crate) use crate::reader::{
+pub use crate::reader::{
     ColumnData, compute_strides,
 };
 pub(crate) use polars::prelude::*;
@@ -13,7 +13,7 @@ use crate::meta::VarEncoding;
 /// For interior chunks (the common case), all elements are kept
 /// and we avoid allocating a full index list — the O(chunk_len × ndim)
 /// mask computation is replaced by an O(ndim) check.
-pub(crate) enum KeepMask {
+pub enum KeepMask {
     /// All elements `0..len` are in bounds (interior chunk).
     All(usize),
     /// Only specific elements are in bounds (edge chunk).
@@ -21,7 +21,7 @@ pub(crate) enum KeepMask {
 }
 
 impl KeepMask {
-    pub(crate) fn len(&self) -> usize {
+    pub fn len(&self) -> usize {
         match self {
             KeepMask::All(n) => *n,
             KeepMask::Sparse(v) => v.len(),
@@ -31,7 +31,7 @@ impl KeepMask {
 
 /// Compute which chunk indices to read for a variable based on
 /// the primary chunk being processed.
-pub(crate) fn compute_var_chunk_indices(
+pub fn compute_var_chunk_indices(
     primary_idx: &[u64],
     primary_chunk_shape: &[u64],
     primary_dims: &[IStr],
@@ -97,7 +97,7 @@ pub(crate) fn compute_var_chunk_indices(
     (var_chunk_indices, var_offsets)
 }
 
-pub(crate) fn should_include_column(
+pub fn should_include_column(
     name: &IStr,
     with_columns: Option<&BTreeSet<IStr>>,
 ) -> bool {
@@ -115,7 +115,7 @@ pub(crate) fn should_include_column(
 ///
 /// For `KeepMask::Sparse` (edge chunks), falls back
 /// to `gather_by` with inline index computation.
-pub(crate) fn build_coord_column(
+pub fn build_coord_column(
     dim_name: &str,
     dim_idx: usize,
     keep: &KeepMask,
@@ -275,7 +275,7 @@ pub(crate) fn build_coord_column(
 /// For interior chunks with no subset, returns `KeepMask::All`
 /// in O(ndim) without iterating over elements.
 /// Edge chunks or subsetted chunks pay O(chunk_len × ndim).
-pub(crate) fn compute_in_bounds_mask(
+pub fn compute_in_bounds_mask(
     chunk_len: usize,
     chunk_shape: &[u64],
     origin: &[u64],
@@ -364,7 +364,7 @@ fn apply_encoding(
 /// Takes `data` by value so the common fast path
 /// (`KeepMask::All` + same shape) can hand the
 /// buffer directly to Polars with zero copying.
-pub(crate) fn build_var_column(
+pub fn build_var_column(
     name: &IStr,
     data: Arc<ColumnData>,
     var_dims: &[IStr],
