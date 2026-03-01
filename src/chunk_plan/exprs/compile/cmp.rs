@@ -10,6 +10,7 @@ use crate::chunk_plan::indexing::lazy_selection::{
 use crate::chunk_plan::indexing::types::ValueRangePresent;
 use crate::chunk_plan::prelude::*;
 use crate::errors::BackendError;
+use crate::meta::path::ZarrPath;
 use crate::{IStr, IntoIStr};
 
 type LazyResult = Result<ExprPlan, BackendError>;
@@ -49,14 +50,19 @@ pub(super) fn compile_value_range_to_plan(
 /// Compile a struct field comparison to an ExprPlan.
 pub(super) fn compile_struct_field_cmp(
     struct_col: &IStr,
-    field_name: &IStr,
+    field_path: &ZarrPath,
     op: Operator,
     lit: &LiteralValue,
     ctx: &mut LazyCompileCtx<'_>,
 ) -> LazyResult {
-    let array_path: IStr =
-        format!("{}/{}", struct_col, field_name)
-            .istr();
+    let full_path = ZarrPath::single(
+        struct_col.clone(),
+    );
+    let array_zp = field_path.components().iter().fold(
+        full_path,
+        |acc, c| acc.push(c.clone()),
+    );
+    let array_path = array_zp.to_istr();
 
     let arr_meta_opt =
         ctx.meta.array_by_path(&array_path);

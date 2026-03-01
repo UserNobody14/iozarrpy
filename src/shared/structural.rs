@@ -3,8 +3,9 @@ use snafu::ResultExt;
 use std::collections::BTreeSet;
 
 use crate::errors::{BackendResult, PolarsSnafu};
+use crate::meta::path::ZarrPath;
 use crate::meta::{ZarrMeta, ZarrNode};
-use crate::{IStr, IntoIStr};
+use crate::IStr;
 /// Combine chunk DataFrames, handling heterogeneous schemas.
 ///
 /// Strategy:
@@ -170,21 +171,26 @@ pub fn restructure_to_structs(
         }
     }
 
-    // For each child group, create a struct column
     for (child_name, child_node) in
         &meta.root.children
     {
         let child_name_str: &str =
             child_name.as_ref();
+        let prefix =
+            ZarrPath::single(child_name.clone());
         let struct_col =
             build_struct_column_for_node(
                 df,
                 child_node,
-                child_name_str,
+                &prefix,
                 &mut processed_paths,
             )?;
         if let Some(col) = struct_col {
-            result_columns.push(col);
+            result_columns.push(
+                col.with_name(
+                    child_name_str.into(),
+                ),
+            );
         }
     }
 
@@ -198,20 +204,18 @@ pub fn restructure_to_structs(
 /// Build a struct column for a zarr node (group).
 fn build_struct_column_for_node(
     df: &DataFrame,
-    node: &crate::meta::ZarrNode,
-    prefix: &str,
+    node: &ZarrNode,
+    prefix: &ZarrPath,
     processed_paths: &mut BTreeSet<String>,
 ) -> BackendResult<Option<Column>> {
     let mut fields: Vec<Column> = Vec::new();
 
-    // Add data variable columns as struct fields
     for var in &node.data_vars {
         let var_str: &str = var.as_ref();
-        let full_path =
-            format!("{}/{}", prefix, var_str);
+        let full_zp = prefix.push(var.clone());
+        let full_path = full_zp.to_flat_string();
 
         if let Ok(col) = df.column(&full_path) {
-            // Rename to just the leaf name for struct field
             let renamed = col
                 .clone()
                 .into_column()
@@ -221,15 +225,13 @@ fn build_struct_column_for_node(
         }
     }
 
-    // Recursively add nested child groups
-    for (child_name, child_node) in &node.children
+    for (child_name, child_node) in
+        &node.children
     {
         let child_name_str: &str =
             child_name.as_ref();
-        let nested_prefix = format!(
-            "{}/{}",
-            prefix, child_name_str
-        );
+        let nested_prefix =
+            prefix.push(child_name.clone());
         let nested_struct =
             build_struct_column_for_node(
                 df,
@@ -238,7 +240,6 @@ fn build_struct_column_for_node(
                 processed_paths,
             )?;
         if let Some(col) = nested_struct {
-            // Rename to just the leaf name for the struct field
             let renamed = col
                 .with_name(child_name_str.into());
             fields.push(renamed);
@@ -249,10 +250,9 @@ fn build_struct_column_for_node(
         return Ok(None);
     }
 
-    // Create struct column from fields
     let struct_series =
         StructChunked::from_columns(
-            prefix.into(),
+            prefix.to_flat_string().as_str().into(),
             df.height(),
             &fields,
         )
@@ -284,7 +284,6 @@ pub fn expand_projection_to_flat_paths(
     for col in with_columns {
         let col_str: &str = col.as_ref();
 
-        // Check if it's a dimension - pass through
         if meta.dim_analysis.all_dims.iter().any(
             |d| {
                 let d_str: &str = d.as_ref();
@@ -295,7 +294,6 @@ pub fn expand_projection_to_flat_paths(
             continue;
         }
 
-        // Check if it's a root data variable - pass through
         if meta.root.data_vars.iter().any(|v| {
             let v_str: &str = v.as_ref();
             v_str == col_str
@@ -304,7 +302,6 @@ pub fn expand_projection_to_flat_paths(
             continue;
         }
 
-        // Check if it's already a flat path that exists
         if meta
             .array_by_path_contains(col.clone())
         {
@@ -312,63 +309,19 @@ pub fn expand_projection_to_flat_paths(
             continue;
         }
 
-        // Check if it's a child group name - expand to all paths
-        if let Some(child_node) =
-            meta.root.children.get(col)
-        {
-            collect_all_paths_from_node(
-                child_node,
-                col_str,
-                &mut expanded,
-            );
-            continue;
-        }
-
-        // Try to match partial paths like "level_1/level_2"
-        // that might reference nested groups
-        if let Some(paths) = meta
-            .find_paths_matching_prefix(col_str)
-        {
-            for p in paths {
-                expanded.insert(p);
+        // Use tree traversal to expand group names to all child paths
+        let zp = ZarrPath::from(col);
+        let child_paths =
+            meta.root.find_paths_under(&zp);
+        if !child_paths.is_empty() {
+            for p in child_paths {
+                expanded.insert(p.to_istr());
             }
             continue;
         }
 
-        // Unknown column - pass through (might be handled elsewhere)
         expanded.insert(col.clone());
     }
 
     expanded
-}
-
-/// Recursively collect all variable paths from a node and its children.
-fn collect_all_paths_from_node(
-    node: &ZarrNode,
-    prefix: &str,
-    out: &mut BTreeSet<IStr>,
-) {
-    // Add all data variables in this node
-    for var in &node.data_vars {
-        let var_str: &str = var.as_ref();
-        let path =
-            format!("{}/{}", prefix, var_str);
-        out.insert(path.istr());
-    }
-
-    // Recursively add from child nodes
-    for (child_name, child_node) in &node.children
-    {
-        let child_name_str: &str =
-            child_name.as_ref();
-        let child_prefix = format!(
-            "{}/{}",
-            prefix, child_name_str
-        );
-        collect_all_paths_from_node(
-            child_node,
-            &child_prefix,
-            out,
-        );
-    }
 }
