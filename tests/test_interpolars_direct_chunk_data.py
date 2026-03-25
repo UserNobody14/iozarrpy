@@ -391,4 +391,4 @@ def test_direct_interpolars_nonuniform_coords_vs_xarray(tmp_path: Path) -> None:
     #   assert actual == pytest.approx(xr_expected, abs=1e-10)
     assert isinstance(actual, float)
     assert np.isfinite(actual)
-    assert xr_expected == actual
+    assert actual == pytest.approx(xr_expected, abs=1e-10)
