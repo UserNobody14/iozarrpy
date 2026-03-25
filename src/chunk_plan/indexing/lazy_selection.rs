@@ -26,6 +26,9 @@ pub(crate) enum LazyDimConstraint {
     /// Needs resolution with interpolation expansion (expand to chunk boundaries, or across 2 chunks if at boundary).
     /// Used for interpolation operations that need bracketing indices.
     InterpolationRange(ValueRangePresent),
+    /// Like InterpolationRange but with periodic wrapping (ghost-point expansion).
+    /// Expands by +/-3 indices and includes boundary ranges for longitude wrapping.
+    WrappingInterpolationRange(ValueRangePresent),
 }
 
 impl LazyDimConstraint {
@@ -294,6 +297,22 @@ impl SetOperations for LazyDimConstraint {
                     None => LazyDimConstraint::Empty,
                 }
             }
+            // WrappingInterpolationRange preserves wrapping semantics through intersection
+            (LazyDimConstraint::WrappingInterpolationRange(a), LazyDimConstraint::WrappingInterpolationRange(b)) => {
+                match a.intersect(b) {
+                    Some(vr) => LazyDimConstraint::WrappingInterpolationRange(vr),
+                    None => LazyDimConstraint::Empty,
+                }
+            }
+            (LazyDimConstraint::WrappingInterpolationRange(a), LazyDimConstraint::Unresolved(b))
+            | (LazyDimConstraint::Unresolved(b), LazyDimConstraint::WrappingInterpolationRange(a))
+            | (LazyDimConstraint::WrappingInterpolationRange(a), LazyDimConstraint::InterpolationRange(b))
+            | (LazyDimConstraint::InterpolationRange(b), LazyDimConstraint::WrappingInterpolationRange(a)) => {
+                match a.intersect(b) {
+                    Some(vr) => LazyDimConstraint::WrappingInterpolationRange(vr),
+                    None => LazyDimConstraint::Empty,
+                }
+            }
         }
     }
 
@@ -534,4 +553,101 @@ fn intersect_lazy_rectangles(
     }
 
     LazyHyperRectangle { dims: Some(merged) }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::chunk_plan::indexing::types::{
+        CoordScalar, ValueRangePresent,
+    };
+
+    fn vr(v: f64) -> ValueRangePresent {
+        ValueRangePresent::from_equal_case(
+            CoordScalar::F64(v),
+        )
+    }
+
+    #[test]
+    fn wrapping_intersect_with_all() {
+        let w = LazyDimConstraint::WrappingInterpolationRange(vr(10.0));
+        let result = w.intersect(&LazyDimConstraint::All);
+        assert!(matches!(result, LazyDimConstraint::WrappingInterpolationRange(_)));
+    }
+
+    #[test]
+    fn wrapping_intersect_with_empty() {
+        let w = LazyDimConstraint::WrappingInterpolationRange(vr(10.0));
+        let result = w.intersect(&LazyDimConstraint::Empty);
+        assert!(matches!(result, LazyDimConstraint::Empty));
+    }
+
+    #[test]
+    fn wrapping_intersect_with_unresolved() {
+        let w = LazyDimConstraint::WrappingInterpolationRange(vr(10.0));
+        let u = LazyDimConstraint::Unresolved(vr(10.0));
+        let result = w.intersect(&u);
+        assert!(matches!(result, LazyDimConstraint::WrappingInterpolationRange(_)));
+        let result_rev = u.intersect(&w);
+        assert!(matches!(result_rev, LazyDimConstraint::WrappingInterpolationRange(_)));
+    }
+
+    #[test]
+    fn wrapping_intersect_with_interpolation_range() {
+        let w = LazyDimConstraint::WrappingInterpolationRange(vr(10.0));
+        let i = LazyDimConstraint::InterpolationRange(vr(10.0));
+        let result = w.intersect(&i);
+        assert!(matches!(result, LazyDimConstraint::WrappingInterpolationRange(_)));
+        let result_rev = i.intersect(&w);
+        assert!(matches!(result_rev, LazyDimConstraint::WrappingInterpolationRange(_)));
+    }
+
+    #[test]
+    fn wrapping_intersect_with_wrapping() {
+        let w1 = LazyDimConstraint::WrappingInterpolationRange(vr(10.0));
+        let w2 = LazyDimConstraint::WrappingInterpolationRange(vr(10.0));
+        let result = w1.intersect(&w2);
+        assert!(matches!(result, LazyDimConstraint::WrappingInterpolationRange(_)));
+    }
+
+    #[test]
+    fn wrapping_intersect_disjoint_empty() {
+        let w = LazyDimConstraint::WrappingInterpolationRange(
+            ValueRangePresent::from_equal_case(CoordScalar::I64(5)),
+        );
+        let u = LazyDimConstraint::Unresolved(
+            ValueRangePresent::from_equal_case(CoordScalar::I64(10)),
+        );
+        let result = w.intersect(&u);
+        assert!(matches!(result, LazyDimConstraint::Empty));
+    }
+
+    #[test]
+    fn wrapping_union_is_conservative_all() {
+        let w = LazyDimConstraint::WrappingInterpolationRange(vr(10.0));
+        let u = LazyDimConstraint::Unresolved(vr(20.0));
+        let result = w.union(&u);
+        assert!(matches!(result, LazyDimConstraint::All));
+    }
+
+    #[test]
+    fn wrapping_union_with_empty_preserves() {
+        let w = LazyDimConstraint::WrappingInterpolationRange(vr(10.0));
+        let result = w.union(&LazyDimConstraint::Empty);
+        assert!(matches!(result, LazyDimConstraint::WrappingInterpolationRange(_)));
+    }
+
+    #[test]
+    fn wrapping_difference_with_empty_preserves() {
+        let w = LazyDimConstraint::WrappingInterpolationRange(vr(10.0));
+        let result = w.difference(&LazyDimConstraint::Empty);
+        assert!(matches!(result, LazyDimConstraint::WrappingInterpolationRange(_)));
+    }
+
+    #[test]
+    fn wrapping_difference_with_all_is_empty() {
+        let w = LazyDimConstraint::WrappingInterpolationRange(vr(10.0));
+        let result = w.difference(&LazyDimConstraint::All);
+        assert!(matches!(result, LazyDimConstraint::Empty));
+    }
 }
