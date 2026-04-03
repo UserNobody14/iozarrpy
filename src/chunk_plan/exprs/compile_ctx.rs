@@ -7,13 +7,13 @@ use crate::meta::ZarrMeta;
 ///
 /// Does not contain a resolver - instead, value ranges are stored as-is
 /// and resolved in a separate batch phase.
-pub(crate) struct LazyCompileCtx<'a> {
-    pub(crate) meta: &'a ZarrMeta,
-    pub(crate) dims: &'a [IStr],
+pub struct LazyCompileCtx<'a> {
+    pub meta: &'a ZarrMeta,
+    pub dims: &'a [IStr],
 }
 
 impl<'a> LazyCompileCtx<'a> {
-    pub(crate) fn new(
+    pub fn new(
         meta: &'a ZarrMeta,
         dims: &'a [IStr],
     ) -> Self {

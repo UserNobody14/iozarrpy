@@ -368,6 +368,129 @@ fn resolve_value_range_sync<
     Some(start..end)
 }
 
+/// Ghost-point expansion size for wrapping interpolation (matches interpolars `k = min(n-1, 3)`).
+const GHOST_EXPANSION: u64 = 3;
+
+/// Compute wrapping ghost ranges given a primary index range and dimension size.
+///
+/// Returns a `Vec<Range<u64>>` containing the primary range (expanded by
+/// `GHOST_EXPANSION`) plus up to two ghost ranges at the opposite boundary
+/// when the primary range is within `GHOST_EXPANSION` of either edge.
+fn wrapping_ghost_ranges(
+    primary: Range<u64>,
+    n: u64,
+) -> Vec<Range<u64>> {
+    let start = primary.start.saturating_sub(GHOST_EXPANSION);
+    let end = (primary.end + GHOST_EXPANSION).min(n);
+    let mut ranges = Vec::with_capacity(3);
+    if start < end {
+        ranges.push(start..end);
+    }
+    if start < GHOST_EXPANSION && n > GHOST_EXPANSION {
+        let ghost_start = n.saturating_sub(GHOST_EXPANSION);
+        if ghost_start < n {
+            ranges.push(ghost_start..n);
+        }
+    }
+    if end > n.saturating_sub(GHOST_EXPANSION) && n > GHOST_EXPANSION {
+        let ghost_end = GHOST_EXPANSION.min(n);
+        if ghost_end > 0 {
+            ranges.push(0..ghost_end);
+        }
+    }
+    ranges
+}
+
+fn resolve_wrapping_interpolation_sync<
+    B: ChunkedDataBackendSync,
+>(
+    backend: &B,
+    dim: &IStr,
+    meta: &ZarrMeta,
+    dim_range: &Range<u64>,
+    vr: &ValueRangePresent,
+) -> Result<Vec<Range<u64>>, ResolutionError> {
+    if let Some(r) = try_resolve_index_only(
+        dim,
+        meta,
+        dim_range.end,
+        vr,
+    ) {
+        return Ok(wrapping_ghost_ranges(r, dim_range.end));
+    }
+    let Some(ctx) =
+        DimResolutionCtx::from_meta(dim, meta)
+    else {
+        return Err(ResolutionError::Unresolvable(
+            "dimension not found in metadata"
+                .to_string(),
+        ));
+    };
+    let Some(dir) =
+        check_monotonicity_sync(backend, &ctx)
+    else {
+        return Err(ResolutionError::Unresolvable(
+            "dimension not monotonic".to_string(),
+        ));
+    };
+    let r = resolve_value_range_sync(
+        backend, &ctx, vr, dir,
+    )
+    .unwrap_or(dim_range.clone());
+    let ranges = wrapping_ghost_ranges(r, ctx.n);
+    if ranges.is_empty() {
+        Ok(vec![])
+    } else {
+        Ok(ranges)
+    }
+}
+
+async fn resolve_wrapping_interpolation_async<
+    B: ChunkedDataBackendAsync,
+>(
+    backend: &B,
+    dim: &IStr,
+    meta: &ZarrMeta,
+    dim_range: &Range<u64>,
+    vr: &ValueRangePresent,
+) -> Result<Vec<Range<u64>>, ResolutionError> {
+    if let Some(r) = try_resolve_index_only(
+        dim,
+        meta,
+        dim_range.end,
+        vr,
+    ) {
+        return Ok(wrapping_ghost_ranges(r, dim_range.end));
+    }
+    let Some(ctx) =
+        DimResolutionCtx::from_meta(dim, meta)
+    else {
+        return Err(ResolutionError::Unresolvable(
+            "dimension not found in metadata"
+                .to_string(),
+        ));
+    };
+    let Some(dir) =
+        check_monotonicity_async(backend, &ctx)
+            .await
+    else {
+        return Err(ResolutionError::Unresolvable(
+            "dimension not monotonic".to_string(),
+        ));
+    };
+    let r = resolve_value_range_async(
+        backend, &ctx, vr, dir,
+    )
+    .await
+    .unwrap_or(dim_range.clone());
+    let ranges = wrapping_ghost_ranges(r, ctx.n);
+    if ranges.is_empty() {
+        Ok(vec![])
+    } else {
+        Ok(ranges)
+    }
+}
+
 /// Resolve a single `LazyDimConstraint` to index ranges synchronously.
 fn resolve_constraint_sync<
     B: ChunkedDataBackendSync,
@@ -479,6 +602,13 @@ fn resolve_constraint_sync<
             } else {
                 Ok(vec![])
             }
+        }
+        LazyDimConstraint::WrappingInterpolationRange(
+            vr,
+        ) => {
+            resolve_wrapping_interpolation_sync(
+                backend, dim, meta, &dim_range, vr,
+            )
         }
     }
 }
@@ -922,6 +1052,14 @@ async fn resolve_constraint_async<
             } else {
                 Ok(vec![])
             }
+        }
+        LazyDimConstraint::WrappingInterpolationRange(
+            vr,
+        ) => {
+            resolve_wrapping_interpolation_async(
+                backend, dim, meta, &dim_range, vr,
+            )
+            .await
         }
     }
 }
@@ -1384,4 +1522,76 @@ fn try_resolve_index_only(
         return None;
     }
     vr.index_range_for_index_dim(dim_len)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ghost_ranges_interior_single_range() {
+        let ranges = wrapping_ghost_ranges(50..55, 360);
+        assert_eq!(ranges, vec![47..58]);
+    }
+
+    #[test]
+    fn ghost_ranges_near_start_adds_end_ghost() {
+        let ranges = wrapping_ghost_ranges(1..5, 360);
+        assert_eq!(ranges.len(), 2);
+        assert_eq!(ranges[0], 0..8);
+        assert_eq!(ranges[1], 357..360);
+    }
+
+    #[test]
+    fn ghost_ranges_at_start_adds_end_ghost() {
+        let ranges = wrapping_ghost_ranges(0..3, 360);
+        assert_eq!(ranges.len(), 2);
+        assert_eq!(ranges[0], 0..6);
+        assert_eq!(ranges[1], 357..360);
+    }
+
+    #[test]
+    fn ghost_ranges_near_end_adds_start_ghost() {
+        let ranges = wrapping_ghost_ranges(356..360, 360);
+        assert_eq!(ranges.len(), 2);
+        assert_eq!(ranges[0], 353..360);
+        assert_eq!(ranges[1], 0..3);
+    }
+
+    #[test]
+    fn ghost_ranges_at_end_adds_start_ghost() {
+        let ranges = wrapping_ghost_ranges(358..360, 360);
+        assert_eq!(ranges.len(), 2);
+        assert_eq!(ranges[0], 355..360);
+        assert_eq!(ranges[1], 0..3);
+    }
+
+    #[test]
+    fn ghost_ranges_small_dimension_both_ghosts() {
+        // Dimension with only 5 indices: range touches both boundaries
+        let ranges = wrapping_ghost_ranges(2..4, 5);
+        assert_eq!(ranges.len(), 3);
+        assert_eq!(ranges[0], 0..5);
+        assert_eq!(ranges[1], 2..5);
+        assert_eq!(ranges[2], 0..3);
+    }
+
+    #[test]
+    fn ghost_ranges_very_small_dimension() {
+        // Dimension ≤ GHOST_EXPANSION: no ghost ranges added
+        let ranges = wrapping_ghost_ranges(0..2, 3);
+        assert_eq!(ranges, vec![0..3]);
+    }
+
+    #[test]
+    fn ghost_ranges_exact_ghost_expansion_size() {
+        // n == GHOST_EXPANSION: no extra ghost ranges
+        let ranges = wrapping_ghost_ranges(1..2, 3);
+        assert_eq!(ranges, vec![0..3]);
+    }
+
+    #[test]
+    fn ghost_expansion_constant_matches_interpolars() {
+        assert_eq!(GHOST_EXPANSION, 3);
+    }
 }

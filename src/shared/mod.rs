@@ -7,7 +7,7 @@ mod zarr;
 pub(crate) use stats::PlannerStats;
 
 // Re-export commonly used traits
-pub(crate) use traits::{
+pub use traits::{
     ChunkedDataBackendAsync,
     ChunkedDataBackendSync,
     ChunkedDataCacheAsync,

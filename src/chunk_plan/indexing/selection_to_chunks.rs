@@ -31,7 +31,7 @@ fn all_chunks_subset(
 /// This version doesn't require a store - it creates ChunkGrids from the
 /// metadata's shape and chunk_shape information. This enables backends
 /// that don't expose a raw store to still compile chunk plans.
-pub(crate) fn selection_to_grouped_chunk_plan_unified_from_meta(
+pub fn selection_to_grouped_chunk_plan_unified_from_meta(
     selection: &DatasetSelection,
     meta: &ZarrMeta,
 ) -> Result<GroupedChunkPlan, BackendError> {

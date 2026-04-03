@@ -12,4 +12,4 @@ mod expr;
 mod interpolate;
 mod selector;
 
-pub(crate) use expr::compile_expr;
+pub use expr::compile_expr;

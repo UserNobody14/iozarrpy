@@ -12,6 +12,7 @@ pub mod expr_utils;
 pub mod expr_walk;
 pub mod literals;
 
-pub(crate) use compile::compile_expr;
-pub(crate) use compile_ctx::LazyCompileCtx;
+pub use compile::compile_expr;
+pub use compile_ctx::LazyCompileCtx;
+pub use expr_plan::ExprPlan;
 pub(crate) use literals::apply_time_encoding;

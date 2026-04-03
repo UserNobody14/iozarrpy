@@ -9,6 +9,7 @@ use polars::prelude::{
 use smallvec::SmallVec;
 use zarrs::array::ChunkGrid;
 
+use crate::meta::path::ZarrPath;
 use crate::{IStr, IntoIStr};
 
 // =============================================================================
@@ -23,9 +24,6 @@ pub struct ZarrMeta {
     pub root: ZarrNode,
     /// Dimension analysis across the entire tree
     pub dim_analysis: DimensionAnalysis,
-    /// Fast lookup: array path (e.g., "model_a/temperature") -> array metadata
-    pub path_to_array:
-        BTreeMap<IStr, Arc<ZarrArrayMeta>>,
 }
 
 /// A node in the zarr hierarchy (group or root).
@@ -146,113 +144,50 @@ impl ZarrMeta {
         &self,
         path: T,
     ) -> Option<&ZarrArrayMeta> {
-        self.path_to_array
-            .get(&path.istr())
-            .map(|a| a.as_ref())
+        let zp = ZarrPath::from(path.istr());
+        self.root.get_array_recursive(&zp)
     }
 
     pub fn array_by_path_contains<T: IntoIStr>(
         &self,
         path: T,
     ) -> bool {
-        self.path_to_array
-            .contains_key(&path.istr())
+        self.array_by_path(path).is_some()
     }
 
-    pub fn find_paths_matching_prefix<
-        T: IntoIStr,
-    >(
-        &self,
-        prefix: T,
-    ) -> Option<Vec<IStr>> {
-        let binding = prefix.istr();
-        let prefix_str: &str = binding.as_ref();
-        let matching: Vec<IStr> = self
-            .path_to_array
-            .keys()
-            .cloned()
-            .filter(|p| {
-                let p_str: &str = p.as_ref();
-                p_str.starts_with(prefix_str)
-            })
-            .collect();
-
-        if matching.is_empty() {
-            None
-        } else {
-            Some(matching)
-        }
-    }
-
-    /// All data variable paths (flat: just names, hierarchical: includes "group/var" paths)
+    /// All data variable paths using recursive tree traversal.
     pub fn all_data_var_paths(
         &self,
     ) -> Vec<IStr> {
-        let mut out = Vec::new();
-        self.collect_data_var_paths(
-            &self.root, &mut out,
-        );
-        out
+        let mut paths = Vec::new();
+        self.root
+            .collect_data_var_paths_recursive(
+                &ZarrPath::root(),
+                &mut paths,
+            );
+        paths
+            .into_iter()
+            .map(|p| p.to_istr())
+            .collect()
     }
 
-    /// All data variable paths (flat: just names, hierarchical: includes "group/var" paths)
+    /// All array paths (data vars) using recursive tree traversal.
     pub fn all_array_paths(&self) -> Vec<IStr> {
-        // self.path_to_array
-        //     .keys()
-        //     .cloned()
-        //     .collect()
-        let mut out = Vec::new();
-        self.collect_data_var_paths(
-            &self.root, &mut out,
-        );
-        out
-        // out.into_iter()
-        //     .map(|p| {
-        //         p.trim_start_matches('/').istr()
-        //     })
-        //     .collect()
+        self.all_data_var_paths()
     }
 
     pub fn all_zarr_array_paths(
         &self,
     ) -> Vec<IStr> {
-        self.path_to_array
-            .keys()
-            .cloned()
+        let mut paths = Vec::new();
+        self.root.collect_paths_recursive(
+            &ZarrPath::root(),
+            &mut paths,
+        );
+        paths
+            .into_iter()
+            .map(|p| p.to_istr())
             .collect()
-    }
-
-    fn collect_data_var_paths(
-        &self,
-        node: &ZarrNode,
-        out: &mut Vec<IStr>,
-    ) {
-        // Root node data vars use just the var name
-        let path_str: &str = node.path.as_ref();
-        let prefix = if path_str == "/" {
-            String::new()
-        } else {
-            format!(
-                "{}/",
-                path_str.trim_start_matches('/')
-            )
-        };
-
-        for var in &node.data_vars {
-            let path = if prefix.is_empty() {
-                var.clone()
-            } else {
-                format!("{}{}", prefix, var)
-                    .istr()
-            };
-            out.push(path);
-        }
-
-        for (_, child) in &node.children {
-            self.collect_data_var_paths(
-                child, out,
-            );
-        }
     }
 
     /// Generate a Polars schema for the tidy DataFrame output.
@@ -272,11 +207,9 @@ impl ZarrMeta {
 
         let mut fields: Vec<Field> = Vec::new();
 
-        // Add dimension columns (from combined dimension analysis)
         for dim in &self.dim_analysis.all_dims {
             let dtype = self
-                .path_to_array
-                .get(dim)
+                .array_by_path(dim)
                 .map(|m| m.polars_dtype.clone())
                 .unwrap_or(PlDataType::Int64);
             let dim_str: &str = dim.as_ref();
@@ -419,104 +352,109 @@ impl Display for ZarrMeta {
     }
 }
 
-pub trait VariableAccess {
-    fn array_by_path<T: IntoIStr>(
+impl ZarrNode {
+    /// Look up an array by traversing the tree recursively using path components.
+    pub fn get_array_recursive(
         &self,
-        path: T,
-    ) -> Option<&ZarrArrayMeta>;
-
-    fn array_by_path_contains<T: IntoIStr>(
-        &self,
-        path: T,
-    ) -> bool;
-
-    fn find_paths_matching_prefix<T: IntoIStr>(
-        &self,
-        prefix: T,
-    ) -> Option<Vec<IStr>>;
-}
-
-impl VariableAccess for ZarrNode {
-    fn array_by_path<T: IntoIStr>(
-        &self,
-        path: T,
+        path: &ZarrPath,
     ) -> Option<&ZarrArrayMeta> {
-        let binding = path.istr();
-        let path_str: &str = binding.as_ref();
-        // If the path has no slashes, attempt to get it from the local arrays
-        if !path_str.contains('/') {
-            return self
+        let comps = path.components();
+        match comps.len() {
+            0 => None,
+            1 => self
                 .arrays
-                .get(&binding)
-                .map(|a| a.as_ref());
-        }
-
-        // Otherwise, get the parent path and recurse through the children
-        let parent_path =
-            path_str.split('/').next();
-        if let Some(parent_path) = parent_path {
-            return self
+                .get(&comps[0])
+                .map(|a| a.as_ref()),
+            _ => self
                 .children
-                .get(&parent_path.istr())
+                .get(&comps[0])
                 .and_then(|child| {
-                    child.array_by_path(binding)
-                });
-        }
-
-        None
-    }
-
-    fn array_by_path_contains<T: IntoIStr>(
-        &self,
-        path: T,
-    ) -> bool {
-        self.array_by_path(path).is_some()
-    }
-
-    fn find_paths_matching_prefix<T: IntoIStr>(
-        &self,
-        prefix: T,
-    ) -> Option<Vec<IStr>> {
-        let binding = prefix.istr();
-        let prefix_str: &str = binding.as_ref();
-        // If the prefix is a slash, return all arrays and all child group paths
-        if prefix_str == "/" {
-            let mut arrays_and_children: Vec<
-                IStr,
-            > = self
-                .arrays
-                .keys()
-                .cloned()
-                .collect();
-            let children_paths: Vec<IStr> = self
-                .children
-                .keys()
-                .cloned()
-                .collect();
-            arrays_and_children
-                .extend(children_paths);
-            return Some(arrays_and_children);
-        }
-
-        // Otherwise, get the parent path and recurse through the children
-        let parent_path =
-            prefix_str.split_once('/');
-        if let Some((parent_path, _)) =
-            parent_path
-        {
-            return self
-                .children
-                .get(&parent_path.istr())
-                .and_then(|child| {
-                    child.find_paths_matching_prefix(
-                        binding,
+                    child.get_array_recursive(
+                        &path.tail(),
                     )
-                });
+                }),
         }
+    }
 
-        None
+    /// Recursively collect all array paths (as `ZarrPath`) from this node and descendants.
+    pub fn collect_paths_recursive(
+        &self,
+        prefix: &ZarrPath,
+        out: &mut Vec<ZarrPath>,
+    ) {
+        for var in self.arrays.keys() {
+            out.push(prefix.push(var.clone()));
+        }
+        for (child_name, child_node) in
+            &self.children
+        {
+            let child_prefix =
+                prefix.push(child_name.clone());
+            child_node.collect_paths_recursive(
+                &child_prefix,
+                out,
+            );
+        }
+    }
+
+    /// Recursively collect data variable paths (non-coordinate arrays).
+    pub fn collect_data_var_paths_recursive(
+        &self,
+        prefix: &ZarrPath,
+        out: &mut Vec<ZarrPath>,
+    ) {
+        for var in &self.data_vars {
+            out.push(prefix.push(var.clone()));
+        }
+        for (child_name, child_node) in
+            &self.children
+        {
+            let child_prefix =
+                prefix.push(child_name.clone());
+            child_node
+                .collect_data_var_paths_recursive(
+                    &child_prefix,
+                    out,
+                );
+        }
+    }
+
+    /// Find all paths under this node that match a given prefix path.
+    /// Traverses to the target node then collects all paths beneath it.
+    pub fn find_paths_under(
+        &self,
+        target: &ZarrPath,
+    ) -> Vec<ZarrPath> {
+        let comps = target.components();
+        if comps.is_empty() {
+            let mut out = Vec::new();
+            self.collect_paths_recursive(
+                &ZarrPath::root(),
+                &mut out,
+            );
+            return out;
+        }
+        match self.children.get(&comps[0]) {
+            Some(child) if comps.len() == 1 => {
+                let mut out = Vec::new();
+                child.collect_paths_recursive(
+                    &ZarrPath::single(
+                        comps[0].clone(),
+                    ),
+                    &mut out,
+                );
+                out
+            }
+            Some(child) => {
+                child.find_paths_under(
+                    &target.tail(),
+                )
+            }
+            None => Vec::new(),
+        }
     }
 }
+
 
 /// CF-conventions time encoding information parsed from Zarr attributes.
 #[derive(Debug, Clone)]

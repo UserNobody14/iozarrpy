@@ -13,7 +13,7 @@ use super::selection_base::DatasetSelectionBase;
 /// Dataset-level selection: type alias for the generic `DatasetSelectionBase`.
 ///
 /// This groups variables by their dimension signature to avoid duplication.
-pub(crate) type DatasetSelection =
+pub type DatasetSelection =
     DatasetSelectionBase<
         GroupedSelection<DataArraySelection>,
     >;
@@ -22,7 +22,7 @@ pub(crate) type DatasetSelection =
 #[derive(
     Debug, Clone, Default, PartialEq, Eq,
 )]
-pub(crate) struct DataArraySelection {
+pub struct DataArraySelection {
     /// SmallVec of dimension names wrapped in Arc for cheap cloning in set operations.
     /// Each name's position in the vec labels its index.
     /// So if we had [a, b, c], a would be our label for dim 0, b would be 1, c would be 2.

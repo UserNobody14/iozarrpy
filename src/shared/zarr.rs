@@ -17,6 +17,7 @@ use super::traits::{
     HasMetadataBackendCacheSync,
     HasMetadataBackendSync, HasStore,
 };
+use crate::IntoIStr;
 use crate::errors::{
     BackendError, BackendResult,
 };
@@ -36,7 +37,6 @@ use crate::store::{
 };
 use std::fmt::Display;
 use std::sync::Arc;
-
 pub struct ZarrBackendSync {
     store: Arc<OpenedStore>,
     /// Opened arrays with their shard caches.
@@ -58,7 +58,7 @@ pub(crate) fn normalize_path(
     if path.starts_with('/') {
         path.clone()
     } else {
-        format!("/{}", path).into()
+        format!("/{}", *path).istr()
     }
 }
 

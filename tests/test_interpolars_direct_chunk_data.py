@@ -384,11 +384,6 @@ def test_direct_interpolars_nonuniform_coords_vs_xarray(tmp_path: Path) -> None:
     )
     actual = float(result.unnest("interpolated")["value"][0])
 
-    # BUG: interpolars produces wrong values for non-integer coord grids.
-    # It appears to use array indices instead of actual coordinate values for weights.
-    # DataFrame format is correct (coord cols with values + value col, tidy rows).
-    # When interpolars is fixed for non-integer coords, replace with:
-    #   assert actual == pytest.approx(xr_expected, abs=1e-10)
     assert isinstance(actual, float)
     assert np.isfinite(actual)
-    assert xr_expected == actual
+    assert actual == pytest.approx(xr_expected, abs=1e-10)

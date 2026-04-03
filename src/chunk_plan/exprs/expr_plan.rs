@@ -117,7 +117,7 @@ impl VarSet {
 /// Separates dimension constraints from variable references. The expensive
 /// `GroupedSelection` construction is deferred to `into_lazy_dataset_selection`.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum ExprPlan {
+pub enum ExprPlan {
     /// No selection made (identity for intersect, absorbing for union).
     NoConstraint,
     /// Everything excluded.

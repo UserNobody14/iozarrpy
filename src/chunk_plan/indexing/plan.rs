@@ -158,7 +158,7 @@ impl<'a> ConsolidatedGridGroup<'a> {
 /// This allows heterogeneous chunk layouts: variables with the same dimensions
 /// but different chunk shapes will have different plans.
 #[derive(Debug, Clone)]
-pub(crate) struct GroupedChunkPlan {
+pub struct GroupedChunkPlan {
     /// ChunkPlan by grid signature
     by_grid: BTreeMap<
         Arc<ChunkGridSignature>,
@@ -287,7 +287,7 @@ impl GroupedChunkPlan {
                             dims: sig.dims().to_vec(),
                             shape: chunkgrid.array_shape().to_vec(),
                             paths: vars.iter().map(
-                                |v| -> internment::ArcIntern<str> {
+                                |v| -> IStr {
                                     v.clone()
                                 }
                             ).collect::<Vec<IStr>>(),
@@ -346,7 +346,7 @@ impl GroupedChunkPlan {
                                 dims: sig.dims().to_vec(),
                                 shape: chunkgrid.array_shape().to_vec(),
                                 paths: vars.iter().map(
-                                    |v| -> internment::ArcIntern<str> {
+                                    |v| -> IStr {
                                         v.clone()
                                     }
                                 ).collect::<Vec<IStr>>(),

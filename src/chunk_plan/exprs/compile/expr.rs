@@ -17,7 +17,10 @@ use super::cmp::{
     compile_struct_field_cmp,
     compile_value_range_to_plan,
 };
-use super::interpolate::interpolate_selection_nd_lazy;
+use super::interpolate::{
+    interpolate_selection_nd_lazy,
+    interpolate_selection_geospatial_lazy,
+};
 use super::selector::compile_selector_lazy;
 use super::utils::{
     collect_refs_from_expr, refs_to_plan,
@@ -35,7 +38,7 @@ type LazyResult = Result<ExprPlan, BackendError>;
 /// containing unresolved `ValueRange` constraints and variable references.
 /// These are later converted to `LazyDatasetSelection`, batch-resolved,
 /// and materialized into a concrete `DatasetSelection`.
-pub(crate) fn compile_expr(
+pub fn compile_expr(
     expr: impl std::borrow::Borrow<Expr>,
     ctx: &mut LazyCompileCtx<'_>,
 ) -> LazyResult {
@@ -393,6 +396,12 @@ pub(crate) fn compile_expr(
                             return Ok(ExprPlan::NoConstraint);
                         }
                         interpolate_selection_nd_lazy(&input[0], &input[1], &input[2], ctx)
+                    } else if symbol == "interpolate_geospatial"
+                    {
+                        if input.len() < 3 {
+                            return Ok(ExprPlan::NoConstraint);
+                        }
+                        interpolate_selection_geospatial_lazy(&input[0], &input[1], &input[2], ctx)
                     } else {
                         Ok(refs_to_plan(collect_refs_from_expr(expr)))
                     }

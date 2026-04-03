@@ -7,6 +7,7 @@ use super::expr_walk::{
     walk_expr, walk_selector,
 };
 use crate::chunk_plan::prelude::*;
+use crate::meta::path::ZarrPath;
 use crate::{IStr, IntoIStr};
 
 /// Collects all column names referenced in an expression using a simple recursive approach.
@@ -57,14 +58,14 @@ pub(crate) fn collect_selector_refs(
 // =============================================================================
 
 /// Extract struct field path from an expression.
-/// Returns (root_column, slash_joined_path) or None if not a struct field access.
+/// Returns `(root_column, ZarrPath)` or None if not a struct field access.
 ///
 /// Handles arbitrarily nested struct field access, e.g.:
-/// - `col("a").struct.field("b")` → `("a", "b")`
-/// - `col("a").struct.field("b").struct.field("c")` → `("a", "b/c")`
+/// - `col("a").struct.field("b")` → `("a", ZarrPath["b"])`
+/// - `col("a").struct.field("b").struct.field("c")` → `("a", ZarrPath["b", "c"])`
 pub(crate) fn extract_struct_field_path(
     expr: &Expr,
-) -> Option<(IStr, IStr)> {
+) -> Option<(IStr, ZarrPath)> {
     use polars::prelude::{
         FunctionExpr, StructFunction,
     };
@@ -84,7 +85,11 @@ pub(crate) fn extract_struct_field_path(
             {
                 Some((
                     col_name.as_str().istr(),
-                    field_name.as_str().istr(),
+                    ZarrPath::single(
+                        field_name
+                            .as_str()
+                            .istr(),
+                    ),
                 ))
             } else if let Some((
                 root,
@@ -92,11 +97,14 @@ pub(crate) fn extract_struct_field_path(
             )) =
                 extract_struct_field_path(inner)
             {
-                let joined = format!(
-                    "{parent_path}/{}",
-                    field_name.as_str()
-                );
-                Some((root, joined.istr()))
+                Some((
+                    root,
+                    parent_path.push(
+                        field_name
+                            .as_str()
+                            .istr(),
+                    ),
+                ))
             } else {
                 None
             }
