@@ -32,8 +32,8 @@ def string_dataset(output_dir: Path) -> str:
     x_arr.attrs["_ARRAY_DIMENSIONS"] = ["x"]
 
     # String variable (variable-length)
-    labels = root.create_array("label", shape=(4, 3), chunks=(2, 2), dtype="str")
-    labels[:] = np.array(
+    label_arr = root.create_array("label", shape=(4, 3), chunks=(2, 2), dtype="str")
+    label_arr[:] = np.array(
         [
             ["a0", "a1", "a2"],
             ["b0", "b1", "b2"],
@@ -41,7 +41,7 @@ def string_dataset(output_dir: Path) -> str:
             ["d0", "d1", "d2"],
         ]
     )
-    labels.attrs["_ARRAY_DIMENSIONS"] = ["y", "x"]
+    label_arr.attrs["_ARRAY_DIMENSIONS"] = ["y", "x"]
 
     # Numeric variable to ensure mixed dtypes work
     vals = root.create_array("value", shape=(4, 3), chunks=(2, 2), dtype="float64")
