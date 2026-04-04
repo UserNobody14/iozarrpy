@@ -126,6 +126,22 @@ pub(crate) async fn retrieve_chunk_async(
                 .await
                 ?,
         )),
+        "string" => Ok(ColumnData::Str(
+            array
+                .async_retrieve_subchunk_opt::<Vec<String>>(
+                    cache, chunk, &options,
+                )
+                .await
+                ?,
+        )),
+        "bytes" => Ok(ColumnData::Bin(
+            array
+                .async_retrieve_subchunk_opt::<Vec<Vec<u8>>>(
+                    cache, chunk, &options,
+                )
+                .await
+                ?,
+        )),
         other => {
             Err(BackendError::other(format!(
                 "unsupported zarr dtype: {other}"
