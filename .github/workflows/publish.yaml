@@ -38,10 +38,10 @@ jobs:
         platform:
           - runner: ubuntu-22.04
             target: x86_64
-            manylinux: auto
+            manylinux: manylinux_2_28
           - runner: ubuntu-22.04
             target: x86
-            manylinux: auto
+            manylinux: manylinux_2_28
           - runner: ubuntu-22.04
             target: aarch64
             manylinux: manylinux_2_28
