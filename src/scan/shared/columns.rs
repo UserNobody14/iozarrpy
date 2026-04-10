@@ -327,7 +327,7 @@ pub fn compute_in_bounds_mask(
 /// Apply encoding to a gathered `ColumnData`, returning
 /// a Polars `Column`. For `Time`, maps i64 then casts.
 /// For `ScaleOffset`, decodes to f64. No-op if `None`.
-fn apply_encoding(
+pub(crate) fn apply_encoding(
     data: ColumnData,
     name: &str,
     encoding: Option<&VarEncoding>,

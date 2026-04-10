@@ -114,6 +114,20 @@ pub(crate) fn retrieve_chunk(
                 )
                 ?,
         )),
+        "string" => Ok(ColumnData::Str(
+            array
+                .retrieve_subchunk_opt::<Vec<String>>(
+                    cache, chunk, &options,
+                )
+                ?,
+        )),
+        "bytes" => Ok(ColumnData::Bin(
+            array
+                .retrieve_subchunk_opt::<Vec<Vec<u8>>>(
+                    cache, chunk, &options,
+                )
+                ?,
+        )),
         other => Err(BackendError::other(format!(
             "unsupported zarr dtype: {other}"
         ))),

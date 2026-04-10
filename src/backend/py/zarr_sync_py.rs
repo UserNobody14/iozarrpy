@@ -14,6 +14,9 @@ use snafu::ResultExt;
 
 use crate::IntoIStr;
 use crate::backend::implementation::scan_zarr_with_backend_sync;
+use crate::backend::py::debug::{
+    extract_grids, extract_grids_sync,
+};
 use crate::errors::PolarsSnafu;
 use crate::py::expr_extract::extract_expr;
 use crate::shared::{
@@ -25,6 +28,8 @@ use crate::shared::{
     to_fully_cached_sync,
 };
 use crate::store::StoreInput;
+
+use crate::backend::py::debug::grids_to_python;
 
 /// Python-exposed Zarr backend with caching and scan methods.
 ///
@@ -133,25 +138,18 @@ impl PyZarrBackendSync {
             .lazy()
             .filter(prd)
             .collect()
-            .context(PolarsSnafu)?;
+            .context(PolarsSnafu {
+                message: "Error filtering full dataframe output".to_string(),
+            })?;
         Ok(PyDataFrame(filtered)
             .into_pyobject(py)
             .map_err(|e| {
                 PyErr::new::<
                     pyo3::exceptions::PyRuntimeError,
                     _,
-                >(e.to_string())
+                >(format!("Error converting DataFrame to Python: {:?}", e))
             })?
             .into_any())
-        // if let Some(variables) = variables {
-        //     asc =
-        //         asc.select(Expr::Selector(Selector::ByName {
-        //             names: variables
-        //                 .into_iter()
-        //                 .map(|s| s.istr())
-        //                 .collect::<Vec<_>>(),
-        //         })?;
-        // }
     }
 
     /// Streaming scan the zarr store and return an iterator over DataFrames.
@@ -221,6 +219,29 @@ impl PyZarrBackendSync {
             meta.tidy_schema(vars.as_deref());
 
         Ok(PySchema(Arc::new(schema)))
+    }
+
+    /// Debug function that returns per-variable chunk selections.
+    ///
+    /// Returns a dict with:
+    /// - grids: List of grid info dicts, each containing:
+    ///   - dims: List of dimension names
+    ///   - variables: List of variable names in this grid
+    ///   - chunks: List of chunk dicts with indices/origin/shape
+    /// - coord_reads: Number of coordinate array reads performed
+    #[pyo3(signature = (predicate))]
+    fn selected_chunks_debug<'py>(
+        &self,
+        py: Python<'py>,
+        predicate: &Bound<'py, PyAny>,
+    ) -> PyResult<Py<PyAny>> {
+        let backend = self.inner.clone();
+        let expr = extract_expr(predicate)?;
+
+        let (grids, coord_reads) =
+            extract_grids_sync(backend, expr)?;
+
+        grids_to_python(py, grids, coord_reads)
     }
 
     // / Get the store root path.

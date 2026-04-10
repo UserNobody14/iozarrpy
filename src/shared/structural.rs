@@ -2,16 +2,19 @@ use polars::prelude::*;
 use snafu::ResultExt;
 use std::collections::BTreeSet;
 
+use crate::IStr;
 use crate::errors::{BackendResult, PolarsSnafu};
 use crate::meta::path::ZarrPath;
 use crate::meta::{ZarrMeta, ZarrNode};
-use crate::IStr;
 /// Combine chunk DataFrames, handling heterogeneous schemas.
 ///
 /// Strategy:
 /// 1. Group DataFrames by their column schema (signature)
 /// 2. Within each group, use vstack (same schema)
-/// 3. Across groups, join on shared coordinate columns
+/// 3. Across groups, join **pairwise** on overlapping dimension columns (starting
+///    with the frame that has the most dim columns) so aux 1D layouts (lat/lon on
+///    `point`) merge onto the fact grid even when no single dim appears in **every**
+///    schema group.
 pub fn combine_chunk_dataframes(
     mut dfs: Vec<DataFrame>,
     meta: &ZarrMeta,
@@ -60,9 +63,17 @@ pub fn combine_chunk_dataframes(
             // Reorder columns to match the first DataFrame
             let reordered = df
                 .select(col_order.as_slice())
-                .context(PolarsSnafu)?;
+                .context(PolarsSnafu {
+                    message:
+                        "Error reordering columns"
+                            .to_string(),
+                })?;
             acc.vstack_mut(&reordered)
-                .context(PolarsSnafu)?;
+                .context(PolarsSnafu {
+                message:
+                    "Error vstacking DataFrames"
+                        .to_string(),
+            })?;
         }
         vstacked.push(acc);
     }
@@ -74,65 +85,55 @@ pub fn combine_chunk_dataframes(
             .unwrap());
     }
 
-    // Multiple schema groups - join on coordinate columns
-    // Find shared coordinate columns across all vstacked DFs
-    let shared_coords: Vec<PlSmallStr> = {
-        let first_cols: BTreeSet<PlSmallStr> =
-            vstacked[0]
-                .get_column_names_owned()
+    vstacked.sort_by_key(|df| {
+        std::cmp::Reverse(
+            df.get_column_names_owned()
                 .into_iter()
                 .filter(|c| {
                     dim_cols.contains(c.as_str())
                 })
-                .collect();
+                .count(),
+        )
+    });
 
-        vstacked
-            .iter()
-            .skip(1)
-            .fold(first_cols, |acc, df| {
-                let df_dims: BTreeSet<
-                    PlSmallStr,
-                > = df
-                    .get_column_names_owned()
-                    .into_iter()
-                    .filter(|c| {
-                        dim_cols
-                            .contains(c.as_str())
-                    })
-                    .collect();
-                acc.intersection(&df_dims)
-                    .cloned()
-                    .collect()
-            })
-            .into_iter()
-            .collect()
-    };
-
-    if shared_coords.is_empty() {
-        // No shared coordinates - fall back to diagonal concat
-        return Ok(polars::functions::concat_df_diagonal(
-            &vstacked,
-        ).context(
-            PolarsSnafu
-        )?);
-    }
-
-    // Join on shared coordinates
-    // Start with the first DF and successively join others
     let mut result = vstacked.remove(0);
     for df in vstacked {
-        result = result
-            .join(
-                &df,
-                shared_coords.as_slice(),
-                shared_coords.as_slice(),
-                JoinArgs::new(JoinType::Full)
-                    .with_coalesce(
-                    JoinCoalesce::CoalesceColumns,
-                ),
-                None,
+        let join_on: Vec<PlSmallStr> = result
+            .get_column_names_owned()
+            .into_iter()
+            .filter(|c| {
+                dim_cols.contains(c.as_str())
+                    && df.column(c.as_str()).is_ok()
+            })
+            .collect();
+
+        result = if join_on.is_empty() {
+            polars::functions::concat_df_diagonal(
+                &[result, df],
             )
-            .context(PolarsSnafu)?;
+            .context(PolarsSnafu {
+                message:
+                    "Error diagonal-concatenating DataFrames"
+                        .to_string(),
+            })?
+        } else {
+            result
+                .join(
+                    &df,
+                    join_on.as_slice(),
+                    join_on.as_slice(),
+                    JoinArgs::new(JoinType::Full)
+                        .with_coalesce(
+                            JoinCoalesce::CoalesceColumns,
+                        ),
+                    None,
+                )
+                .context(PolarsSnafu {
+                    message:
+                        "Error joining DataFrames"
+                        .to_string(),
+                })?
+        };
     }
 
     Ok(result)
@@ -186,11 +187,9 @@ pub fn restructure_to_structs(
                 &mut processed_paths,
             )?;
         if let Some(col) = struct_col {
-            result_columns.push(
-                col.with_name(
-                    child_name_str.into(),
-                ),
-            );
+            result_columns.push(col.with_name(
+                child_name_str.into(),
+            ));
         }
     }
 
@@ -198,7 +197,10 @@ pub fn restructure_to_structs(
         df.height(),
         result_columns,
     )
-    .context(PolarsSnafu)?)
+    .context(PolarsSnafu {
+        message: "Error creating DataFrame"
+            .to_string(),
+    })?)
 }
 
 /// Build a struct column for a zarr node (group).
@@ -225,8 +227,7 @@ fn build_struct_column_for_node(
         }
     }
 
-    for (child_name, child_node) in
-        &node.children
+    for (child_name, child_node) in &node.children
     {
         let child_name_str: &str =
             child_name.as_ref();
@@ -252,11 +253,18 @@ fn build_struct_column_for_node(
 
     let struct_series =
         StructChunked::from_columns(
-            prefix.to_flat_string().as_str().into(),
+            prefix
+                .to_flat_string()
+                .as_str()
+                .into(),
             df.height(),
             &fields,
         )
-        .context(PolarsSnafu)?;
+        .context(PolarsSnafu {
+            message:
+                "Error creating StructChunked"
+                    .to_string(),
+        })?;
 
     Ok(Some(struct_series.into_column()))
 }

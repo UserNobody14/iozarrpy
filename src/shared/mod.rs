@@ -15,7 +15,7 @@ pub use traits::{
     EvictableChunkCacheSync, HasAsyncStore,
     HasMetadataBackendAsync,
     HasMetadataBackendCacheAsync,
-    HasMetadataBackendSync,
+    HasMetadataBackendSync, HasStore,
 };
 
 // Re-export compile traits

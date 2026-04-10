@@ -64,6 +64,46 @@ fn repeat_tile_slice<T: Copy>(
     output
 }
 
+/// Build a Vec by repeating each element of `src` `inner_repeat`
+/// times, then tiling the resulting pattern `tile_count` times.
+///
+/// Same semantics as `repeat_tile_slice` but works for types
+/// that implement `Clone` (e.g. `String`, `Vec<u8>`) instead of
+/// requiring `Copy`.
+fn repeat_tile_clone<T: Clone>(
+    src: &[T],
+    inner_repeat: usize,
+    tile_count: usize,
+) -> Vec<T> {
+    if src.is_empty()
+        || inner_repeat == 0
+        || tile_count == 0
+    {
+        return Vec::new();
+    }
+
+    let tile_len = src.len() * inner_repeat;
+    let total = tile_len * tile_count;
+    let mut output = Vec::with_capacity(total);
+
+    // Build one tile
+    for val in src {
+        for _ in 0..inner_repeat {
+            output.push(val.clone());
+        }
+    }
+
+    // Tile to full output by cloning the first tile
+    if tile_count > 1 {
+        let tile = output.clone();
+        for _ in 1..tile_count {
+            output.extend_from_slice(&tile);
+        }
+    }
+
+    output
+}
+
 #[derive(Debug, Clone)]
 pub enum ColumnData {
     Bool(Vec<bool>),
@@ -77,6 +117,8 @@ pub enum ColumnData {
     U64(Vec<u64>),
     F32(Vec<f32>),
     F64(Vec<f64>),
+    Str(Vec<String>),
+    Bin(Vec<Vec<u8>>),
 }
 
 impl ColumnData {
@@ -93,6 +135,8 @@ impl ColumnData {
             ColumnData::U64(v) => v.len(),
             ColumnData::F32(v) => v.len(),
             ColumnData::F64(v) => v.len(),
+            ColumnData::Str(v) => v.len(),
+            ColumnData::Bin(v) => v.len(),
         }
     }
 
@@ -151,6 +195,16 @@ impl ColumnData {
             }
             ColumnData::F64(v) => {
                 ColumnData::F64(
+                    v[start..end].to_vec(),
+                )
+            }
+            ColumnData::Str(v) => {
+                ColumnData::Str(
+                    v[start..end].to_vec(),
+                )
+            }
+            ColumnData::Bin(v) => {
+                ColumnData::Bin(
                     v[start..end].to_vec(),
                 )
             }
@@ -246,6 +300,22 @@ impl ColumnData {
                         .collect(),
                 )
             }
+            ColumnData::Str(v) => {
+                ColumnData::Str(
+                    indices
+                        .iter()
+                        .map(|&i| v[i].clone())
+                        .collect(),
+                )
+            }
+            ColumnData::Bin(v) => {
+                ColumnData::Bin(
+                    indices
+                        .iter()
+                        .map(|&i| v[i].clone())
+                        .collect(),
+                )
+            }
         }
     }
 
@@ -285,6 +355,8 @@ impl ColumnData {
             ColumnData::Bool(v) => {
                 Some(i64::from(v[idx]))
             }
+            ColumnData::Str(_)
+            | ColumnData::Bin(_) => None,
         }
     }
 
@@ -382,6 +454,12 @@ impl ColumnData {
                         .collect(),
                 )
             }
+            ColumnData::Str(_) | ColumnData::Bin(_) => {
+                panic!(
+                    "map_i64 is not supported for \
+                     string/binary ColumnData"
+                )
+            }
         }
     }
 
@@ -463,6 +541,24 @@ impl ColumnData {
                 ColumnData::F64(
                     (0..len)
                         .map(|i| v[index_fn(i)])
+                        .collect(),
+                )
+            }
+            ColumnData::Str(v) => {
+                ColumnData::Str(
+                    (0..len)
+                        .map(|i| {
+                            v[index_fn(i)].clone()
+                        })
+                        .collect(),
+                )
+            }
+            ColumnData::Bin(v) => {
+                ColumnData::Bin(
+                    (0..len)
+                        .map(|i| {
+                            v[index_fn(i)].clone()
+                        })
                         .collect(),
                 )
             }
@@ -582,6 +678,24 @@ impl ColumnData {
                     ),
                 )
             }
+            ColumnData::Str(v) => {
+                ColumnData::Str(
+                    repeat_tile_clone(
+                        v,
+                        inner_repeat,
+                        tile_count,
+                    ),
+                )
+            }
+            ColumnData::Bin(v) => {
+                ColumnData::Bin(
+                    repeat_tile_clone(
+                        v,
+                        inner_repeat,
+                        tile_count,
+                    ),
+                )
+            }
         }
     }
 
@@ -623,6 +737,22 @@ impl ColumnData {
             ColumnData::F64(v) => {
                 Series::new(name.into(), v)
             }
+            ColumnData::Str(v) => {
+                Series::new(
+                    name.into(),
+                    v.iter()
+                        .map(|s| s.as_str())
+                        .collect::<Vec<&str>>(),
+                )
+            }
+            ColumnData::Bin(v) => {
+                Series::new(
+                    name.into(),
+                    v.iter()
+                        .map(|b| b.as_slice())
+                        .collect::<Vec<&[u8]>>(),
+                )
+            }
         }
     }
 
@@ -663,6 +793,22 @@ impl ColumnData {
             }
             ColumnData::F64(v) => {
                 Series::new(name.into(), v)
+            }
+            ColumnData::Str(v) => {
+                Series::new(
+                    name.into(),
+                    v.iter()
+                        .map(|s| s.as_str())
+                        .collect::<Vec<&str>>(),
+                )
+            }
+            ColumnData::Bin(v) => {
+                Series::new(
+                    name.into(),
+                    v.iter()
+                        .map(|b| b.as_slice())
+                        .collect::<Vec<&[u8]>>(),
+                )
             }
         }
     }
@@ -731,6 +877,12 @@ impl ColumnData {
             ColumnData::U64(v) => decode!(v),
             ColumnData::F32(v) => decode!(v),
             ColumnData::F64(v) => decode!(v),
+            ColumnData::Str(_) | ColumnData::Bin(_) => {
+                panic!(
+                    "to_f64_scaled is not supported \
+                     for string/binary ColumnData"
+                )
+            }
         }
     }
 
@@ -817,6 +969,20 @@ impl ColumnData {
             ) => {
                 a.extend_from_slice(b);
                 ColumnData::F64(a)
+            }
+            (
+                ColumnData::Str(mut a),
+                ColumnData::Str(b),
+            ) => {
+                a.extend_from_slice(b);
+                ColumnData::Str(a)
+            }
+            (
+                ColumnData::Bin(mut a),
+                ColumnData::Bin(b),
+            ) => {
+                a.extend_from_slice(b);
+                ColumnData::Bin(a)
             }
             _ => panic!(
                 "ColumnData::concat type mismatch"

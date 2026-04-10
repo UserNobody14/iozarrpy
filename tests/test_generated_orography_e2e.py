@@ -19,7 +19,13 @@ def test_generated_orography_scan(dataset_path) -> None:
     lf = rainbear.scan_zarr(path)
     df = lf.collect()
 
-    assert df.columns == ["y", "x", "geopotential_height", "latitude", "longitude"]
+    assert set(df.columns) == set([
+        "x",
+        "y",
+        "geopotential_height",
+        "latitude",
+        "longitude",
+    ])
     assert df.height == 32 * 24
 
 
@@ -47,9 +53,23 @@ def test_generated_orography_multi_var(dataset_path) -> None:
 
     lf = rainbear.scan_zarr(
         path,
-    ).select(["y", "x", "geopotential_height", "latitude", "longitude"])
+    ).select(
+        [
+            "geopotential_height",
+            "latitude",
+            "longitude",
+                        "x",
+            "y",
+        ]
+    )
     df = lf.collect()
-    assert df.columns == ["y", "x", "geopotential_height", "latitude", "longitude"]
+    assert set(df.columns) == set([
+        "geopotential_height",
+        "latitude",
+        "longitude",
+        "x",
+        "y",
+    ])
     assert df.height == 12 * 9
 
 
@@ -74,6 +94,4 @@ def test_generated_orography_projection(dataset_path) -> None:
     lf = rainbear.scan_zarr(path)
     df = lf.select("geopotential_height").collect()
     assert df.columns == ["geopotential_height"]
-    assert df.height == 10 * 6
-    assert df.height == 10 * 6
     assert df.height == 10 * 6

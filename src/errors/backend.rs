@@ -155,12 +155,13 @@ pub enum BackendError {
     #[snafu(context(false))]
     ParseError { source: url::ParseError },
     #[snafu(
-        display("polars error: {}", source),
+        display("polars error: {}, message: {:?}", source, message),
         visibility(pub(crate))
     )]
     PolarsError {
         source: polars::error::PolarsError,
         backtrace: Backtrace,
+        message: String,
     },
 
     #[snafu(context(false))]
@@ -252,6 +253,18 @@ impl From<BackendError> for PyErr {
                 "coordinate array not found: {}",
                 msg
             )),
+            BackendError::PolarsError {
+                source,
+                backtrace,
+                message,
+            } => PyErr::new::<
+                pyo3::exceptions::PyRuntimeError,
+                _,
+            >(format!(
+                "Polars error: {}, message: {:?}, backtrace: {:?}",
+                source, message, backtrace
+            )),
+
             _ => PyErr::new::<
                 pyo3::exceptions::PyValueError,
                 _,

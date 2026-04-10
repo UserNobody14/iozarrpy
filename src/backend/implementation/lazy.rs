@@ -5,18 +5,18 @@ use std::sync::Arc;
 
 use polars::prelude::*;
 
+use crate::IStr;
 use crate::errors::BackendError;
 use crate::errors::MaxChunksToReadExceededSnafu;
+use crate::scan::column_policy::ResolvedColumnPolicy;
 use crate::scan::sync_scan::chunk_to_df_from_grid_with_backend;
 use crate::shared::ChunkedExpressionCompilerSync;
 use crate::shared::FullyCachedZarrBackendSync;
 use crate::shared::{
     HasMetadataBackendSync,
     combine_chunk_dataframes,
-    expand_projection_to_flat_paths,
     restructure_to_structs,
 };
-use crate::{IStr, IntoIStr};
 use snafu::ensure;
 
 /// Internal: scan using the backend.
@@ -34,20 +34,24 @@ pub fn scan_zarr_with_backend_sync(
     // Get metadata from backend
     let meta = backend.metadata()?;
 
-    // Expand struct column names to flat paths for chunk reading
-    // e.g., "model_a" -> ["model_a/temperature", "model_a/pressure"]
-    let expanded_with_columns =
-        with_columns.as_ref().map(|cols| {
-            expand_projection_to_flat_paths(
-                cols, &meta,
+    let enrich_policy = ResolvedColumnPolicy::new(
+        with_columns.clone().or_else(|| {
+            Some(
+                meta.tidy_column_order(None)
+                    .into_iter()
+                    .collect(),
             )
-        });
-
+        }),
+        &expr,
+        &meta,
+    );
     // Compile grouped chunk plan
-    let (grouped_plan, _stats) =
+    let (mut grouped_plan, _stats) =
         backend.compile_expression_sync(&expr)?;
 
-    // Check max_chunks_to_read limit before doing any I/O
+    // Limit applies to predicate-driven chunk enumeration only. Projection-only
+    // arrays merged via [`GroupedChunkPlan::augment_with_physical_vars`] may add
+    // further grids (e.g. 1D ``x``/``y`` coordinates) without affecting this check.
     if let Some(max_chunks) = max_chunks_to_read {
         let total_chunks =
             grouped_plan.total_unique_chunks()?;
@@ -59,6 +63,17 @@ pub fn scan_zarr_with_backend_sync(
             }
         );
     }
+
+    if let Some(ref superset) =
+        enrich_policy.physical_superset()
+    {
+        grouped_plan.augment_with_physical_vars(
+            superset, &meta,
+        )?;
+    }
+
+    let chunk_read_superset =
+        enrich_policy.physical_superset().cloned();
 
     // Read chunks using consolidated (deduplicated) iteration
     let mut dfs = Vec::new();
@@ -80,7 +95,7 @@ pub fn scan_zarr_with_backend_sync(
                     group.sig,
                     &group.array_shape,
                     &vars,
-                    expanded_with_columns.as_ref(),
+                    chunk_read_superset.as_ref(),
                     subset.as_ref(),
                     &meta,
                 )?;
@@ -106,6 +121,13 @@ pub fn scan_zarr_with_backend_sync(
     } else {
         combine_chunk_dataframes(dfs, &meta)?
     };
+
+    // let result = enrich_df_missing_requested_vars(
+    //     backend,
+    //     result,
+    //     &meta,
+    //     enrich_wc.as_ref(),
+    // )?;
 
     // For hierarchical data, convert flat path columns to struct columns
     if meta.is_hierarchical() {

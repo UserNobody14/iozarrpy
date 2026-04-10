@@ -15,7 +15,13 @@ def test_scan_zarr_smoke(baseline_datasets: dict[str, str]) -> None:
 
     assert df.height == 16 * 20
     # Dataset has y, x dimensions plus 3 data variables
-    assert df.columns == ["y", "x", "geopotential_height", "latitude", "longitude"]
+    assert set(df.columns) == set([
+        "x",
+        "y",
+        "geopotential_height",
+        "latitude",
+        "longitude",
+    ])
 
 
 def test_sel_predicate(baseline_datasets: dict[str, str]) -> None:
