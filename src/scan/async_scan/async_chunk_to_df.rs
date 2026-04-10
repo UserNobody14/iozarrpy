@@ -429,6 +429,10 @@ pub async fn chunk_to_df_from_grid_with_backend<
         cols.push(col);
     }
 
-    Ok(DataFrame::new(height, cols)
-        .context(PolarsSnafu)?)
+    Ok(DataFrame::new(height, cols).context(
+        PolarsSnafu {
+            message: "Error creating DataFrame"
+                .to_string(),
+        },
+    )?)
 }

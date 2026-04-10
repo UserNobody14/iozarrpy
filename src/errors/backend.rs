@@ -155,12 +155,13 @@ pub enum BackendError {
     #[snafu(context(false))]
     ParseError { source: url::ParseError },
     #[snafu(
-        display("polars error: {}", source),
+        display("polars error: {}, message: {:?}", source, message),
         visibility(pub(crate))
     )]
     PolarsError {
         source: polars::error::PolarsError,
         backtrace: Backtrace,
+        message: String,
     },
 
     #[snafu(context(false))]

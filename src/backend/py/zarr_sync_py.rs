@@ -133,7 +133,9 @@ impl PyZarrBackendSync {
             .lazy()
             .filter(prd)
             .collect()
-            .context(PolarsSnafu)?;
+            .context(PolarsSnafu {
+                message: "Error filtering full dataframe output".to_string(),
+            })?;
         Ok(PyDataFrame(filtered)
             .into_pyobject(py)
             .map_err(|e| {
