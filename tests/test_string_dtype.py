@@ -8,45 +8,58 @@ from pathlib import Path
 import numpy as np
 import polars as pl
 import pytest
-import zarr
 
 import rainbear
 
 
 @pytest.fixture
 def string_dataset(output_dir: Path) -> str:
-    """Create a zarr dataset with a string variable alongside a numeric one."""
+    """Create a zarr dataset with a string variable alongside a numeric one, using xarray."""
+    import xarray as xr
+
     path = output_dir / "string_dtype.zarr"
     if path.exists():
         shutil.rmtree(path)
 
-    root = zarr.open_group(str(path), mode="w", zarr_format=3)
-
-    # Integer coordinate arrays
-    y_arr = root.create_array("y", shape=(4,), chunks=(2,), dtype="int64")
-    y_arr[:] = np.arange(4, dtype=np.int64)
-    y_arr.attrs["_ARRAY_DIMENSIONS"] = ["y"]
-
-    x_arr = root.create_array("x", shape=(3,), chunks=(2,), dtype="int64")
-    x_arr[:] = np.arange(3, dtype=np.int64)
-    x_arr.attrs["_ARRAY_DIMENSIONS"] = ["x"]
-
-    # String variable (variable-length)
-    label_arr = root.create_array("label", shape=(4, 3), chunks=(2, 2), dtype="str")
-    label_arr[:] = np.array(
+    y = np.arange(4, dtype=np.int64)
+    x = np.arange(3, dtype=np.int64)
+    # NumPy unicode dtype (<U#) becomes Zarr v3 fixed_length_utf32, which rainbear
+    # does not read. NumPy 2 StringDType is written as data_type: string (UTF-8).
+    label = np.array(
         [
             ["a0", "a1", "a2"],
             ["b0", "b1", "b2"],
             ["c0", "c1", "c2"],
             ["d0", "d1", "d2"],
-        ]
+        ],
+        dtype=np.dtypes.StringDType(),
     )
-    label_arr.attrs["_ARRAY_DIMENSIONS"] = ["y", "x"]
+    value = np.arange(12, dtype=np.float64).reshape(4, 3)
 
-    # Numeric variable to ensure mixed dtypes work
-    vals = root.create_array("value", shape=(4, 3), chunks=(2, 2), dtype="float64")
-    vals[:] = np.arange(12, dtype=np.float64).reshape(4, 3)
-    vals.attrs["_ARRAY_DIMENSIONS"] = ["y", "x"]
+    ds = xr.Dataset(
+        {
+            "label": (["y", "x"], label),
+            "value": (["y", "x"], value),
+        },
+        coords={
+            "y": ("y", y),
+            "x": ("x", x),
+        },
+    )
+
+    # Write as Zarr v3 with chunking
+    ds.to_zarr(
+        str(path),
+        mode="w",
+        encoding={
+            "label": {"chunks": (2, 2)},
+            "value": {"chunks": (2, 2)},
+            "y": {"chunks": (2,)},
+            "x": {"chunks": (2,)},
+        },
+        consolidated=False,
+        zarr_version=3,
+    )
 
     return str(path)
 
@@ -69,7 +82,7 @@ def test_string_filter_on_coordinate(string_dataset: str) -> None:
 
     assert df.shape == (6, 4)
     # All remaining y values should be >= 2
-    assert df["y"].min() >= 2
+    assert df["y"].min() >= 2.0
     # Verify the string values match expectations
     labels = set(df["label"].to_list())
     assert labels == {"c0", "c1", "c2", "d0", "d1", "d2"}
