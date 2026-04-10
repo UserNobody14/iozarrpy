@@ -15,9 +15,7 @@ import xarray as xr
 
 import rainbear
 
-_REPO_NZ_ZARR = (
-    Path(__file__).resolve().parents[1] / "sandbox" / "nz.zarr"
-)
+_REPO_NZ_ZARR = Path(__file__).resolve().parents[1] / "sandbox" / "nz.zarr"
 
 
 def _write_nz_style_point_dataset(path: str) -> xr.Dataset:
@@ -50,7 +48,9 @@ def _write_nz_style_point_dataset(path: str) -> xr.Dataset:
         attrs={"coordinates": "latitude longitude"},
     )
     vals = np.arange(n_t * n_lt * n_pt, dtype=np.float32).reshape(
-        n_t, n_lt, n_pt,
+        n_t,
+        n_lt,
+        n_pt,
     )
     ds = xr.Dataset(
         {
@@ -65,9 +65,7 @@ def _write_nz_style_point_dataset(path: str) -> xr.Dataset:
             "lead_time": lead_time,
         },
     )
-    ds["rime_ice_probability_1hr"].attrs["coordinates"] = (
-        "latitude longitude"
-    )
+    ds["rime_ice_probability_1hr"].attrs["coordinates"] = "latitude longitude"
     ds.to_zarr(path, zarr_format=3, consolidated=True)
     return ds
 
@@ -136,7 +134,16 @@ def test_alt_realistic(nz_style_point_zarr: str) -> None:
             (pl.col("time") == datetime(2024, 1, 1, 0))
             & (pl.col("lead_time") == timedelta(hours=1)),
         )
-        .select(["time", "station_id", "rime_ice_probability_1hr", "lead_time", "latitude", "longitude"])
+        .select(
+            [
+                "time",
+                "station_id",
+                "rime_ice_probability_1hr",
+                "lead_time",
+                "latitude",
+                "longitude",
+            ]
+        )
     )
     df = lf.collect()
     assert df.height == 4
@@ -161,6 +168,94 @@ def test_alt_realistic(nz_style_point_zarr: str) -> None:
     )
 
 
+def test_alt_realistic_pointed(nz_style_point_zarr: str) -> None:
+    hqb = rainbear.ZarrBackendSync.from_url(nz_style_point_zarr)
+    lf = (
+        rainbear.scan_zarr(hqb)
+        .filter(
+            (pl.col("time") == datetime(2024, 1, 1, 0))
+            & (pl.col("lead_time") == timedelta(hours=1)),
+        )
+        .select(
+            [
+                "time",
+                "station_id",
+                "point",
+                "rime_ice_probability_1hr",
+                "lead_time",
+                "latitude",
+                "longitude",
+            ]
+        )
+    )
+    df = lf.collect()
+    assert df.height == 4
+    assert df.columns == [
+        "time",
+        "station_id",
+        "point",
+        "rime_ice_probability_1hr",
+        "lead_time",
+        "latitude",
+        "longitude",
+    ]
+    assert df["station_id"].dtype == pl.Int64
+    assert df["station_id"].null_count() == 0
+    assert df["station_id"].to_list() == [0, 1, 2, 3]
+    assert df["rime_ice_probability_1hr"].to_list() == [4.0, 5.0, 6.0, 7.0]
+    n_pt = 4
+    assert df["latitude"].to_list() == pytest.approx(
+        np.linspace(-45.0, -33.0, n_pt).tolist()
+    )
+    assert df["longitude"].to_list() == pytest.approx(
+        np.linspace(168.0, 178.0, n_pt).tolist()
+    )
+
+
+
+def test_alt_realistic_chunks_debug(nz_style_point_zarr: str) -> None:
+    hqb = rainbear.ZarrBackendSync.from_url(nz_style_point_zarr)
+    scdb = hqb.selected_chunks_debug(
+        pl.col(
+            [
+                "time",
+                "station_id",
+                "rime_ice_probability_1hr",
+                "lead_time",
+                "latitude",
+                "longitude",
+            ]
+        ).filter(
+            (pl.col("time") == datetime(2024, 1, 1, 0))
+            & (pl.col("lead_time") == timedelta(hours=1)),
+        )
+    )
+    assert scdb["grids"] == [
+        {
+            "dims": ["lead_time"],
+            "variables": ["lead_time"],
+            "chunks": [{"indices": [0], "origin": [0], "shape": [3]}],
+        },
+        {
+            "dims": ["point"],
+            "variables": ["latitude", "longitude", "station_id"],
+            "chunks": [{"indices": [0], "origin": [0], "shape": [4]}],
+        },
+        {
+            "dims": ["time"],
+            "variables": ["time"],
+            "chunks": [{"indices": [0], "origin": [0], "shape": [2]}],
+        },
+        {
+            "dims": ["time", "lead_time", "point"],
+            "variables": ["rime_ice_probability_1hr"],
+            "chunks": [{"indices": [0, 0, 0], "origin": [0, 0, 0], "shape": [2, 3, 4]}],
+        },
+    ]
+    assert scdb["coord_reads"] == 0
+
+
+
 def test_streaming_matches_sync_scan_predicate(
     nz_style_point_zarr: str,
 ) -> None:
@@ -170,6 +265,26 @@ def test_streaming_matches_sync_scan_predicate(
     df_stream = rainbear.scan_zarr(hqb).filter(prd).collect()
     assert df_sync.shape == df_stream.shape
     assert set(df_sync.columns) == set(df_stream.columns)
+
+
+@pytest.mark.skipif(
+    not _REPO_NZ_ZARR.is_dir(),
+    reason="repo sandbox/nz.zarr not present",
+)
+def test_streaming_filter_select_schema() -> None:
+    """Real nz-style zarr: vlen string ``station_id`` on ``point`` must survive filter+select."""
+    path = str(_REPO_NZ_ZARR)
+    lf = (
+        rainbear.scan_zarr(path)
+        .filter(
+            (pl.col("time") == datetime(2026, 4, 1, 0))
+            & (pl.col("lead_time") == timedelta(hours=1)),
+        )
+        .select(["rime_ice_probability_1hr", "time", "station_id"])
+    )
+    schema = lf.collect_schema()
+    assert schema.len() == 3
+    assert set(schema.keys()) == {"rime_ice_probability_1hr", "time", "station_id"}
 
 
 @pytest.mark.skipif(
