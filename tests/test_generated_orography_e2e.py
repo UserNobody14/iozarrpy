@@ -55,20 +55,20 @@ def test_generated_orography_multi_var(dataset_path) -> None:
         path,
     ).select(
         [
-            "x",
-            "y",
             "geopotential_height",
             "latitude",
             "longitude",
+                        "x",
+            "y",
         ]
     )
     df = lf.collect()
     assert df.columns == [
-        "x",
-        "y",
         "geopotential_height",
         "latitude",
         "longitude",
+        "x",
+        "y",
     ]
     assert df.height == 12 * 9
 

@@ -2,10 +2,10 @@ use polars::prelude::*;
 use snafu::ResultExt;
 use std::collections::BTreeSet;
 
+use crate::IStr;
 use crate::errors::{BackendResult, PolarsSnafu};
 use crate::meta::path::ZarrPath;
 use crate::meta::{ZarrMeta, ZarrNode};
-use crate::IStr;
 /// Combine chunk DataFrames, handling heterogeneous schemas.
 ///
 /// Strategy:
@@ -60,9 +60,17 @@ pub fn combine_chunk_dataframes(
             // Reorder columns to match the first DataFrame
             let reordered = df
                 .select(col_order.as_slice())
-                .context(PolarsSnafu)?;
+                .context(PolarsSnafu {
+                    message:
+                        "Error reordering columns"
+                            .to_string(),
+                })?;
             acc.vstack_mut(&reordered)
-                .context(PolarsSnafu)?;
+                .context(PolarsSnafu {
+                message:
+                    "Error vstacking DataFrames"
+                        .to_string(),
+            })?;
         }
         vstacked.push(acc);
     }
@@ -113,7 +121,10 @@ pub fn combine_chunk_dataframes(
         return Ok(polars::functions::concat_df_diagonal(
             &vstacked,
         ).context(
-            PolarsSnafu
+            PolarsSnafu {
+                message: "Error concatenating DataFrames (no shared coordinates)"
+                    .to_string(),
+            }
         )?);
     }
 
@@ -132,7 +143,11 @@ pub fn combine_chunk_dataframes(
                 ),
                 None,
             )
-            .context(PolarsSnafu)?;
+            .context(PolarsSnafu {
+                message:
+                    "Error joining DataFrames"
+                        .to_string(),
+            })?;
     }
 
     Ok(result)
@@ -186,11 +201,9 @@ pub fn restructure_to_structs(
                 &mut processed_paths,
             )?;
         if let Some(col) = struct_col {
-            result_columns.push(
-                col.with_name(
-                    child_name_str.into(),
-                ),
-            );
+            result_columns.push(col.with_name(
+                child_name_str.into(),
+            ));
         }
     }
 
@@ -198,7 +211,10 @@ pub fn restructure_to_structs(
         df.height(),
         result_columns,
     )
-    .context(PolarsSnafu)?)
+    .context(PolarsSnafu {
+        message: "Error creating DataFrame"
+            .to_string(),
+    })?)
 }
 
 /// Build a struct column for a zarr node (group).
@@ -225,8 +241,7 @@ fn build_struct_column_for_node(
         }
     }
 
-    for (child_name, child_node) in
-        &node.children
+    for (child_name, child_node) in &node.children
     {
         let child_name_str: &str =
             child_name.as_ref();
@@ -252,11 +267,18 @@ fn build_struct_column_for_node(
 
     let struct_series =
         StructChunked::from_columns(
-            prefix.to_flat_string().as_str().into(),
+            prefix
+                .to_flat_string()
+                .as_str()
+                .into(),
             df.height(),
             &fields,
         )
-        .context(PolarsSnafu)?;
+        .context(PolarsSnafu {
+            message:
+                "Error creating StructChunked"
+                    .to_string(),
+        })?;
 
     Ok(Some(struct_series.into_column()))
 }
