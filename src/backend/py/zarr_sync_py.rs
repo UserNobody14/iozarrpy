@@ -145,15 +145,6 @@ impl PyZarrBackendSync {
                 >(e.to_string())
             })?
             .into_any())
-        // if let Some(variables) = variables {
-        //     asc =
-        //         asc.select(Expr::Selector(Selector::ByName {
-        //             names: variables
-        //                 .into_iter()
-        //                 .map(|s| s.istr())
-        //                 .collect::<Vec<_>>(),
-        //         })?;
-        // }
     }
 
     /// Streaming scan the zarr store and return an iterator over DataFrames.
