@@ -8,15 +8,16 @@ use pyo3::prelude::*;
 use pyo3::types::PyAny;
 use pyo3_async_runtimes::tokio::future_into_py;
 use pyo3_polars::PySchema;
-use pyo3_polars::error::PyPolarsErr;
+use snafu::ResultExt;
 
 use crate::backend::implementation::scan_with_backend_async;
 use crate::backend::py::debug::extract_grids;
 use crate::backend::py::debug::grids_to_python;
+use crate::errors::PolarsSnafu;
 use crate::py::expr_extract::extract_expr;
 use crate::shared::{
     EvictableChunkCacheAsync,
-    FullyCachedZarrBackendAsync, HasAsyncStore,
+    FullyCachedZarrBackendAsync,
     HasMetadataBackendAsync, ZarrBackendAsync,
     to_fully_cached_async,
 };
@@ -122,8 +123,11 @@ impl PyZarrBackend {
             let filtered = lf
                 .select([expr2])
                 .collect()
-                .map_err(PyPolarsErr::from)?;
-
+                .context(PolarsSnafu {
+                    message:
+                        "Error filtering batch"
+                            .to_string(),
+                })?;
             Python::attach(|py| {
                 Ok(PyDataFrame(filtered)
                     .into_pyobject(py)?
