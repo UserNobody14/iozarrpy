@@ -95,5 +95,3 @@ def test_generated_orography_projection(dataset_path) -> None:
     df = lf.select("geopotential_height").collect()
     assert df.columns == ["geopotential_height"]
     assert df.height == 10 * 6
-    assert df.height == 10 * 6
-    assert df.height == 10 * 6
