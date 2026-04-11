@@ -3,8 +3,8 @@ use std::fmt::Display;
 use std::sync::Arc;
 
 use polars::prelude::{
-    DataType as PlDataType, Field, Schema,
-    TimeUnit,
+    DataType as PlDataType, Field, PlSmallStr,
+    Schema, TimeUnit,
 };
 use smallvec::SmallVec;
 use zarrs::array::ChunkGrid;
@@ -173,7 +173,7 @@ impl ZarrMeta {
 
     /// All array paths (data vars) using recursive tree traversal.
     pub fn all_array_paths(&self) -> Vec<IStr> {
-        self.all_data_var_paths()
+        self.all_zarr_array_paths()
     }
 
     pub fn all_zarr_array_paths(
@@ -219,18 +219,54 @@ impl ZarrMeta {
             ));
         }
 
+        let mut field_names: BTreeSet<
+            PlSmallStr,
+        > = fields
+            .iter()
+            .map(|f| f.name().clone())
+            .collect();
+
         // Add root data variable columns
         for var in &self.root.data_vars {
             let var_str: &str = var.as_ref();
-            if var_set.as_ref().is_none_or(|vs| {
-                vs.contains(var_str)
-            }) && let Some(m) =
-                self.root.arrays.get(var)
+            if var_set
+                .as_ref()
+                .map_or(true, |vs| {
+                    vs.contains(var_str)
+                })
+            {
+                if let Some(m) =
+                    self.root.arrays.get(var)
+                {
+                    fields.push(Field::new(
+                        var_str.into(),
+                        m.polars_dtype.clone(),
+                    ));
+                    field_names
+                        .insert(var_str.into());
+                }
+            }
+        }
+
+        // CF-style auxiliary coordinates (lat/lon, …): stored in `arrays` but
+        // omitted from `data_vars` when listed as `coordinates` on another var.
+        for (var, meta) in &self.root.arrays {
+            let var_str: &str = var.as_ref();
+            if field_names.contains(var_str) {
+                continue;
+            }
+            if var_set
+                .as_ref()
+                .map_or(true, |vs| {
+                    vs.contains(var_str)
+                })
             {
                 fields.push(Field::new(
                     var_str.into(),
-                    m.polars_dtype.clone(),
+                    meta.polars_dtype.clone(),
                 ));
+                field_names
+                    .insert(var_str.into());
             }
         }
 
@@ -272,6 +308,19 @@ impl ZarrMeta {
         }
 
         fields.into_iter().collect()
+    }
+
+    /// Column names in the same order as [`Self::tidy_schema`].
+    pub fn tidy_column_order(
+        &self,
+        variables: Option<&[IStr]>,
+    ) -> Vec<IStr> {
+        self.tidy_schema(variables)
+            .iter()
+            .map(|(name, _)| {
+                name.as_str().to_string().istr()
+            })
+            .collect()
     }
 }
 

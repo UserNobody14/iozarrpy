@@ -16,6 +16,7 @@ pub use compile_entry::compute_dims_and_lengths_unified;
 pub use exprs::LazyCompileCtx;
 pub(crate) use exprs::apply_time_encoding;
 pub use exprs::compile_expr;
+pub(crate) use exprs::compile_node::collect_column_refs;
 
 pub use indexing::ChunkSubset;
 pub use indexing::GroupedChunkPlan;
@@ -24,6 +25,14 @@ pub(crate) use indexing::lazy_materialize::{
     resolve_expr_plan_sync,
 };
 pub(crate) use indexing::plan::ConsolidatedGridGroup;
+pub(crate) use indexing::{
+    GridGroupExecutionOpts, OwnedGridGroup,
+    apply_streaming_batch_io_cut, streaming_grid_chunk_read_count,
+};
+pub(crate) use indexing::{
+    ScheduleBuilt, StreamingBatch, build_streaming_schedule,
+    distinct_chunk_slots_in_batches,
+};
 pub(crate) use indexing::resolver_traits::ResolutionError;
 pub use indexing::selection_to_chunks::selection_to_grouped_chunk_plan_unified_from_meta;
 pub use indexing::types::ChunkGridSignature;

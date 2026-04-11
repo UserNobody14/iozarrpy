@@ -6,8 +6,13 @@ use std::sync::Arc;
 use polars::prelude::*;
 
 use crate::IStr;
+use crate::backend::implementation::iterating_common::expr_top_literal_bool;
+use crate::chunk_plan::{
+    GridGroupExecutionOpts, streaming_grid_chunk_read_count,
+};
 use crate::errors::BackendError;
 use crate::errors::MaxChunksToReadExceededSnafu;
+use crate::scan::column_policy::ResolvedColumnPolicy;
 use crate::scan::sync_scan::chunk_to_df_from_grid_with_backend;
 use crate::shared::ChunkedExpressionCompilerSync;
 use crate::shared::FullyCachedZarrBackendSync;
@@ -34,23 +39,49 @@ pub fn scan_zarr_with_backend_sync(
     // Get metadata from backend
     let meta = backend.metadata()?;
 
-    // Expand struct column names to flat paths for chunk reading
-    // e.g., "model_a" -> ["model_a/temperature", "model_a/pressure"]
-    let expanded_with_columns =
+    let chunk_expanded =
         with_columns.as_ref().map(|cols| {
             expand_projection_to_flat_paths(
                 cols, &meta,
             )
         });
+    let enrich_policy = ResolvedColumnPolicy::new(
+        with_columns.clone().or_else(|| {
+            Some(
+                meta.tidy_column_order(None)
+                    .into_iter()
+                    .collect(),
+            )
+        }),
+        &expr,
+        &meta,
+    );
+    let _enrich_wc = enrich_policy
+        .physical_superset()
+        .cloned();
 
     // Compile grouped chunk plan
     let (grouped_plan, _stats) =
         backend.compile_expression_sync(&expr)?;
 
+    let emit_empty_schema_once =
+        expr_top_literal_bool(&expr) == Some(false);
+
+    let grid_groups = grouped_plan.owned_grid_groups_for_io(
+        &meta,
+        GridGroupExecutionOpts {
+            literal_false_clear: emit_empty_schema_once,
+            drop_redundant_1d_coords: !emit_empty_schema_once,
+            streaming_batch_io_cut: None,
+        },
+    )?;
+
     // Check max_chunks_to_read limit before doing any I/O
     if let Some(max_chunks) = max_chunks_to_read {
         let total_chunks =
-            grouped_plan.total_unique_chunks()?;
+            streaming_grid_chunk_read_count(
+                &grid_groups,
+            );
         ensure!(
             total_chunks <= max_chunks,
             MaxChunksToReadExceededSnafu {
@@ -62,25 +93,23 @@ pub fn scan_zarr_with_backend_sync(
 
     // Read chunks using consolidated (deduplicated) iteration
     let mut dfs = Vec::new();
-    for group in
-        grouped_plan.iter_consolidated_chunks()
-    {
-        let group = group?;
-        let vars: Vec<IStr> = group.vars;
+    for group in &grid_groups {
+        let vars: Vec<IStr> = group.vars.clone();
 
         for (idx, subset) in group
             .chunk_indices
-            .into_iter()
-            .zip(group.chunk_subsets)
+            .iter()
+            .cloned()
+            .zip(group.chunk_subsets.iter().cloned())
         {
             let df =
                 chunk_to_df_from_grid_with_backend(
                     backend,
                     idx,
-                    group.sig,
+                    group.sig.as_ref(),
                     &group.array_shape,
                     &vars,
-                    expanded_with_columns.as_ref(),
+                    chunk_expanded.as_ref(),
                     subset.as_ref(),
                     &meta,
                 )?;
@@ -106,6 +135,13 @@ pub fn scan_zarr_with_backend_sync(
     } else {
         combine_chunk_dataframes(dfs, &meta)?
     };
+
+    // let result = enrich_df_missing_requested_vars(
+    //     backend,
+    //     result,
+    //     &meta,
+    //     enrich_wc.as_ref(),
+    // )?;
 
     // For hierarchical data, convert flat path columns to struct columns
     if meta.is_hierarchical() {

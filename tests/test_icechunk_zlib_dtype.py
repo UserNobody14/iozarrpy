@@ -691,3 +691,30 @@ class TestZlibStreamingDtype:
             actual_stream[mask],
             rtol=1e-10,
         )
+
+    async def test_streaming_small_batch_matches_async_scan(
+        self,
+        icechunk_datasets: dict[str, IcechunkDatasetInfo],
+    ) -> None:
+        """Join-closed streaming with small batch_size matches async scan (2D + coord grids)."""
+        info = icechunk_datasets["icechunk_zlib_float64_2d"]
+        backend = await rainbear.IcechunkBackend.from_filesystem(info.path)
+
+        df_async = await backend.scan_zarr_async(pl.all().filter(pl.lit(True)))
+
+        batches = list(backend.scan_zarr_streaming_sync(batch_size=30))
+        df_streaming = pl.concat(batches)
+
+        df_async = df_async.sort(["a", "b"])
+        df_streaming = df_streaming.sort(["a", "b"])
+
+        assert df_async.height == df_streaming.height
+        assert df_async["temperature"].dtype == df_streaming["temperature"].dtype
+        actual_async = df_async["temperature"].to_numpy()
+        actual_stream = df_streaming["temperature"].to_numpy()
+        mask = ~(np.isnan(actual_async) | np.isnan(actual_stream))
+        np.testing.assert_allclose(
+            actual_async[mask],
+            actual_stream[mask],
+            rtol=1e-10,
+        )

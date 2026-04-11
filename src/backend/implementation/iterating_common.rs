@@ -7,10 +7,15 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use polars::prelude::*;
+use snafu::ResultExt;
 
+use crate::FromIStr;
 use crate::IStr;
 use crate::chunk_plan::ChunkSubset;
-use crate::chunk_plan::ConsolidatedGridGroup;
+use crate::chunk_plan::OwnedGridGroup;
+use crate::chunk_plan::StreamingBatch;
+use crate::errors::BackendError;
+use crate::errors::PolarsSnafu;
 use crate::meta::ZarrMeta;
 use crate::shared::{
     combine_chunk_dataframes,
@@ -25,53 +30,163 @@ pub(crate) const CHUNKS_PER_BATCH_LIMIT: usize =
 pub(crate) const DEFAULT_BATCH_SIZE: usize =
     10_000;
 
-/// Owned version of [`ConsolidatedGridGroup`] for storage in iterator state.
-///
-/// We need owned data because [`GroupedChunkPlan`] is dropped after
-/// initialization, but we continue iterating over the chunk indices.
-pub(crate) struct OwnedGridGroup {
-    pub sig: Arc<
-        crate::chunk_plan::ChunkGridSignature,
-    >,
-    pub vars: Vec<IStr>,
-    pub chunk_indices: Vec<Vec<u64>>,
-    pub chunk_subsets: Vec<Option<ChunkSubset>>,
-    pub array_shape: Vec<u64>,
+/// Top-level boolean literal after stripping [`Expr::Alias`], if any.
+pub(crate) fn expr_top_literal_bool(
+    expr: &Expr,
+) -> Option<bool> {
+    match expr {
+        Expr::Literal(LiteralValue::Scalar(s)) => {
+            match s.value() {
+                AnyValue::Boolean(b) => Some(*b),
+                _ => None,
+            }
+        }
+        Expr::Alias(inner, _) => {
+            expr_top_literal_bool(inner)
+        }
+        _ => None,
+    }
 }
 
-impl OwnedGridGroup {
-    /// Convert from a borrowed [`ConsolidatedGridGroup`] produced by the chunk planner.
-    #[inline]
-    pub fn from_consolidated(
-        group: ConsolidatedGridGroup<'_>,
-    ) -> Self {
-        Self {
-            sig: Arc::new(group.sig.clone()),
-            vars: group.vars,
-            chunk_indices: group.chunk_indices,
-            chunk_subsets: group.chunk_subsets,
-            array_shape: group.array_shape,
-        }
-    }
+/// Legacy sequential batching (non-join-closed) state.
+pub(crate) struct LegacyBatchState {
+    pub current_group_idx: usize,
+    pub current_chunk_idx: usize,
+    pub current_batch: Vec<DataFrame>,
+    pub current_batch_rows: usize,
+}
+
+/// Join-closed plan vs sequential streaming.
+pub(crate) enum StreamingSchedule {
+    Legacy(LegacyBatchState),
+    JoinClosed {
+        batches: Vec<StreamingBatch>,
+        cursor: usize,
+    },
 }
 
 /// Iterator state shared by both sync and async zarr iterators.
 pub(crate) struct IteratorState {
     pub grid_groups: Vec<OwnedGridGroup>,
-    pub current_group_idx: usize,
-    pub current_chunk_idx: usize,
-
-    pub current_batch: Vec<DataFrame>,
-    pub current_batch_rows: usize,
+    pub schedule: StreamingSchedule,
 
     pub total_rows_yielded: usize,
     pub num_rows_limit: Option<usize>,
 
     pub meta: Arc<ZarrMeta>,
+    /// Polars-requested columns in **pushdown order** (`None` = full schema).
+    pub output_columns: Option<Vec<IStr>>,
+    /// Superset for chunk reads (predicate cols, all dims, struct expansion, …).
     pub expanded_with_columns:
         Option<BTreeSet<IStr>>,
 
     pub predicate: Expr,
+
+    /// When set, yield one empty (zero-row) batch with the correct output schema then clear.
+    pub emit_empty_schema_once: bool,
+}
+
+/// Final column projection for streaming batches.
+///
+/// When Polars passes a narrowed list, keep that order and append **1D non-dim**
+/// extras from the read superset (e.g. CF lat/lon omitted from IO callback).
+/// Index dimensions themselves stay in the DataFrame through filter, then are
+/// dropped here when not listed. When the callback passes `None`, use full
+/// [`ZarrMeta::tidy_column_order`] plus any extra expanded paths.
+pub(crate) fn output_columns_for_streaming_batch(
+    meta: &ZarrMeta,
+    polars_requested: Option<&BTreeSet<IStr>>,
+    expanded: Option<&BTreeSet<IStr>>,
+) -> Option<Vec<IStr>> {
+    let all_dims: BTreeSet<IStr> = meta
+        .dim_analysis
+        .all_dims
+        .iter()
+        .cloned()
+        .collect();
+
+    let append_from_expanded =
+        |out: &mut Vec<IStr>,
+         seen: &mut BTreeSet<IStr>| {
+            let Some(exp) = expanded else {
+                return;
+            };
+            if polars_requested.is_none() {
+                for name in exp {
+                    if seen.insert(name.clone()) {
+                        out.push(name.clone());
+                    }
+                }
+                return;
+            }
+            for name in exp {
+                if seen.contains(name) {
+                    continue;
+                }
+                if all_dims.contains(name) {
+                    continue;
+                }
+                let Some(vm) =
+                    meta.array_by_path(name)
+                else {
+                    continue;
+                };
+                if vm.shape.len() != 1 {
+                    continue;
+                }
+                seen.insert(name.clone());
+                out.push(name.clone());
+            }
+        };
+
+    match polars_requested {
+        None => {
+            let mut out =
+                meta.tidy_column_order(None);
+            let mut seen: BTreeSet<IStr> =
+                out.iter().cloned().collect();
+            append_from_expanded(
+                &mut out, &mut seen,
+            );
+            Some(out)
+        }
+        Some(req) => {
+            let mut out: Vec<IStr> =
+                req.iter().cloned().collect();
+            let mut seen: BTreeSet<IStr> =
+                out.iter().cloned().collect();
+            append_from_expanded(
+                &mut out, &mut seen,
+            );
+            Some(out)
+        }
+    }
+}
+
+/// Keep only columns Polars asked for; order matches `output_columns`.
+fn project_to_polars_output(
+    df: DataFrame,
+    output_columns: Option<&[IStr]>,
+) -> Result<DataFrame, BackendError> {
+    let Some(cols) = output_columns else {
+        return Ok(df);
+    };
+    if cols.is_empty() {
+        return Ok(df);
+    }
+    let names: Vec<PlSmallStr> = cols
+        .iter()
+        .filter(|c| df.column(c.as_ref()).is_ok())
+        .map(|c| PlSmallStr::from_istr(*c))
+        .collect();
+    if names.is_empty() {
+        return Ok(df);
+    }
+    df.select(&names).context(PolarsSnafu {
+        message:
+            "Error projecting to polars output"
+                .to_string(),
+    })
 }
 
 /// Collect the next batch of chunk indices to read from the current group.
@@ -108,42 +223,47 @@ pub(crate) fn collect_chunks_for_batch(
     chunks_to_read
 }
 
+pub(crate) fn merge_batch_dataframes(
+    batch_dfs: Vec<DataFrame>,
+    meta: &ZarrMeta,
+) -> Result<DataFrame, BackendError> {
+    if batch_dfs.is_empty() {
+        let keys: Vec<IStr> =
+            meta.all_array_paths();
+        Ok(DataFrame::empty_with_schema(
+            &meta.tidy_schema(Some(
+                keys.as_slice(),
+            )),
+        ))
+    } else if batch_dfs.len() == 1 {
+        Ok(batch_dfs.into_iter().next().unwrap())
+    } else {
+        combine_chunk_dataframes(batch_dfs, meta)
+    }
+}
+
 /// Combine chunk DataFrames, apply predicate filter, row limit, and restructure.
 ///
 /// Shared post-processing for both sync and async iterators.
 pub(crate) fn combine_and_postprocess_batch(
     batch_dfs: Vec<DataFrame>,
     state: &mut IteratorState,
-) -> Result<DataFrame, pyo3::PyErr> {
-    let combined = if batch_dfs.is_empty() {
-        let keys: Vec<IStr> =
-            state.meta.all_array_paths();
-        DataFrame::empty_with_schema(
-            &state.meta.tidy_schema(Some(
-                keys.as_slice(),
-            )),
-        )
-    } else if batch_dfs.len() == 1 {
-        batch_dfs.into_iter().next().unwrap()
-    } else {
-        combine_chunk_dataframes(
-            batch_dfs,
-            &state.meta,
-        )?
-    };
+    // enrich: E,
+) -> Result<DataFrame, BackendError> {
+    let combined = merge_batch_dataframes(
+        batch_dfs,
+        &state.meta,
+    )?;
+
+    // let combined = enrich(combined)?;
 
     let result = combined
         .lazy()
         .filter(state.predicate.clone())
         .collect()
-        .map_err(|e| {
-            pyo3::PyErr::new::<
-                pyo3::exceptions::PyRuntimeError,
-                _,
-            >(format!(
-                "Failed to filter data: {}",
-                e
-            ))
+        .context(PolarsSnafu {
+            message: "Error filtering batch"
+                .to_string(),
         })?;
 
     let result = if let Some(limit) =
@@ -172,5 +292,32 @@ pub(crate) fn combine_and_postprocess_batch(
         result
     };
 
-    Ok(result)
+    project_to_polars_output(
+        result,
+        state.output_columns.as_deref(),
+    )
+}
+
+/// Zero-row batch matching streaming output schema (e.g. unsatisfiable filter folded to `false`).
+pub(crate) fn empty_streaming_schema_batch(
+    state: &IteratorState,
+) -> Result<DataFrame, BackendError> {
+    let keys: Vec<IStr> = match &state.output_columns {
+        Some(cols) => cols.clone(),
+        None => state.meta.tidy_column_order(None),
+    };
+    let df = DataFrame::empty_with_schema(
+        &state.meta.tidy_schema(Some(
+            keys.as_slice(),
+        )),
+    );
+    let df = if state.meta.is_hierarchical() {
+        restructure_to_structs(&df, &state.meta)?
+    } else {
+        df
+    };
+    project_to_polars_output(
+        df,
+        state.output_columns.as_deref(),
+    )
 }

@@ -260,7 +260,9 @@ class TestMaxChunksToReadWithFilter:
 
         backend = ZarrBackend.from_url(zarr_path)
 
-        # No filter → should select ALL 400 chunks → exceed limit
+        # No filter → 2D temp grid is 20×20 chunks (400); redundant 1D `y`/`x`
+        # coord-only groups are skipped (same as streaming), so the limit check
+        # uses 400, not 400 + separate coord chunk counts.
         async def _run() -> pl.DataFrame:
             df = await backend.scan_zarr_async(
                 pl.col(["y", "x", "temp"]),
@@ -268,7 +270,7 @@ class TestMaxChunksToReadWithFilter:
             )
             return df
 
-        with pytest.raises(ValueError, match="max_chunks_to_read exceeded: 402 chunks needed, limit is 5"):
+        with pytest.raises(ValueError, match="max_chunks_to_read exceeded: 400 chunks needed, limit is 5"):
             asyncio.run(_run())
 
 

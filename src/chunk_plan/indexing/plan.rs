@@ -119,9 +119,9 @@ fn compute_chunk_subset(
 
 /// A grid group with deduplicated chunk indices, ready for reading.
 ///
-/// Produced by [`GroupedChunkPlan::iter_consolidated_chunks`]. Each group
-/// corresponds to one chunk-grid signature and contains the sorted, unique
-/// set of chunk indices that need to be read.
+/// Produced by [`GroupedChunkPlan::iter_consolidated_chunks`]. Callers that need
+/// owned signatures and execution-time filters should use
+/// `GroupedChunkPlan::owned_grid_groups_for_io` (`grid_execution` module).
 pub struct ConsolidatedGridGroup<'a> {
     /// The chunk grid signature for this group.
     pub sig: &'a ChunkGridSignature,

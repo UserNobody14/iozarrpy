@@ -15,21 +15,23 @@ use crate::reader::{
     ColumnData, checked_chunk_len,
     compute_strides,
 };
+use crate::scan::column_policy::{
+    DimMaterialization, ReadSpec, build_chunk_physical_plan,
+};
+use crate::scan::shared::{
+    build_coord_column, build_var_column,
+    compute_in_bounds_mask,
+};
 use crate::shared::ChunkedDataBackendSync;
 use polars::prelude::*;
 use snafu::ResultExt;
 
+use std::collections::BTreeMap;
 use std::collections::BTreeSet;
-
-use crate::scan::shared::{
-    build_coord_column, build_var_column,
-    compute_in_bounds_mask,
-    compute_var_chunk_indices,
-    should_include_column,
-};
+use std::sync::Arc;
 
 // =============================================================================
-// Chunked Coordinate Reading (replaces retrieve_1d_subset)
+// Physical reads (slice + chunk)
 // =============================================================================
 
 /// Read coordinate values for a range using chunked access.
@@ -106,159 +108,27 @@ fn read_coord_range_chunked<
     }))
 }
 
-// =============================================================================
-// Main Chunk-to-DataFrame Function (Generic Backend)
-// =============================================================================
-
-/// Read coordinate chunks for all dimensions.
-fn read_coord_chunks<
-    B: ChunkedDataBackendSync,
->(
+fn execute_read_sync<B: ChunkedDataBackendSync>(
     backend: &B,
-    meta: &ZarrMeta,
-    dims: &[IStr],
-    origin: &[u64],
-    chunk_shape: &[u64],
-    with_columns: Option<&BTreeSet<IStr>>,
-) -> BackendResult<
-    std::collections::BTreeMap<IStr, ColumnData>,
-> {
-    let mut coord_slices: std::collections::BTreeMap<
-        IStr,
-        ColumnData,
-    > = Default::default();
-
-    for (d, dim_name) in dims.iter().enumerate() {
-        if !should_include_column(
-            dim_name,
-            with_columns,
-        ) {
-            continue;
-        }
-
-        // Check if this dimension has a coordinate array
-        let Some(coord_meta) =
-            meta.array_by_path(*dim_name)
-        else {
-            continue;
-        };
-
-        // Only process 1D coordinate arrays
-        if coord_meta.shape.len() != 1 {
-            continue;
-        }
-
-        let dim_start = origin[d];
-        let dim_len = chunk_shape[d];
-        let coord_chunk_shape =
-            coord_meta.chunk_shape[0];
-
-        // Use the full path from metadata for array access
-        // (dim_name alone is insufficient when the store root != "/")
-        let data = read_coord_range_chunked(
-            backend,
-            &coord_meta.path,
+    path: &IStr,
+    spec: &ReadSpec,
+) -> BackendResult<ColumnData> {
+    match spec {
+        ReadSpec::Slice1d {
             coord_chunk_shape,
-            dim_start,
-            dim_len,
-        )?;
-
-        if data.len() != dim_len as usize {
-            return Err(BackendError::CoordLengthMismatch {
-                name: *dim_name,
-                expected_len: dim_len,
-                coord_len: data.len() as u64,
-            });
+            start,
+            len,
+        } => read_coord_range_chunked(
+            backend,
+            path,
+            *coord_chunk_shape,
+            *start,
+            *len,
+        ),
+        ReadSpec::Chunk { indices } => {
+            Ok((*backend.read_chunk_sync(path, indices)?).clone())
         }
-        coord_slices.insert(*dim_name, data);
     }
-
-    Ok(coord_slices)
-}
-
-/// Read variable chunks for all requested variables.
-fn read_var_chunks<B: ChunkedDataBackendSync>(
-    backend: &B,
-    meta: &ZarrMeta,
-    idx: &[u64],
-    chunk_shape: &[u64],
-    dims: &[IStr],
-    vars: &[IStr],
-    with_columns: Option<&BTreeSet<IStr>>,
-) -> BackendResult<
-    Vec<(
-        IStr,
-        Arc<ColumnData>,
-        Vec<IStr>,
-        Vec<u64>,
-        Vec<u64>,
-    )>,
-> {
-    let mut var_chunks = Vec::new();
-
-    for name in vars.iter() {
-        // Dimension columns are always produced via `build_coord_column`.
-        // If a dataset also has 1D coord arrays named the same as dims (e.g. "x", "y", "a"),
-        // they can appear in `vars` (e.g. from `pl.col(["x","y",...])`). Reading them as
-        // "variables" would create duplicate DataFrame columns (two "x" columns, etc.).
-        if dims.iter().any(|d| d == name) {
-            continue;
-        }
-        if !should_include_column(
-            name,
-            with_columns,
-        ) {
-            continue;
-        }
-
-        let var_meta =
-            meta.array_by_path(name).ok_or(
-                BackendError::UnknownDataVar {
-                    name: *name,
-                    available_vars: meta
-                        .all_data_var_paths(),
-                },
-            )?;
-
-        let var_dims: Vec<IStr> = var_meta
-            .dims
-            .iter()
-            .cloned()
-            .collect();
-
-        // Compute which chunk to read for this variable
-        let (var_chunk_indices, var_offsets) =
-            compute_var_chunk_indices(
-                idx,
-                chunk_shape,
-                dims,
-                &var_dims,
-                &var_meta.chunk_shape,
-                &var_meta.shape,
-            );
-
-        // Use the regular (metadata) chunk shape for stride
-        // computation: read_chunk_sync always returns data
-        // in the full chunk layout, even for edge chunks.
-        let var_chunk_shape =
-            var_meta.chunk_shape.to_vec();
-
-        // Read the chunk using the full path from metadata
-        let data = backend.read_chunk_sync(
-            name,
-            &var_chunk_indices,
-        )?;
-
-        var_chunks.push((
-            *name,
-            data.clone(),
-            var_dims,
-            var_chunk_shape,
-            var_offsets,
-        ));
-    }
-
-    Ok(var_chunks)
 }
 
 // =============================================================================
@@ -304,83 +174,106 @@ pub fn chunk_to_df_from_grid_with_backend<
         chunk_subset,
     );
 
-    // Read coordinate chunks
-    let coord_slices = read_coord_chunks(
-        backend,
+    let plan = build_chunk_physical_plan(
         meta,
         dims,
-        &origin,
-        chunk_shape,
-        with_columns,
-    )?;
-
-    // Read variable chunks
-    let var_chunks = read_var_chunks(
-        backend,
-        meta,
         &idx,
         chunk_shape,
-        dims,
+        &origin,
         vars,
         with_columns,
     )?;
+
+    let mut loaded: BTreeMap<IStr, Arc<ColumnData>> =
+        BTreeMap::new();
+    for (path, spec) in &plan.reads {
+        let data =
+            execute_read_sync(backend, path, spec)?;
+        loaded.insert(*path, Arc::new(data));
+    }
 
     // Build DataFrame columns
     let mut cols: Vec<Column> = Vec::new();
     let height = keep.len();
 
-    // Coordinate columns
-    for (d, dim_name) in dims.iter().enumerate() {
-        if !should_include_column(
-            dim_name,
-            with_columns,
-        ) {
-            continue;
-        }
+    for dim_step in &plan.dims {
+        let coord_data: Option<&ColumnData> =
+            match &dim_step.mat {
+                DimMaterialization::Synthetic => None,
+                DimMaterialization::FromArray {
+                    path,
+                } => {
+                    let col = loaded
+                        .get(path)
+                        .ok_or_else(|| {
+                            BackendError::Other {
+                                msg: format!(
+                                    "internal: missing read for coord path {}",
+                                    path
+                                ),
+                            }
+                        })?
+                        .as_ref();
+                    let expected_len =
+                        chunk_shape[dim_step.dim_idx]
+                            as usize;
+                    if col.len() != expected_len {
+                        return Err(
+                            BackendError::CoordLengthMismatch {
+                                name: dim_step.dim_name,
+                                expected_len: chunk_shape
+                                    [dim_step.dim_idx],
+                                coord_len: col.len()
+                                    as u64,
+                            },
+                        );
+                    }
+                    Some(col)
+                }
+            };
 
         let encoding = meta
-            .array_by_path(*dim_name)
+            .array_by_path(dim_step.dim_name)
             .and_then(|m| m.encoding.as_ref());
 
-        let col = build_coord_column(
-            dim_name.as_ref(),
-            d,
+        cols.push(build_coord_column(
+            dim_step.dim_name.as_ref(),
+            dim_step.dim_idx,
             &keep,
             &strides,
             chunk_shape,
             &origin,
-            coord_slices.get(dim_name),
+            coord_data,
             encoding,
-        );
-        cols.push(col);
+        ));
     }
 
-    // Variable columns
-    for (
-        name,
-        data,
-        var_dims,
-        var_chunk_shape,
-        var_offsets,
-    ) in var_chunks
-    {
+    for vs in &plan.vars {
+        let data = loaded
+            .get(&vs.path)
+            .ok_or_else(|| BackendError::Other {
+                msg: format!(
+                    "internal: missing read for variable path {}",
+                    vs.path
+                ),
+            })?
+            .clone();
         let encoding = meta
-            .array_by_path(name)
+            .array_by_path(vs.name)
             .and_then(|m| m.encoding.as_ref());
 
-        let col = build_var_column(
-            &name,
+        cols.push(build_var_column(
+            &vs.name,
             data,
-            &var_dims,
-            &var_chunk_shape,
-            &var_offsets,
+            &vs.var_dims,
+            &vs.var_chunk_shape,
+            &vs.offsets,
             dims,
             chunk_shape,
             &strides,
             &keep,
             encoding,
-        );
-        cols.push(col);
+        ));
     }
 
     DataFrame::new(height, cols).context(

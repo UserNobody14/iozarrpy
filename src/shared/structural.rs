@@ -12,6 +12,12 @@ use crate::meta::{ZarrMeta, ZarrNode};
 /// 1. Group DataFrames by their column schema (signature)
 /// 2. Within each group, use vstack (same schema)
 /// 3. Across groups, join on shared coordinate columns
+///
+/// **Join keys** are the intersection of [`ZarrMeta::dim_analysis`] dimension
+/// names that appear as columns in every schema group. For example, a 3D chunk
+/// grid (`foo`, `bar`, `a`) merged with a 1D grid on (`a`) joins on shared dims
+/// such as `a` so auxiliary variables indexed only along `a` align with the
+/// primary field’s rows.
 pub fn combine_chunk_dataframes(
     mut dfs: Vec<DataFrame>,
     meta: &ZarrMeta,

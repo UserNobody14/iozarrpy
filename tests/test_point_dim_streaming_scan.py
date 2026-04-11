@@ -267,6 +267,24 @@ def test_streaming_matches_sync_scan_predicate(
     assert set(df_sync.columns) == set(df_stream.columns)
 
 
+def test_streaming_small_batch_matches_sync_scan(
+    nz_style_point_zarr: str,
+) -> None:
+    """Join-closed streaming batches must match sync even with a tiny batch_size."""
+    hqb = rainbear.ZarrBackendSync.from_url(nz_style_point_zarr)
+    prd = pl.col("lead_time") == timedelta(hours=0)
+    df_sync = hqb.scan_zarr_sync(predicate=prd)
+    batches = list(
+        hqb.scan_zarr_streaming_sync(
+            predicate=prd,
+            batch_size=12,
+        ),
+    )
+    df_stream = pl.concat(batches)
+    assert df_sync.shape == df_stream.shape
+    assert set(df_sync.columns) == set(df_stream.columns)
+
+
 @pytest.mark.skipif(
     not _REPO_NZ_ZARR.is_dir(),
     reason="repo sandbox/nz.zarr not present",
