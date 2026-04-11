@@ -144,9 +144,7 @@ impl ResolvedColumnPolicy {
                 &predicate_refs,
                 meta,
             );
-        Self {
-            physical_superset,
-        }
+        Self { physical_superset }
     }
 
     pub(crate) fn physical_superset(

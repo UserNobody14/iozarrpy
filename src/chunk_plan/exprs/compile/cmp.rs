@@ -55,13 +55,14 @@ pub(super) fn compile_struct_field_cmp(
     lit: &LiteralValue,
     ctx: &mut LazyCompileCtx<'_>,
 ) -> LazyResult {
-    let full_path = ZarrPath::single(
-        struct_col.clone(),
-    );
-    let array_zp = field_path.components().iter().fold(
-        full_path,
-        |acc, c| acc.push(c.clone()),
-    );
+    let full_path =
+        ZarrPath::single(struct_col.clone());
+    let array_zp = field_path
+        .components()
+        .iter()
+        .fold(full_path, |acc, c| {
+            acc.push(c.clone())
+        });
     let array_path = array_zp.to_istr();
 
     let arr_meta_opt =

@@ -13,10 +13,9 @@ use super::selection_base::DatasetSelectionBase;
 /// Dataset-level selection: type alias for the generic `DatasetSelectionBase`.
 ///
 /// This groups variables by their dimension signature to avoid duplication.
-pub type DatasetSelection =
-    DatasetSelectionBase<
-        GroupedSelection<DataArraySelection>,
-    >;
+pub type DatasetSelection = DatasetSelectionBase<
+    GroupedSelection<DataArraySelection>,
+>;
 
 /// Selection for a single array, expressed as a disjunction (OR) of hyper-rectangles.
 #[derive(

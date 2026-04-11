@@ -37,9 +37,7 @@ pub(crate) fn build_node_tree(
     };
     let mut node = ZarrNode::new(path_istr);
 
-    if let Some(arrays) =
-        group_arrays.get(path)
-    {
+    if let Some(arrays) = group_arrays.get(path) {
         let mut dims_set: BTreeSet<IStr> =
             BTreeSet::new();
         let mut coord_arrays: BTreeSet<IStr> =
@@ -59,15 +57,13 @@ pub(crate) fn build_node_tree(
                 && arr.dims.len() == 1
                 && *leaf == arr.dims[0]
             {
-                coord_arrays
-                    .insert(leaf.clone());
+                coord_arrays.insert(leaf.clone());
             }
         }
 
         for aux in aux_coords {
             if node.arrays.contains_key(aux) {
-                coord_arrays
-                    .insert(aux.clone());
+                coord_arrays.insert(aux.clone());
             }
         }
 

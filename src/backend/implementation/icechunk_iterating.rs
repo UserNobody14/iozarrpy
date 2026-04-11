@@ -169,10 +169,11 @@ impl IcechunkIterator {
                 expanded_with_columns.as_ref(),
             );
 
-        let batch_row_cap = streaming_batch_row_cap(
-            grid_groups.len(),
-            self.batch_size,
-        );
+        let batch_row_cap =
+            streaming_batch_row_cap(
+                grid_groups.len(),
+                self.batch_size,
+            );
 
         self.state = Some(IteratorState {
             grid_groups,

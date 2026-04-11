@@ -72,8 +72,9 @@ pub fn scan_zarr_with_backend_sync(
         )?;
     }
 
-    let chunk_read_superset =
-        enrich_policy.physical_superset().cloned();
+    let chunk_read_superset = enrich_policy
+        .physical_superset()
+        .cloned();
 
     // Read chunks using consolidated (deduplicated) iteration
     let mut dfs = Vec::new();

@@ -18,8 +18,8 @@ use super::cmp::{
     compile_value_range_to_plan,
 };
 use super::interpolate::{
-    interpolate_selection_nd_lazy,
     interpolate_selection_geospatial_lazy,
+    interpolate_selection_nd_lazy,
 };
 use super::selector::compile_selector_lazy;
 use super::utils::{
@@ -396,7 +396,8 @@ pub fn compile_expr(
                             return Ok(ExprPlan::NoConstraint);
                         }
                         interpolate_selection_nd_lazy(&input[0], &input[1], &input[2], ctx)
-                    } else if symbol == "interpolate_geospatial"
+                    } else if symbol
+                        == "interpolate_geospatial"
                     {
                         if input.len() < 3 {
                             return Ok(ExprPlan::NoConstraint);

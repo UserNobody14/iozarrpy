@@ -103,7 +103,9 @@ pub fn combine_chunk_dataframes(
             .into_iter()
             .filter(|c| {
                 dim_cols.contains(c.as_str())
-                    && df.column(c.as_str()).is_ok()
+                    && df
+                        .column(c.as_str())
+                        .is_ok()
             })
             .collect();
 

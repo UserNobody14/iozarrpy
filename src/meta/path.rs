@@ -9,7 +9,13 @@ use crate::{IStr, IntoIStr};
 ///
 /// e.g. `["model_a", "temperature"]` instead of `"model_a/temperature"`.
 #[derive(
-    Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord,
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
 )]
 pub struct ZarrPath(SmallVec<[IStr; 4]>);
 
@@ -79,7 +85,9 @@ impl ZarrPath {
         if self.0.is_empty() {
             Self::root()
         } else {
-            Self(self.0[..self.0.len() - 1].into())
+            Self(
+                self.0[..self.0.len() - 1].into(),
+            )
         }
     }
 
@@ -92,8 +100,11 @@ impl ZarrPath {
 
     /// Join with `/` to produce a flat string (for storage/Polars boundary).
     pub fn to_flat_string(&self) -> String {
-        let parts: Vec<&str> =
-            self.0.iter().map(|c| c.as_ref()).collect();
+        let parts: Vec<&str> = self
+            .0
+            .iter()
+            .map(|c| c.as_ref())
+            .collect();
         parts.join("/")
     }
 
@@ -104,7 +115,10 @@ impl ZarrPath {
 }
 
 impl fmt::Display for ZarrPath {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+    ) -> fmt::Result {
         if self.is_root() {
             write!(f, "/")
         } else {
@@ -145,17 +159,30 @@ mod tests {
 
     #[test]
     fn parse_simple() {
-        let p = ZarrPath::parse("model_a/temperature");
+        let p = ZarrPath::parse(
+            "model_a/temperature",
+        );
         assert_eq!(p.len(), 2);
-        assert_eq!(p.components()[0].as_ref(), "model_a");
-        assert_eq!(p.components()[1].as_ref(), "temperature");
+        assert_eq!(
+            p.components()[0].as_ref(),
+            "model_a"
+        );
+        assert_eq!(
+            p.components()[1].as_ref(),
+            "temperature"
+        );
     }
 
     #[test]
     fn parse_leading_slash() {
-        let p = ZarrPath::parse("/model_a/temperature");
+        let p = ZarrPath::parse(
+            "/model_a/temperature",
+        );
         assert_eq!(p.len(), 2);
-        assert_eq!(p.to_flat_string(), "model_a/temperature");
+        assert_eq!(
+            p.to_flat_string(),
+            "model_a/temperature"
+        );
     }
 
     #[test]
@@ -167,8 +194,12 @@ mod tests {
     #[test]
     fn parent_and_leaf() {
         let p = ZarrPath::parse("a/b/c");
-        assert_eq!(p.parent().to_flat_string(), "a/b");
-        let leaf: &str = p.leaf().unwrap().as_ref();
+        assert_eq!(
+            p.parent().to_flat_string(),
+            "a/b"
+        );
+        let leaf: &str =
+            p.leaf().unwrap().as_ref();
         assert_eq!(leaf, "c");
     }
 
@@ -176,13 +207,19 @@ mod tests {
     fn push() {
         let p = ZarrPath::parse("model_a");
         let child = p.push("temperature".istr());
-        assert_eq!(child.to_flat_string(), "model_a/temperature");
+        assert_eq!(
+            child.to_flat_string(),
+            "model_a/temperature"
+        );
     }
 
     #[test]
     fn tail() {
         let p = ZarrPath::parse("a/b/c");
-        assert_eq!(p.tail().to_flat_string(), "b/c");
+        assert_eq!(
+            p.tail().to_flat_string(),
+            "b/c"
+        );
     }
 
     #[test]

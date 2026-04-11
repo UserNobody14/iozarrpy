@@ -228,7 +228,8 @@ impl GroupedChunkPlan {
         meta: &ZarrMeta,
     ) -> BackendResult<()> {
         for path in extra {
-            if self.var_to_grid.contains_key(path) {
+            if self.var_to_grid.contains_key(path)
+            {
                 continue;
             }
             let Some(var_meta) =
@@ -269,17 +270,19 @@ impl GroupedChunkPlan {
                     chunk_grid,
                 );
             } else {
-                let ranges: Vec<std::ops::Range<u64>> =
-                    var_meta
-                        .shape
-                        .iter()
-                        .map(|&s| 0..s)
-                        .collect();
+                let ranges: Vec<
+                    std::ops::Range<u64>,
+                > = var_meta
+                    .shape
+                    .iter()
+                    .map(|&s| 0..s)
+                    .collect();
                 let subset =
                     ArraySubset::new_with_ranges(
                         &ranges,
                     );
-                let mut list = ArraySubsetList::new();
+                let mut list =
+                    ArraySubsetList::new();
                 list.push(subset);
                 let sig_arc = Arc::new(sig);
                 self.insert(

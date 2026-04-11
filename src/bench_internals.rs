@@ -4,12 +4,13 @@
 //! Not part of the public API — intended only for `benches/`.
 
 pub use crate::reader::{
-    ColumnData, checked_chunk_len, compute_strides,
+    ColumnData, checked_chunk_len,
+    compute_strides,
 };
 
 pub use crate::scan::shared::{
-    KeepMask, build_coord_column, build_var_column,
-    compute_in_bounds_mask,
+    KeepMask, build_coord_column,
+    build_var_column, compute_in_bounds_mask,
     compute_var_chunk_indices,
     should_include_column,
 };
@@ -32,6 +33,6 @@ pub use crate::chunk_plan::{
 pub use crate::errors::BackendError;
 
 pub use crate::meta::{
-    DimensionAnalysis, VarEncoding, ZarrArrayMeta,
-    ZarrMeta, ZarrNode,
+    DimensionAnalysis, VarEncoding,
+    ZarrArrayMeta, ZarrMeta, ZarrNode,
 };
