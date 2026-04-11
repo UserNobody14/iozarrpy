@@ -12,7 +12,6 @@ use snafu::ResultExt;
 use std::collections::BTreeSet;
 use zarrs::array::Array;
 
-
 use crate::errors::IncompatibleDimensionalitySnafu;
 use crate::shared::ChunkedExpressionCompilerAsync;
 use crate::shared::{

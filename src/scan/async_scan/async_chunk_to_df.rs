@@ -224,9 +224,8 @@ async fn read_var_chunks<
             continue;
         }
 
-        let var_meta = meta
-            .array_by_path(*name)
-            .ok_or(
+        let var_meta =
+            meta.array_by_path(*name).ok_or(
                 BackendError::UnknownDataVar {
                     name: *name,
                     available_vars: meta

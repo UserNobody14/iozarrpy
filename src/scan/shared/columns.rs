@@ -164,9 +164,7 @@ pub fn build_coord_column(
                         }
                     };
                     let series_uncast = gathered
-                        .into_series(
-                            dim_name,
-                        );
+                        .into_series(dim_name);
                     return series_uncast
                         .cast(
                             &te.to_polars_dtype(),
@@ -211,9 +209,7 @@ pub fn build_coord_column(
                         }
                     };
                     return gathered
-                        .into_series(
-                            dim_name,
-                        )
+                        .into_series(dim_name)
                         .into();
                 }
             }
@@ -312,10 +308,10 @@ pub fn compute_in_bounds_mask(
             if let Some(sub) = chunk_subset
                 && (local < sub.ranges[d].start
                     || local >= sub.ranges[d].end)
-                {
-                    ok = false;
-                    break;
-                }
+            {
+                ok = false;
+                break;
+            }
         }
         if ok {
             keep.push(row);

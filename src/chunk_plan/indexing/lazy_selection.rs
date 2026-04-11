@@ -104,9 +104,10 @@ impl LazyHyperRectangle {
             && !matches!(
                 constraint,
                 LazyDimConstraint::All
-            ) {
-                m.insert(dim, constraint);
-            }
+            )
+        {
+            m.insert(dim, constraint);
+        }
         self
     }
 
@@ -546,8 +547,7 @@ fn intersect_lazy_rectangles(
             intersected,
             LazyDimConstraint::All
         ) {
-            merged
-                .insert(*dim, intersected);
+            merged.insert(*dim, intersected);
         }
     }
 

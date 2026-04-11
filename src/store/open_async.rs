@@ -71,12 +71,13 @@ pub fn open_store_from_object_store_async(
 ) -> AsyncOpenedStore {
     if let Some(ref p) = prefix {
         let path = Path::new(p);
-        if path.is_absolute() && path.exists()
+        if path.is_absolute()
+            && path.exists()
             && let Ok(opened) =
                 open_filesystem_store_async(p)
-            {
-                return opened;
-            }
+        {
+            return opened;
+        }
         if !path.is_absolute() {
             let abs = format!("/{p}");
             if Path::new(&abs).exists()
@@ -84,9 +85,9 @@ pub fn open_store_from_object_store_async(
                     open_filesystem_store_async(
                         &abs,
                     )
-                {
-                    return opened;
-                }
+            {
+                return opened;
+            }
         }
     }
     let async_store: AsyncReadableWritableListableStorage =

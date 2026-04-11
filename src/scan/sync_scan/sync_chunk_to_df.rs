@@ -161,8 +161,7 @@ fn read_coord_chunks<
                 coord_len: data.len() as u64,
             });
         }
-        coord_slices
-            .insert(*dim_name, data);
+        coord_slices.insert(*dim_name, data);
     }
 
     Ok(coord_slices)

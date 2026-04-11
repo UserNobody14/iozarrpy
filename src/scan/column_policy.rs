@@ -35,8 +35,7 @@ fn projection_dims_used(
             out.insert(*col);
             continue;
         }
-        if let Some(am) =
-            meta.array_by_path(*col)
+        if let Some(am) = meta.array_by_path(*col)
         {
             for d in am.dims.iter() {
                 out.insert(*d);
@@ -63,8 +62,7 @@ fn expand_1d_aux_on_projection_dims(
         if expanded.contains(&p) {
             continue;
         }
-        let Some(am) =
-            meta.array_by_path(p)
+        let Some(am) = meta.array_by_path(p)
         else {
             continue;
         };

@@ -201,8 +201,7 @@ impl GroupedChunkPlan {
         chunk_grid: Arc<ChunkGrid>,
     ) {
         let var = var.istr();
-        self.var_to_grid
-            .insert(var, sig.clone());
+        self.var_to_grid.insert(var, sig.clone());
         self.by_grid
             .entry(sig.clone())
             .or_insert(plan);
@@ -310,7 +309,8 @@ impl GroupedChunkPlan {
         sig: &ChunkGridSignature,
     ) -> Vec<IStr> {
         self.vars_by_grid
-            .get(sig).cloned()
+            .get(sig)
+            .cloned()
             .unwrap_or_default()
     }
 

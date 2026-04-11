@@ -195,14 +195,11 @@ pub fn restructure_to_structs(
         }
     }
 
-    DataFrame::new(
-        df.height(),
-        result_columns,
-    )
-    .context(PolarsSnafu {
-        message: "Error creating DataFrame"
-            .to_string(),
-    })
+    DataFrame::new(df.height(), result_columns)
+        .context(PolarsSnafu {
+            message: "Error creating DataFrame"
+                .to_string(),
+        })
 }
 
 /// Build a struct column for a zarr node (group).
@@ -312,9 +309,7 @@ pub fn expand_projection_to_flat_paths(
             continue;
         }
 
-        if meta
-            .array_by_path_contains(*col)
-        {
+        if meta.array_by_path_contains(*col) {
             expanded.insert(*col);
             continue;
         }

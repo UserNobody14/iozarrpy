@@ -51,24 +51,24 @@ fn extract_session_bytes(
         session.getattr("_session")
         && let Ok(as_bytes_method) =
             inner_session.getattr("as_bytes")
-            && let Ok(bytes_obj) =
-                as_bytes_method.call0()
-                && let Ok(bytes) =
-                    bytes_obj.extract::<Vec<u8>>()
-                {
-                    return Ok(bytes);
-                }
+        && let Ok(bytes_obj) =
+            as_bytes_method.call0()
+        && let Ok(bytes) =
+            bytes_obj.extract::<Vec<u8>>()
+    {
+        return Ok(bytes);
+    }
 
     // Try 3: Object has .as_bytes() method directly (e.g., PySession from icechunk internal)
     if let Ok(as_bytes_method) =
         session.getattr("as_bytes")
         && let Ok(bytes_obj) =
             as_bytes_method.call0()
-            && let Ok(bytes) =
-                bytes_obj.extract::<Vec<u8>>()
-            {
-                return Ok(bytes);
-            }
+        && let Ok(bytes) =
+            bytes_obj.extract::<Vec<u8>>()
+    {
+        return Ok(bytes);
+    }
 
     Err(PyErr::new::<
         pyo3::exceptions::PyTypeError,

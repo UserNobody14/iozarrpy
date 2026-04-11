@@ -30,53 +30,48 @@ fn extract_time_encoding_inner<
     if let Some(dtype_str) = dtype
         && let Some(dtype_unit_ns) =
             parse_timedelta_dtype(&dtype_str)
+    {
+        if let Some(units_str) = units.as_deref()
+            && !units_str.contains(" since ")
+            && let Some(unit_ns) =
+                parse_duration_units(units_str)
         {
-            if let Some(units_str) =
-                units.as_deref()
-                && !units_str.contains(" since ")
-                    && let Some(unit_ns) =
-                        parse_duration_units(
-                            units_str,
-                        )
-                    {
-                        return Some(
-                            TimeEncoding {
-                                epoch_ns: 0,
-                                unit_ns,
-                                is_duration: true,
-                            },
-                        );
-                    }
             return Some(TimeEncoding {
                 epoch_ns: 0,
-                unit_ns: dtype_unit_ns,
+                unit_ns,
                 is_duration: true,
             });
         }
+        return Some(TimeEncoding {
+            epoch_ns: 0,
+            unit_ns: dtype_unit_ns,
+            is_duration: true,
+        });
+    }
 
     // Datetime handling via CF units like "hours since 2024-01-01 00:00:00".
     if let Some(units_str) = units.as_deref()
         && let Some((unit_ns, epoch_ns)) =
             parse_cf_time_units(units_str)
-        {
-            return Some(TimeEncoding {
-                epoch_ns,
-                unit_ns,
-                is_duration: false,
-            });
-        }
+    {
+        return Some(TimeEncoding {
+            epoch_ns,
+            unit_ns,
+            is_duration: false,
+        });
+    }
 
     // Duration handling via simple units like "hours" (no "since" clause).
     if let Some(units_str) = units.as_deref()
         && let Some(unit_ns) =
             parse_duration_units(units_str)
-        {
-            return Some(TimeEncoding {
-                epoch_ns: 0,
-                unit_ns,
-                is_duration: true,
-            });
-        }
+    {
+        return Some(TimeEncoding {
+            epoch_ns: 0,
+            unit_ns,
+            is_duration: true,
+        });
+    }
 
     None
 }
@@ -215,36 +210,41 @@ fn parse_datetime_to_ns(s: &str) -> Option<i64> {
         s,
         "%Y-%m-%d %H:%M:%S",
     ) {
-        return Utc.from_utc_datetime(&dt)
-                .timestamp_nanos_opt();
+        return Utc
+            .from_utc_datetime(&dt)
+            .timestamp_nanos_opt();
     }
     if let Ok(dt) = NaiveDateTime::parse_from_str(
         s,
         "%Y-%m-%d %H:%M:%S%.f",
     ) {
-        return Utc.from_utc_datetime(&dt)
-                .timestamp_nanos_opt();
+        return Utc
+            .from_utc_datetime(&dt)
+            .timestamp_nanos_opt();
     }
     if let Ok(dt) = NaiveDateTime::parse_from_str(
         s,
         "%Y-%m-%dT%H:%M:%S",
     ) {
-        return Utc.from_utc_datetime(&dt)
-                .timestamp_nanos_opt();
+        return Utc
+            .from_utc_datetime(&dt)
+            .timestamp_nanos_opt();
     }
     if let Ok(dt) = NaiveDateTime::parse_from_str(
         s,
         "%Y-%m-%dT%H:%M:%S%.f",
     ) {
-        return Utc.from_utc_datetime(&dt)
-                .timestamp_nanos_opt();
+        return Utc
+            .from_utc_datetime(&dt)
+            .timestamp_nanos_opt();
     }
     if let Ok(d) =
         NaiveDate::parse_from_str(s, "%Y-%m-%d")
     {
         let dt = d.and_hms_opt(0, 0, 0)?;
-        return Utc.from_utc_datetime(&dt)
-                .timestamp_nanos_opt();
+        return Utc
+            .from_utc_datetime(&dt)
+            .timestamp_nanos_opt();
     }
     None
 }

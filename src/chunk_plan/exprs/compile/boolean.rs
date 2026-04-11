@@ -124,10 +124,14 @@ pub(super) fn compile_boolean_function_lazy(
         BooleanFunction::IsFinite => {
             todo!()
         }
-        BooleanFunction::Any { ignore_nulls: _ } => {
+        BooleanFunction::Any {
+            ignore_nulls: _,
+        } => {
             todo!()
         }
-        BooleanFunction::All { ignore_nulls: _ } => {
+        BooleanFunction::All {
+            ignore_nulls: _,
+        } => {
             todo!()
         }
         BooleanFunction::IsInfinite => todo!(),

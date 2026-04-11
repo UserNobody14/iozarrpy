@@ -24,17 +24,18 @@ pub(crate) fn dims_for_array<TStorage: ?Sized>(
     if let Some(v) = array
         .attributes()
         .get("_ARRAY_DIMENSIONS")
-        && let Some(list) = v.as_array() {
-            let out: SmallVec<[IStr; 4]> = list
-                .iter()
-                .filter_map(|x| {
-                    x.as_str().map(|s| s.istr())
-                })
-                .collect();
-            if !out.is_empty() {
-                return Some(out);
-            }
+        && let Some(list) = v.as_array()
+    {
+        let out: SmallVec<[IStr; 4]> = list
+            .iter()
+            .filter_map(|x| {
+                x.as_str().map(|s| s.istr())
+            })
+            .collect();
+        if !out.is_empty() {
+            return Some(out);
         }
+    }
 
     if let Some(names) = array.dimension_names() {
         let out: SmallVec<[IStr; 4]> = names

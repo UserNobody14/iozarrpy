@@ -215,9 +215,10 @@ impl ZarrIteratorInner {
 
         // Check if we've reached the row limit
         if let Some(limit) = state.num_rows_limit
-            && state.total_rows_yielded >= limit {
-                return Ok(None);
-            }
+            && state.total_rows_yielded >= limit
+        {
+            return Ok(None);
+        }
 
         // Accumulate chunks until we have enough rows for a batch
         while state.current_group_idx

@@ -189,9 +189,10 @@ fn check_monotonic_from_samples(
             && !monotonic_ord_matches(
                 dir,
                 CoordScalar::partial_cmp(p, v),
-            ) {
-                return None;
-            }
+            )
+        {
+            return None;
+        }
         prev = Some(v);
     }
     Some(dir)
@@ -1368,8 +1369,7 @@ fn build_var_grouping(
             .entry(sig.clone())
             .or_insert_with(|| Arc::new(sig))
             .clone();
-        var_to_sig
-            .insert(*var, sig_arc.clone());
+        var_to_sig.insert(*var, sig_arc.clone());
         by_sig
             .entry(sig_arc)
             .or_default()
@@ -1414,9 +1414,7 @@ pub(crate) fn resolve_expr_plan_sync<
                 DataArraySelection,
             > = BTreeMap::new();
 
-            for sig_arc in
-                by_sig.keys()
-            {
+            for sig_arc in by_sig.keys() {
                 let dims = sig_arc.dims();
                 let shape =
                     dims_to_shape(dims, meta)?;
@@ -1488,9 +1486,7 @@ pub(crate) async fn resolve_expr_plan_async<
                 DataArraySelection,
             > = BTreeMap::new();
 
-            for sig_arc in
-                by_sig.keys()
-            {
+            for sig_arc in by_sig.keys() {
                 let dims = sig_arc.dims();
                 let shape =
                     dims_to_shape(dims, meta)?;

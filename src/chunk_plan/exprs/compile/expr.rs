@@ -12,8 +12,7 @@ use super::super::literals::{
 };
 use super::boolean::compile_boolean_function_lazy;
 use super::cmp::{
-    compile_cmp_to_plan,
-    compile_struct_field_cmp,
+    compile_cmp_to_plan, compile_struct_field_cmp,
 };
 use super::interpolate::{
     interpolate_selection_geospatial_lazy,
@@ -228,12 +227,12 @@ pub fn compile_expr(
                                 left.as_ref(),
                             ),
                         )
-                        && let Expr::Literal(
-                            lit,
-                        ) = strip_wrappers(
-                            right.as_ref(),
-                        ) {
-                            return compile_struct_field_cmp(
+                        && let Expr::Literal(lit) =
+                            strip_wrappers(
+                                right.as_ref(),
+                            )
+                    {
+                        return compile_struct_field_cmp(
                                 &struct_col,
                                 &field_name,
                                 *op,
@@ -241,7 +240,7 @@ pub fn compile_expr(
                                 ctx,
                             )
                             .or_else(|_| Ok(ExprPlan::NoConstraint));
-                        }
+                    }
                     if let Some((
                         struct_col,
                         field_name,
@@ -251,12 +250,12 @@ pub fn compile_expr(
                                 right.as_ref(),
                             ),
                         )
-                        && let Expr::Literal(
-                            lit,
-                        ) = strip_wrappers(
-                            left.as_ref(),
-                        ) {
-                            return compile_struct_field_cmp(
+                        && let Expr::Literal(lit) =
+                            strip_wrappers(
+                                left.as_ref(),
+                            )
+                    {
+                        return compile_struct_field_cmp(
                                 &struct_col,
                                 &field_name,
                                 reverse_operator(*op),
@@ -264,7 +263,7 @@ pub fn compile_expr(
                                 ctx,
                             )
                             .or_else(|_| Ok(ExprPlan::NoConstraint));
-                        }
+                    }
 
                     // Regular column comparison
                     if let Some((col, lit)) =
@@ -325,25 +324,26 @@ pub fn compile_expr(
             ) = (
                 strip_wrappers(truthy.as_ref()),
                 strip_wrappers(falsy.as_ref()),
-            )
-                && let (
-                    Some(AnyValue::Boolean(t)),
-                    Some(AnyValue::Boolean(f)),
-                ) = (
-                    literal_anyvalue(t),
-                    literal_anyvalue(f),
-                ) {
-                    if t && !f {
-                        return compile_expr(
-                            predicate.as_ref(),
-                            ctx,
-                        );
-                    }
-                    if f {
-                        return Ok(ExprPlan::NoConstraint);
-                    }
-                    return Ok(ExprPlan::Empty);
+            ) && let (
+                Some(AnyValue::Boolean(t)),
+                Some(AnyValue::Boolean(f)),
+            ) = (
+                literal_anyvalue(t),
+                literal_anyvalue(f),
+            ) {
+                if t && !f {
+                    return compile_expr(
+                        predicate.as_ref(),
+                        ctx,
+                    );
                 }
+                if f {
+                    return Ok(
+                        ExprPlan::NoConstraint,
+                    );
+                }
+                return Ok(ExprPlan::Empty);
+            }
 
             let all_refs =
                 collect_refs_from_expr(expr);

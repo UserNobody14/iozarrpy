@@ -93,8 +93,7 @@ pub(super) fn interpolate_selection_nd_lazy(
             } else {
                 LazyDimConstraint::Unresolved(vr)
             };
-            constraint
-                .insert(*dim_name, c);
+            constraint.insert(*dim_name, c);
         }
         constraints.push(constraint);
     }
@@ -189,23 +188,24 @@ fn extract_coord_names_ordered(
         && matches!(
             function,
             FunctionExpr::AsStruct
-        ) {
-            let mut names =
-                Vec::with_capacity(input.len());
-            for e in input {
-                let mut found = None;
-                walk_for_first_column(
-                    strip_wrappers(e),
-                    &mut found,
-                );
-                names.push(found?);
-            }
-            return if names.is_empty() {
-                None
-            } else {
-                Some(names)
-            };
+        )
+    {
+        let mut names =
+            Vec::with_capacity(input.len());
+        for e in input {
+            let mut found = None;
+            walk_for_first_column(
+                strip_wrappers(e),
+                &mut found,
+            );
+            names.push(found?);
         }
+        return if names.is_empty() {
+            None
+        } else {
+            Some(names)
+        };
+    }
     None
 }
 
@@ -245,9 +245,8 @@ pub(super) fn interpolate_selection_geospatial_lazy(
         extract_coord_names_ordered(
             source_coords,
         );
-    let coord_names_flat = coord_names_ordered
-        .as_deref()
-        .or({
+    let coord_names_flat =
+        coord_names_ordered.as_deref().or({
             // Fallback: unordered extraction (can't distinguish lon)
             None
         });
@@ -316,7 +315,8 @@ pub(super) fn interpolate_selection_geospatial_lazy(
             let is_interp_dim = coord_names
                 .iter()
                 .any(|c| c == dim_name);
-            let is_lon = lon_dim == Some(dim_name);
+            let is_lon =
+                lon_dim == Some(dim_name);
             let c = if is_lon {
                 LazyDimConstraint::WrappingInterpolationRange(vr)
             } else if is_interp_dim {
@@ -324,8 +324,7 @@ pub(super) fn interpolate_selection_geospatial_lazy(
             } else {
                 LazyDimConstraint::Unresolved(vr)
             };
-            constraint
-                .insert(*dim_name, c);
+            constraint.insert(*dim_name, c);
         }
         constraints.push(constraint);
     }

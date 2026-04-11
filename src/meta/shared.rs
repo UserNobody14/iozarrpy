@@ -44,10 +44,8 @@ pub(crate) fn build_node_tree(
             BTreeSet::new();
 
         for (leaf, arr) in arrays {
-            node.arrays.insert(
-                *leaf,
-                arr.clone(),
-            );
+            node.arrays
+                .insert(*leaf, arr.clone());
 
             for dim in &arr.dims {
                 dims_set.insert(*dim);
@@ -86,17 +84,15 @@ pub(crate) fn build_node_tree(
             && child_path != path
             && let Some(child_leaf) =
                 child_path.leaf()
-            {
-                let child_node = build_node_tree(
-                    child_path,
-                    group_arrays,
-                    aux_coords,
-                );
-                node.children.insert(
-                    *child_leaf,
-                    child_node,
-                );
-            }
+        {
+            let child_node = build_node_tree(
+                child_path,
+                group_arrays,
+                aux_coords,
+            );
+            node.children
+                .insert(*child_leaf, child_node);
+        }
     }
 
     node
@@ -178,15 +174,14 @@ pub(crate) fn load_zarr_meta_inner<
             array.attributes().get("coordinates")
             && let Some(coord_str) =
                 attrs.as_str()
+        {
+            for coord_name in
+                coord_str.split_whitespace()
             {
-                for coord_name in
-                    coord_str.split_whitespace()
-                {
-                    aux_coords.insert(
-                        coord_name.istr(),
-                    );
-                }
+                aux_coords
+                    .insert(coord_name.istr());
             }
+        }
 
         let arr_meta = ZarrArrayMeta {
             path: path_str.istr(),
