@@ -14,5 +14,4 @@ pub mod literals;
 
 pub use compile::compile_expr;
 pub use compile_ctx::LazyCompileCtx;
-pub use expr_plan::ExprPlan;
 pub(crate) use literals::apply_time_encoding;

@@ -56,21 +56,21 @@ pub(super) fn compile_struct_field_cmp(
     ctx: &mut LazyCompileCtx<'_>,
 ) -> LazyResult {
     let full_path =
-        ZarrPath::single(struct_col.clone());
+        ZarrPath::single(*struct_col);
     let array_zp = field_path
         .components()
         .iter()
         .fold(full_path, |acc, c| {
-            acc.push(c.clone())
+            acc.push(*c)
         });
     let array_path = array_zp.to_istr();
 
     let arr_meta_opt =
-        ctx.meta.array_by_path(&array_path);
+        ctx.meta.array_by_path(array_path);
     if arr_meta_opt.is_none() {
         return Err(
             BackendError::StructFieldNotFound {
-                path: array_path.clone(),
+                path: array_path,
             },
         );
     }
@@ -80,8 +80,8 @@ pub(super) fn compile_struct_field_cmp(
         op, scalar,
     )?;
 
-    if let Some(arr_meta) = arr_meta_opt {
-        if arr_meta.dims.len() == 1 {
+    if let Some(arr_meta) = arr_meta_opt
+        && arr_meta.dims.len() == 1 {
             let dim = &arr_meta.dims[0];
             if ctx.dims.contains(dim) {
                 let constraint =
@@ -91,7 +91,7 @@ pub(super) fn compile_struct_field_cmp(
                 let rect =
                     LazyHyperRectangle::all()
                         .with_dim(
-                            dim.clone(),
+                            *dim,
                             constraint,
                         );
                 let sel = LazyArraySelection::from_rectangle(rect);
@@ -103,7 +103,6 @@ pub(super) fn compile_struct_field_cmp(
                 );
             }
         }
-    }
 
     Ok(ExprPlan::unconstrained_vars(
         VarSet::single(array_path),

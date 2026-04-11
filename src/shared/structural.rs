@@ -180,7 +180,7 @@ pub fn restructure_to_structs(
         let child_name_str: &str =
             child_name.as_ref();
         let prefix =
-            ZarrPath::single(child_name.clone());
+            ZarrPath::single(*child_name);
         let struct_col =
             build_struct_column_for_node(
                 df,
@@ -195,14 +195,14 @@ pub fn restructure_to_structs(
         }
     }
 
-    Ok(DataFrame::new(
+    DataFrame::new(
         df.height(),
         result_columns,
     )
     .context(PolarsSnafu {
         message: "Error creating DataFrame"
             .to_string(),
-    })?)
+    })
 }
 
 /// Build a struct column for a zarr node (group).
@@ -216,7 +216,7 @@ fn build_struct_column_for_node(
 
     for var in &node.data_vars {
         let var_str: &str = var.as_ref();
-        let full_zp = prefix.push(var.clone());
+        let full_zp = prefix.push(*var);
         let full_path = full_zp.to_flat_string();
 
         if let Ok(col) = df.column(&full_path) {
@@ -234,7 +234,7 @@ fn build_struct_column_for_node(
         let child_name_str: &str =
             child_name.as_ref();
         let nested_prefix =
-            prefix.push(child_name.clone());
+            prefix.push(*child_name);
         let nested_struct =
             build_struct_column_for_node(
                 df,
@@ -300,7 +300,7 @@ pub fn expand_projection_to_flat_paths(
                 d_str == col_str
             },
         ) {
-            expanded.insert(col.clone());
+            expanded.insert(*col);
             continue;
         }
 
@@ -308,14 +308,14 @@ pub fn expand_projection_to_flat_paths(
             let v_str: &str = v.as_ref();
             v_str == col_str
         }) {
-            expanded.insert(col.clone());
+            expanded.insert(*col);
             continue;
         }
 
         if meta
-            .array_by_path_contains(col.clone())
+            .array_by_path_contains(*col)
         {
-            expanded.insert(col.clone());
+            expanded.insert(*col);
             continue;
         }
 
@@ -330,7 +330,7 @@ pub fn expand_projection_to_flat_paths(
             continue;
         }
 
-        expanded.insert(col.clone());
+        expanded.insert(*col);
     }
 
     expanded

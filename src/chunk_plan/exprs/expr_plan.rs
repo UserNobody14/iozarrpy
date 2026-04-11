@@ -75,7 +75,7 @@ impl VarSet {
                 let mut v = a.clone();
                 for item in b {
                     if !v.contains(item) {
-                        v.push(item.clone());
+                        v.push(*item);
                     }
                 }
                 Self::Specific(v)

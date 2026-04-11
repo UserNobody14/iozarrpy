@@ -12,7 +12,6 @@ use snafu::ResultExt;
 use std::collections::BTreeSet;
 use zarrs::array::Array;
 
-use crate::IStr;
 
 use crate::errors::IncompatibleDimensionalitySnafu;
 use crate::shared::ChunkedExpressionCompilerAsync;
@@ -116,7 +115,7 @@ pub(crate) async fn extract_grids<
                 IncompatibleDimensionalitySnafu {
                     dims: sig.dims().to_vec(),
                     shape: chunkgrid.array_shape().to_vec(),
-                    paths: vars.iter().cloned().collect::<Vec<IStr>>(),
+                    paths: vars.to_vec(),
                 }
             )?;
 
@@ -305,7 +304,7 @@ pub(crate) fn extract_grids_sync<
                 IncompatibleDimensionalitySnafu {
                     dims: sig.dims().to_vec(),
                     shape: chunkgrid.array_shape().to_vec(),
-                    paths: vars.iter().cloned().collect::<Vec<IStr>>(),
+                    paths: vars.to_vec(),
                 }
             )?;
 

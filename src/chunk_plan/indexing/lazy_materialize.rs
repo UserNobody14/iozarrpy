@@ -5,7 +5,7 @@
 //! Coordinate chunk I/O is already cached by the Moka layer in the backend.
 
 use std::collections::BTreeMap;
-use std::ops::{Bound, Range};
+use std::ops::Range;
 use std::sync::Arc;
 
 use smallvec::SmallVec;
@@ -185,14 +185,13 @@ fn check_monotonic_from_samples(
     };
     let mut prev = None;
     for v in samples {
-        if let Some(p) = prev {
-            if !monotonic_ord_matches(
+        if let Some(p) = prev
+            && !monotonic_ord_matches(
                 dir,
                 CoordScalar::partial_cmp(p, v),
             ) {
                 return None;
             }
-        }
         prev = Some(v);
     }
     Some(dir)
@@ -613,8 +612,7 @@ fn resolve_constraint_sync<
                 .start
                 .saturating_sub(
                     dim_expansion_size,
-                )
-                .max(0);
+                );
             let end = r
                 .end
                 .saturating_add(
@@ -1063,8 +1061,7 @@ async fn resolve_constraint_async<
                 .start
                 .saturating_sub(
                     dim_expansion_size,
-                )
-                .max(0);
+                );
             let end = r
                 .end
                 .saturating_add(
@@ -1357,7 +1354,7 @@ fn build_var_grouping(
 
     for var in &var_list {
         let sig = if let Some(array_meta) =
-            meta.array_by_path(var.clone())
+            meta.array_by_path(*var)
         {
             DimSignature::from_dims_only(
                 array_meta.dims.clone(),
@@ -1372,11 +1369,11 @@ fn build_var_grouping(
             .or_insert_with(|| Arc::new(sig))
             .clone();
         var_to_sig
-            .insert(var.clone(), sig_arc.clone());
+            .insert(*var, sig_arc.clone());
         by_sig
             .entry(sig_arc)
             .or_default()
-            .push(var.clone());
+            .push(*var);
     }
 
     Some((var_list, by_sig, var_to_sig))
@@ -1417,8 +1414,8 @@ pub(crate) fn resolve_expr_plan_sync<
                 DataArraySelection,
             > = BTreeMap::new();
 
-            for (sig_arc, _vars_for_sig) in
-                &by_sig
+            for sig_arc in
+                by_sig.keys()
             {
                 let dims = sig_arc.dims();
                 let shape =
@@ -1491,8 +1488,8 @@ pub(crate) async fn resolve_expr_plan_async<
                 DataArraySelection,
             > = BTreeMap::new();
 
-            for (sig_arc, _vars_for_sig) in
-                &by_sig
+            for sig_arc in
+                by_sig.keys()
             {
                 let dims = sig_arc.dims();
                 let shape =

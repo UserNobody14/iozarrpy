@@ -70,7 +70,7 @@ impl DimensionAnalysis {
         let root_dims = root.local_dims.clone();
         for dim in &root_dims {
             if !all_dims.contains(dim) {
-                all_dims.push(dim.clone());
+                all_dims.push(*dim);
             }
         }
 
@@ -98,32 +98,32 @@ impl DimensionAnalysis {
     ) {
         // Record this node's dimensions
         node_dims.insert(
-            node.path.clone(),
+            node.path,
             node.local_dims.clone(),
         );
 
         // Add any new dimensions not yet seen
         for dim in &node.local_dims {
             if !all_dims.contains(dim) {
-                all_dims.push(dim.clone());
+                all_dims.push(*dim);
             }
         }
 
         // Infer dim lengths from array shapes
-        for (_, arr) in &node.arrays {
+        for arr in node.arrays.values() {
             for (i, dim) in
                 arr.dims.iter().enumerate()
             {
                 if i < arr.shape.len() {
                     dim_lengths
-                        .entry(dim.clone())
+                        .entry(*dim)
                         .or_insert(arr.shape[i]);
                 }
             }
         }
 
         // Recurse into children
-        for (_, child) in &node.children {
+        for child in node.children.values() {
             Self::collect_node(
                 child,
                 all_dims,
@@ -231,11 +231,10 @@ impl ZarrMeta {
             let var_str: &str = var.as_ref();
             if var_set
                 .as_ref()
-                .map_or(true, |vs| {
+                .is_none_or(|vs| {
                     vs.contains(var_str)
                 })
-            {
-                if let Some(m) =
+                && let Some(m) =
                     self.root.arrays.get(var)
                 {
                     fields.push(Field::new(
@@ -245,7 +244,6 @@ impl ZarrMeta {
                     field_names
                         .insert(var_str.into());
                 }
-            }
         }
 
         // CF-style auxiliary coordinates (lat/lon, …): stored in `arrays` but
@@ -257,7 +255,7 @@ impl ZarrMeta {
             }
             if var_set
                 .as_ref()
-                .map_or(true, |vs| {
+                .is_none_or(|vs| {
                     vs.contains(var_str)
                 })
             {
@@ -278,7 +276,7 @@ impl ZarrMeta {
                 child_name.as_ref();
             // Check if this group or any of its vars are in the selection
             let should_include =
-                var_set.as_ref().map_or(true, |vs| {
+                var_set.as_ref().is_none_or(|vs| {
                     vs.contains(child_name_str)
                         || child_node.data_vars.iter().any(
                             |v| {
@@ -426,13 +424,13 @@ impl ZarrNode {
         out: &mut Vec<ZarrPath>,
     ) {
         for var in self.arrays.keys() {
-            out.push(prefix.push(var.clone()));
+            out.push(prefix.push(*var));
         }
         for (child_name, child_node) in
             &self.children
         {
             let child_prefix =
-                prefix.push(child_name.clone());
+                prefix.push(*child_name);
             child_node.collect_paths_recursive(
                 &child_prefix,
                 out,
@@ -447,13 +445,13 @@ impl ZarrNode {
         out: &mut Vec<ZarrPath>,
     ) {
         for var in &self.data_vars {
-            out.push(prefix.push(var.clone()));
+            out.push(prefix.push(*var));
         }
         for (child_name, child_node) in
             &self.children
         {
             let child_prefix =
-                prefix.push(child_name.clone());
+                prefix.push(*child_name);
             child_node
                 .collect_data_var_paths_recursive(
                     &child_prefix,
@@ -482,7 +480,7 @@ impl ZarrNode {
                 let mut out = Vec::new();
                 child.collect_paths_recursive(
                     &ZarrPath::single(
-                        comps[0].clone(),
+                        comps[0],
                     ),
                     &mut out,
                 );

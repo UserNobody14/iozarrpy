@@ -24,8 +24,7 @@ pub(crate) fn dims_for_array<TStorage: ?Sized>(
     if let Some(v) = array
         .attributes()
         .get("_ARRAY_DIMENSIONS")
-    {
-        if let Some(list) = v.as_array() {
+        && let Some(list) = v.as_array() {
             let out: SmallVec<[IStr; 4]> = list
                 .iter()
                 .filter_map(|x| {
@@ -36,7 +35,6 @@ pub(crate) fn dims_for_array<TStorage: ?Sized>(
                 return Some(out);
             }
         }
-    }
 
     if let Some(names) = array.dimension_names() {
         let out: SmallVec<[IStr; 4]> = names

@@ -25,6 +25,6 @@ pub fn load_zarr_meta_from_opened(
     load_zarr_meta_inner(
         &store,
         &nodes,
-        &root_path_str,
+        root_path_str,
     )
 }

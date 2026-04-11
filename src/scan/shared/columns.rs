@@ -54,7 +54,7 @@ pub fn compute_var_chunk_indices(
                     .zip(var_chunk_shape.iter()),
             )
             .map(|(&i, (&s, &c))| {
-                let grid_size = (s + c - 1) / c;
+                let grid_size = s.div_ceil(c);
                 i.min(grid_size.saturating_sub(1))
             })
             .collect();
@@ -164,7 +164,7 @@ pub fn build_coord_column(
                     };
                     let series_uncast = gathered
                         .into_series(
-                            dim_name.into(),
+                            dim_name,
                         );
                     return series_uncast
                         .cast(
@@ -211,7 +211,7 @@ pub fn build_coord_column(
                     };
                     return gathered
                         .into_series(
-                            dim_name.into(),
+                            dim_name,
                         )
                         .into();
                 }
@@ -237,7 +237,7 @@ pub fn build_coord_column(
             }
         };
         return gathered
-            .into_series(dim_name.into())
+            .into_series(dim_name)
             .into();
     }
 
@@ -250,7 +250,7 @@ pub fn build_coord_column(
             let tile_count = *n / (cs * stride);
             ColumnData::I64(small)
                 .repeat_tile(stride, tile_count)
-                .into_series(dim_name.into())
+                .into_series(dim_name)
                 .into()
         }
         KeepMask::Sparse(idx) => {
@@ -308,14 +308,13 @@ pub fn compute_in_bounds_mask(
                     break;
                 }
             }
-            if let Some(sub) = chunk_subset {
-                if local < sub.ranges[d].start
-                    || local >= sub.ranges[d].end
+            if let Some(sub) = chunk_subset
+                && (local < sub.ranges[d].start
+                    || local >= sub.ranges[d].end)
                 {
                     ok = false;
                     break;
                 }
-            }
         }
         if ok {
             keep.push(row);

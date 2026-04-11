@@ -29,7 +29,6 @@ use crate::scan::shared::{
     build_coord_column, build_var_column,
     compute_in_bounds_mask,
     compute_var_chunk_indices,
-    should_include_column,
 };
 use crate::shared::ChunkedDataBackendAsync;
 
@@ -142,7 +141,7 @@ async fn read_coord_chunks<
     for (d, dim_name) in dims.iter().enumerate() {
         // Check if this dimension has a coordinate array
         let Some(coord_meta) =
-            meta.array_by_path(dim_name.clone())
+            meta.array_by_path(*dim_name)
         else {
             continue;
         };
@@ -156,9 +155,9 @@ async fn read_coord_chunks<
         let dim_len = chunk_shape[d];
         let coord_chunk_shape =
             coord_meta.chunk_shape[0];
-        let dim_name = dim_name.clone();
+        let dim_name = *dim_name;
         // Use full path from metadata for array access
-        let coord_path = coord_meta.path.clone();
+        let coord_path = coord_meta.path;
 
         coord_reads.push(async move {
             let data = read_coord_range_chunked(
@@ -184,7 +183,7 @@ async fn read_coord_chunks<
         let coord = res?;
         if coord.len() != expected_len {
             return Err(BackendError::CoordLengthMismatch {
-                name: name.clone(),
+                name,
                 expected_len: expected_len as u64,
                 coord_len: coord.len() as u64,
             });
@@ -226,16 +225,16 @@ async fn read_var_chunks<
         }
 
         let var_meta = meta
-            .array_by_path(name.clone())
+            .array_by_path(*name)
             .ok_or(
                 BackendError::UnknownDataVar {
-                    name: name.clone(),
+                    name: *name,
                     available_vars: meta
                         .all_data_var_paths(),
                 },
             )?;
 
-        let name = name.clone();
+        let name = *name;
         let dims = dims.to_vec();
         let idx = idx.to_vec();
         let chunk_shape = chunk_shape.to_vec();
@@ -308,7 +307,7 @@ pub async fn chunk_to_df_from_grid_with_backend<
     sig: &ChunkGridSignature,
     array_shape: &[u64],
     vars: &[IStr],
-    with_columns: Option<&BTreeSet<IStr>>,
+    _with_columns: Option<&BTreeSet<IStr>>,
     chunk_subset: Option<&ChunkSubset>,
     meta: &ZarrMeta,
 ) -> BackendResult<DataFrame> {
@@ -361,7 +360,7 @@ pub async fn chunk_to_df_from_grid_with_backend<
     // Coordinate columns
     for (d, dim_name) in dims.iter().enumerate() {
         let encoding = meta
-            .array_by_path(dim_name.clone())
+            .array_by_path(*dim_name)
             .and_then(|m| m.encoding.as_ref());
 
         let col = build_coord_column(
@@ -387,7 +386,7 @@ pub async fn chunk_to_df_from_grid_with_backend<
     ) in var_chunks
     {
         let encoding = meta
-            .array_by_path(name.clone())
+            .array_by_path(name)
             .and_then(|m| m.encoding.as_ref());
 
         let col = build_var_column(
@@ -405,10 +404,10 @@ pub async fn chunk_to_df_from_grid_with_backend<
         cols.push(col);
     }
 
-    Ok(DataFrame::new(height, cols).context(
+    DataFrame::new(height, cols).context(
         PolarsSnafu {
             message: "Error creating DataFrame"
                 .to_string(),
         },
-    )?)
+    )
 }

@@ -202,11 +202,9 @@ impl IcechunkIterator {
             .ok_or_else(|| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>("Iterator not initialized"))?;
 
         if let Some(limit) = state.num_rows_limit
-        {
-            if state.total_rows_yielded >= limit {
+            && state.total_rows_yielded >= limit {
                 return Ok(None);
             }
-        }
 
         while state.current_group_idx
             < state.grid_groups.len()

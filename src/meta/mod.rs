@@ -14,6 +14,6 @@ pub use load_async::{
 pub use load_sync::load_zarr_meta_from_opened;
 pub use path::ZarrPath;
 pub use types::{
-    DimensionAnalysis, TimeEncoding, VarEncoding,
-    ZarrArrayMeta, ZarrMeta, ZarrNode,
+    DimensionAnalysis, TimeEncoding, VarEncoding, ZarrArrayMeta, ZarrMeta,
+    ZarrNode,
 };

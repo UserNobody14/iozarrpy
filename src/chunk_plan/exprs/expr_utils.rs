@@ -3,7 +3,6 @@ use super::literals::{
     literal_to_scalar, reverse_operator,
     strip_wrappers,
 };
-use crate::chunk_plan::exprs::compile_ctx::LazyCompileCtx;
 use crate::chunk_plan::indexing::types::ValueRangePresent;
 use crate::chunk_plan::prelude::*;
 use crate::{IStr, IntoIStr};
@@ -135,7 +134,7 @@ pub(super) fn series_values_scalar_lazy(
             let ca = s.f64().ok()?;
             for v in ca.into_iter().flatten() {
                 out.push(CoordScalar::F64(
-                    v.into(),
+                    v,
                 ));
             }
         }
@@ -143,7 +142,7 @@ pub(super) fn series_values_scalar_lazy(
             let ca = s.f32().ok()?;
             for v in ca.into_iter().flatten() {
                 out.push(CoordScalar::F64(
-                    (v as f64).into(),
+                    v as f64 ,
                 ));
             }
         }
@@ -267,24 +266,24 @@ pub(super) fn series_values_scalar_lazy(
         DataType::String => todo!(),
         DataType::Binary => todo!(),
         DataType::BinaryOffset => todo!(),
-        DataType::Array(data_type, _) => todo!(),
-        DataType::List(data_type) => todo!(),
+        DataType::Array(_data_type, _) => todo!(),
+        DataType::List(_data_type) => todo!(),
         DataType::Object(_) => todo!(),
         DataType::Null => todo!(),
         DataType::Categorical(
-            categories,
-            categorical_mapping,
+            _categories,
+            _categorical_mapping,
         ) => todo!(),
         DataType::Enum(
-            frozen_categories,
-            categorical_mapping,
+            _frozen_categories,
+            _categorical_mapping,
         ) => todo!(),
-        DataType::Struct(fields) => todo!(),
+        DataType::Struct(_fields) => todo!(),
         DataType::Extension(
-            extension_type_instance,
-            data_type,
+            _extension_type_instance,
+            _data_type,
         ) => todo!(),
-        DataType::Unknown(unknown_kind) => {
+        DataType::Unknown(_unknown_kind) => {
             todo!()
         }
     }

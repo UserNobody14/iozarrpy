@@ -6,7 +6,6 @@ use super::super::compile_node::{
     extract_struct_field_path,
 };
 use super::super::expr_plan::{ExprPlan, VarSet};
-use super::super::expr_utils::try_expr_to_value_range_lazy;
 use super::super::literals::{
     col_lit, literal_anyvalue, reverse_operator,
     strip_wrappers,
@@ -15,7 +14,6 @@ use super::boolean::compile_boolean_function_lazy;
 use super::cmp::{
     compile_cmp_to_plan,
     compile_struct_field_cmp,
-    compile_value_range_to_plan,
 };
 use super::interpolate::{
     interpolate_selection_geospatial_lazy,
@@ -122,7 +120,7 @@ pub fn compile_expr(
                 .into_iter()
                 .filter(|r| {
                     ctx.meta
-                        .array_by_path(r.clone())
+                        .array_by_path(*r)
                         .is_some()
                 })
                 .collect();
@@ -230,8 +228,7 @@ pub fn compile_expr(
                                 left.as_ref(),
                             ),
                         )
-                    {
-                        if let Expr::Literal(
+                        && let Expr::Literal(
                             lit,
                         ) = strip_wrappers(
                             right.as_ref(),
@@ -245,7 +242,6 @@ pub fn compile_expr(
                             )
                             .or_else(|_| Ok(ExprPlan::NoConstraint));
                         }
-                    }
                     if let Some((
                         struct_col,
                         field_name,
@@ -255,8 +251,7 @@ pub fn compile_expr(
                                 right.as_ref(),
                             ),
                         )
-                    {
-                        if let Expr::Literal(
+                        && let Expr::Literal(
                             lit,
                         ) = strip_wrappers(
                             left.as_ref(),
@@ -270,7 +265,6 @@ pub fn compile_expr(
                             )
                             .or_else(|_| Ok(ExprPlan::NoConstraint));
                         }
-                    }
 
                     // Regular column comparison
                     if let Some((col, lit)) =
@@ -331,8 +325,8 @@ pub fn compile_expr(
             ) = (
                 strip_wrappers(truthy.as_ref()),
                 strip_wrappers(falsy.as_ref()),
-            ) {
-                if let (
+            )
+                && let (
                     Some(AnyValue::Boolean(t)),
                     Some(AnyValue::Boolean(f)),
                 ) = (
@@ -350,7 +344,6 @@ pub fn compile_expr(
                     }
                     return Ok(ExprPlan::Empty);
                 }
-            }
 
             let all_refs =
                 collect_refs_from_expr(expr);

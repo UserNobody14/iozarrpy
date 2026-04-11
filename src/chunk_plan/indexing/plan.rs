@@ -202,14 +202,14 @@ impl GroupedChunkPlan {
     ) {
         let var = var.istr();
         self.var_to_grid
-            .insert(var.clone(), sig.clone());
+            .insert(var, sig.clone());
         self.by_grid
             .entry(sig.clone())
             .or_insert(plan);
         self.vars_by_grid
             .entry(sig.clone())
             .or_insert(vec![])
-            .push(var.clone());
+            .push(var);
         self.chunk_grid
             .entry(sig.clone())
             .or_insert(chunk_grid);
@@ -233,7 +233,7 @@ impl GroupedChunkPlan {
                 continue;
             }
             let Some(var_meta) =
-                meta.array_by_path(path.clone())
+                meta.array_by_path(*path)
             else {
                 continue;
             };
@@ -264,7 +264,7 @@ impl GroupedChunkPlan {
                     })?
                     .clone();
                 self.insert(
-                    path.clone(),
+                    *path,
                     sig_arc,
                     ArraySubsetList::new(),
                     chunk_grid,
@@ -286,7 +286,7 @@ impl GroupedChunkPlan {
                 list.push(subset);
                 let sig_arc = Arc::new(sig);
                 self.insert(
-                    path.clone(),
+                    *path,
                     sig_arc,
                     list,
                     var_meta.chunk_grid.clone(),
@@ -310,8 +310,7 @@ impl GroupedChunkPlan {
         sig: &ChunkGridSignature,
     ) -> Vec<IStr> {
         self.vars_by_grid
-            .get(sig)
-            .map(|vars| vars.clone())
+            .get(sig).cloned()
             .unwrap_or_default()
     }
 
@@ -368,11 +367,7 @@ impl GroupedChunkPlan {
                         crate::errors::backend::IncompatibleDimensionalitySnafu {
                             dims: sig.dims().to_vec(),
                             shape: chunkgrid.array_shape().to_vec(),
-                            paths: vars.iter().map(
-                                |v| -> IStr {
-                                    v.clone()
-                                }
-                            ).collect::<Vec<IStr>>(),
+                            paths: vars.iter().copied().collect::<Vec<IStr>>(),
                         }
                     )?;
                 if let Some(indices) = indices {
@@ -427,11 +422,7 @@ impl GroupedChunkPlan {
                             crate::errors::backend::IncompatibleDimensionalitySnafu {
                                 dims: sig.dims().to_vec(),
                                 shape: chunkgrid.array_shape().to_vec(),
-                                paths: vars.iter().map(
-                                    |v| -> IStr {
-                                        v.clone()
-                                    }
-                                ).collect::<Vec<IStr>>(),
+                                paths: vars.iter().copied().collect::<Vec<IStr>>(),
                             }
                         )?;
                     if let Some(indices) = indices

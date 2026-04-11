@@ -124,10 +124,10 @@ pub(super) fn compile_boolean_function_lazy(
         BooleanFunction::IsFinite => {
             todo!()
         }
-        BooleanFunction::Any { ignore_nulls } => {
+        BooleanFunction::Any { ignore_nulls: _ } => {
             todo!()
         }
-        BooleanFunction::All { ignore_nulls } => {
+        BooleanFunction::All { ignore_nulls: _ } => {
             todo!()
         }
         BooleanFunction::IsInfinite => todo!(),
@@ -140,9 +140,9 @@ pub(super) fn compile_boolean_function_lazy(
         BooleanFunction::IsUnique => todo!(),
         BooleanFunction::IsDuplicated => todo!(),
         BooleanFunction::IsClose {
-            abs_tol,
-            rel_tol,
-            nans_equal,
+            abs_tol: _,
+            rel_tol: _,
+            nans_equal: _,
         } => todo!(),
     }
 }

@@ -56,7 +56,7 @@ pub(crate) fn normalize_path(
     path: &IStr,
 ) -> IStr {
     if path.starts_with('/') {
-        path.clone()
+        *path
     } else {
         format!("/{}", *path).istr()
     }
@@ -138,7 +138,7 @@ impl ChunkedDataBackendSync for ZarrBackendSync {
                     let cached =
                         self.cached_meta.read();
                     cached.as_ref().and_then(|meta| {
-                        meta.array_by_path(var.clone()).and_then(|arr_meta| {
+                        meta.array_by_path(*var).and_then(|arr_meta| {
                             arr_meta.array_metadata.clone()
                         })
                     })
@@ -158,7 +158,7 @@ impl ChunkedDataBackendSync for ZarrBackendSync {
                 self.opened_arrays
                     .write()
                     .insert(
-                        var.clone(),
+                        *var,
                         opened_inner.clone(),
                     );
                 opened_inner.clone()
@@ -183,7 +183,7 @@ impl Display for ZarrBackendSync {
         write!(
             f,
             "ZarrBackendSync(root='{}')",
-            self.store.as_ref().root.to_string()
+            self.store.as_ref().root
         )
     }
 }
@@ -282,7 +282,7 @@ impl ChunkedDataBackendAsync
                             .await;
                         cached.as_ref().and_then(
                             |meta| {
-                                meta.array_by_path(var.clone())
+                                meta.array_by_path(*var)
                                     .and_then(
                                         |arr_meta| {
                                             arr_meta
@@ -310,7 +310,7 @@ impl ChunkedDataBackendAsync
                         .write()
                         .await
                         .insert(
-                            var.clone(),
+                            *var,
                             opened_inner.clone(),
                         );
                     opened_inner
@@ -335,7 +335,7 @@ impl Display for ZarrBackendAsync {
         write!(
             f,
             "ZarrBackendAsync(root='{}')",
-            self.store.as_ref().root.to_string()
+            self.store.as_ref().root
         )
     }
 }

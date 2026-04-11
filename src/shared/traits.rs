@@ -280,7 +280,7 @@ impl<BACKEND: ChunkedDataBackendSync>
     ) -> Result<Arc<ColumnData>, BackendError>
     {
         let key =
-            (var.clone(), chunk_idx.to_vec());
+            (*var, chunk_idx.to_vec());
         let cache = self.chunk_cache.get(&key);
         if let Some(data) = cache {
             return Ok(data.clone());
@@ -307,7 +307,7 @@ impl<BACKEND: ChunkedDataBackendAsync>
     ) -> Result<Arc<ColumnData>, BackendError>
     {
         let key =
-            (var.clone(), chunk_idx.to_vec());
+            (*var, chunk_idx.to_vec());
         let cache =
             self.chunk_cache.get(&key).await;
         if let Some(data) = cache {
@@ -336,11 +336,10 @@ impl<
     fn metadata(
         &self,
     ) -> Result<Arc<METADATA>, BackendError> {
-        if let Ok(g) = self.metadata.read() {
-            if let Some(m) = g.as_ref() {
+        if let Ok(g) = self.metadata.read()
+            && let Some(m) = g.as_ref() {
                 return Ok(m.clone());
             }
-        }
 
         let metadata = self.backend.metadata()?;
         if let Ok(mut g) = self.metadata.write() {

@@ -100,14 +100,13 @@ impl LazyHyperRectangle {
         if constraint.is_empty() {
             return Self::empty();
         }
-        if let Some(ref mut m) = self.dims {
-            if !matches!(
+        if let Some(ref mut m) = self.dims
+            && !matches!(
                 constraint,
                 LazyDimConstraint::All
             ) {
                 m.insert(dim, constraint);
             }
-        }
         self
     }
 
@@ -548,7 +547,7 @@ fn intersect_lazy_rectangles(
             LazyDimConstraint::All
         ) {
             merged
-                .insert(dim.clone(), intersected);
+                .insert(*dim, intersected);
         }
     }
 

@@ -97,7 +97,7 @@ where
                     .expect("semaphore closed");
                 chunk_to_df_from_grid_with_backend(
                     backend.as_ref(),
-                    idx.into(),
+                    idx,
                     &sig,
                     &array_shape,
                     &vars,

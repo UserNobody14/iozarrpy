@@ -368,12 +368,10 @@ impl SetOperations for ArraySubsetList {
         for a in &self.0 {
             for b in &other.0 {
                 if let Ok(overlap) = a.overlap(b)
-                {
-                    if !overlap.is_empty() {
+                    && !overlap.is_empty() {
                         out.push(overlap);
                         // Generate true intersection (?)
                     }
-                }
             }
         }
         Self(out)
