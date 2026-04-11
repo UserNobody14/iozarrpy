@@ -1,5 +1,3 @@
-use std::borrow::Cow;
-
 use zarrs::array::{
     Array, ArrayShardedReadableExt,
     ArrayShardedReadableExtCache, CodecOptions,
@@ -29,11 +27,8 @@ pub(crate) fn retrieve_chunk(
     let idv = array
         .data_type()
         .name(ZarrVersion::V3)
-        .map(|s| s.to_owned())
-        .unwrap_or_else(|| {
-            Cow::Borrowed("binary")
-        })
-        .into_owned();
+        .map(|s| s.into_owned())
+        .unwrap_or_else(|| "binary".to_string());
     let id = idv.as_str();
     let options = CodecOptions::default();
     match id {

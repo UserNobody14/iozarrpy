@@ -97,6 +97,7 @@ pub fn compute_var_chunk_indices(
     (var_chunk_indices, var_offsets)
 }
 
+#[allow(dead_code)] // Used by `bench_internals` / criterion benchmarks
 pub fn should_include_column(
     name: &IStr,
     with_columns: Option<&BTreeSet<IStr>>,

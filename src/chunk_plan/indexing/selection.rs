@@ -50,6 +50,7 @@ pub trait Emptyable {
 }
 
 /// Operations for sets of selections.
+#[allow(dead_code)] // `exclusive_or` is not called on a `SetOperations` trait object yet
 pub trait SetOperations: Emptyable {
     fn union(&self, other: &Self) -> Self;
     fn intersect(&self, other: &Self) -> Self;
@@ -147,15 +148,15 @@ impl SetOperations for DataArraySelection {
         }
     }
 
-    /// Conservative DNF subtraction: returns a disjunction (OR) of hyper-rectangles.
-    ///
-    /// Uses: A \\ B = union_dim ( A with that dim replaced by (A_dim \\ B_dim) ).
-    /// This is exact (though may produce overlapping rectangles).
     // fn difference(&self, other: &HyperRectangleSelection) -> DataArraySelection {
 
     //     DataArraySelection(out)
     // }
 
+    /// Conservative DNF subtraction: returns a disjunction (OR) of hyper-rectangles.
+    ///
+    /// Uses: A \\ B = union_dim ( A with that dim replaced by (A_dim \\ B_dim) ).
+    /// This is exact (though may produce overlapping rectangles).
     fn exclusive_or(
         &self,
         other: &DataArraySelection,

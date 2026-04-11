@@ -108,6 +108,7 @@ pub trait HasAsyncStore {
 
 /// Sync cache for chunked data - delegates metadata and store traits to backend
 #[derive(Delegate)]
+#[allow(clippy::duplicated_attributes)] // ambassador: separate `#[delegate]` per trait, same target field
 #[delegate(HasMetadataBackendSync<METADATA>, target = "backend", generics = "METADATA", where = "METADATA: Send + Sync, BACKEND: HasMetadataBackendSync<METADATA>")]
 #[delegate(
     HasStore,
@@ -137,6 +138,7 @@ pub struct ChunkedDataCacheAsync<
 
 /// Sync cache for metadata - delegates chunked data and store traits to backend
 #[derive(Delegate)]
+#[allow(clippy::duplicated_attributes)] // ambassador: separate `#[delegate]` per trait, same target field
 #[delegate(
     ChunkedDataBackendSync,
     target = "backend",

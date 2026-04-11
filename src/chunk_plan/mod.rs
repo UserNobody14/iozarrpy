@@ -4,6 +4,7 @@
 //! 1. Compile expression to `ExprPlan` (no I/O)
 //! 2. Resolve constraints inline via the backend (binary search on cached coordinate chunks)
 //! 3. Convert to `GroupedChunkPlan`
+#![allow(unused_imports)]
 
 mod compile_entry;
 mod prelude;

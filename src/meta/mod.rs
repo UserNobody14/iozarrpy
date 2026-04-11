@@ -1,3 +1,6 @@
+// Re-exports are part of the public crate API; not every symbol is used inside this crate.
+#![allow(unused_imports)]
+
 pub(crate) mod dims;
 mod dtype;
 mod load_async;

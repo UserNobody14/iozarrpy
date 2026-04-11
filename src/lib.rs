@@ -1,3 +1,8 @@
+#![allow(clippy::result_large_err)]
+#![allow(clippy::too_many_arguments)]
+#![allow(clippy::type_complexity)]
+#![allow(clippy::single_range_in_vec_init)]
+
 use pyo3::prelude::*;
 
 mod backend;
@@ -56,7 +61,7 @@ impl IntoIStr for IStr {
 
 impl IntoIStr for &IStr {
     fn istr(self) -> IStr {
-        self.clone()
+        *self
     }
 }
 
