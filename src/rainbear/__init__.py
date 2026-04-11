@@ -45,9 +45,7 @@ def scan_zarr(
         store_url_or_backend: Either a URL string (e.g., "s3://bucket/path.zarr")
             or an ObjectStore instance from `rainbear.store` or `obstore`
             or a caching ZarrBackendSync, ZarrBackend, or IcechunkBackend instance.
-        max_chunks_to_read: Optional limit on the number of **predicate-compiled** chunk
-            groups (before adding projection-only coordinate arrays). Actual reads may use more
-            chunks when the physical column superset adds auxiliary grids.
+        max_chunks_to_read: Optional limit on the number of chunks to read (for debugging/safety).
         prefix: Optional path prefix within the store. Only used when passing an ObjectStore
             instance (not needed for URL strings which include the full path).
     

@@ -3,14 +3,13 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use smallvec::SmallVec;
-use zarrs::array::{ArraySubset, ChunkGrid};
+use zarrs::array::ChunkGrid;
 
 use crate::chunk_plan::indexing::selection::ArraySubsetList;
 use crate::chunk_plan::indexing::types::ChunkGridSignature;
 use crate::errors::{
     BackendError, BackendResult,
 };
-use crate::meta::ZarrMeta;
 use crate::{IStr, IntoIStr};
 use snafu::prelude::*;
 
@@ -214,87 +213,6 @@ impl GroupedChunkPlan {
             .or_insert(chunk_grid);
     }
 
-    /// Register zarr arrays from the physical read superset that predicate
-    /// compilation did not include (e.g. CF ``latitude`` / ``longitude`` on
-    /// ``point`` when the filter only references ``time`` / ``lead_time``).
-    ///
-    /// If a matching [`ChunkGridSignature`] already exists, the variable is
-    /// appended to that grid and reuses its chunk plan. Otherwise a full-array
-    /// [`ArraySubsetList`] is added for the new signature.
-    pub fn augment_with_physical_vars(
-        &mut self,
-        extra: &BTreeSet<IStr>,
-        meta: &ZarrMeta,
-    ) -> BackendResult<()> {
-        for path in extra {
-            if self.var_to_grid.contains_key(path)
-            {
-                continue;
-            }
-            let Some(var_meta) =
-                meta.array_by_path(*path)
-            else {
-                continue;
-            };
-            let chunk_shape: SmallVec<[u64; 4]> =
-                var_meta
-                    .chunk_shape
-                    .iter()
-                    .copied()
-                    .collect();
-            let sig = ChunkGridSignature::new(
-                var_meta.dims.clone(),
-                chunk_shape,
-            );
-
-            let existing_sig = self
-                .by_grid
-                .keys()
-                .find(|k| k.as_ref() == &sig)
-                .cloned();
-            if let Some(sig_arc) = existing_sig {
-                let chunk_grid = self
-                    .chunk_grid
-                    .get(sig_arc.as_ref())
-                    .ok_or_else(|| {
-                        BackendError::MissingChunkGrid {
-                            sig: sig_arc.as_ref().clone(),
-                        }
-                    })?
-                    .clone();
-                self.insert(
-                    *path,
-                    sig_arc,
-                    ArraySubsetList::new(),
-                    chunk_grid,
-                );
-            } else {
-                let ranges: Vec<
-                    std::ops::Range<u64>,
-                > = var_meta
-                    .shape
-                    .iter()
-                    .map(|&s| 0..s)
-                    .collect();
-                let subset =
-                    ArraySubset::new_with_ranges(
-                        &ranges,
-                    );
-                let mut list =
-                    ArraySubsetList::new();
-                list.push(subset);
-                let sig_arc = Arc::new(sig);
-                self.insert(
-                    *path,
-                    sig_arc,
-                    list,
-                    var_meta.chunk_grid.clone(),
-                );
-            }
-        }
-        Ok(())
-    }
-
     /// Get the chunk grid for a signature.
     pub fn get_chunk_grid(
         &self,
@@ -367,7 +285,7 @@ impl GroupedChunkPlan {
                         crate::errors::backend::IncompatibleDimensionalitySnafu {
                             dims: sig.dims().to_vec(),
                             shape: chunkgrid.array_shape().to_vec(),
-                            paths: vars.to_vec(),
+                            paths: vars.iter().copied().collect::<Vec<IStr>>(),
                         }
                     )?;
                 if let Some(indices) = indices {
@@ -422,7 +340,7 @@ impl GroupedChunkPlan {
                             crate::errors::backend::IncompatibleDimensionalitySnafu {
                                 dims: sig.dims().to_vec(),
                                 shape: chunkgrid.array_shape().to_vec(),
-                                paths: vars.to_vec(),
+                                paths: vars.iter().copied().collect::<Vec<IStr>>(),
                             }
                         )?;
                     if let Some(indices) = indices

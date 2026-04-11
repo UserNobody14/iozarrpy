@@ -3,8 +3,8 @@ use std::fmt::Display;
 use std::sync::Arc;
 
 use polars::prelude::{
-    DataType as PlDataType, Field, PlSmallStr,
-    Schema, TimeUnit,
+    DataType as PlDataType, Field, Schema,
+    TimeUnit,
 };
 use smallvec::SmallVec;
 use zarrs::array::ChunkGrid;
@@ -44,7 +44,6 @@ pub struct ZarrNode {
 
 /// Dimension analysis across a tree - tracks how dimensions relate across nodes.
 #[derive(Debug, Clone, Default)]
-#[allow(dead_code)] // `root_dims` / `node_dims` reserved for callers / future layout logic
 pub struct DimensionAnalysis {
     /// All unique dimensions across the tree, in output order (root dims first)
     pub all_dims: Vec<IStr>,
@@ -220,13 +219,6 @@ impl ZarrMeta {
             ));
         }
 
-        let mut field_names: BTreeSet<
-            PlSmallStr,
-        > = fields
-            .iter()
-            .map(|f| f.name().clone())
-            .collect();
-
         // Add root data variable columns
         for var in &self.root.data_vars {
             let var_str: &str = var.as_ref();
@@ -239,27 +231,6 @@ impl ZarrMeta {
                     var_str.into(),
                     m.polars_dtype.clone(),
                 ));
-                field_names
-                    .insert(var_str.into());
-            }
-        }
-
-        // CF-style auxiliary coordinates (lat/lon, …): stored in `arrays` but
-        // omitted from `data_vars` when listed as `coordinates` on another var.
-        for (var, meta) in &self.root.arrays {
-            let var_str: &str = var.as_ref();
-            if field_names.contains(var_str) {
-                continue;
-            }
-            if var_set.as_ref().is_none_or(|vs| {
-                vs.contains(var_str)
-            }) {
-                fields.push(Field::new(
-                    var_str.into(),
-                    meta.polars_dtype.clone(),
-                ));
-                field_names
-                    .insert(var_str.into());
             }
         }
 
@@ -301,18 +272,6 @@ impl ZarrMeta {
         }
 
         fields.into_iter().collect()
-    }
-
-    pub fn tidy_column_order(
-        &self,
-        variables: Option<&[IStr]>,
-    ) -> Vec<IStr> {
-        self.tidy_schema(variables)
-            .iter()
-            .map(|(name, _)| {
-                name.as_str().to_string().istr()
-            })
-            .collect()
     }
 }
 
@@ -612,4 +571,19 @@ pub struct ZarrArrayMeta {
         Option<Arc<zarrs::array::ArrayMetadata>>,
 }
 
-impl ZarrArrayMeta {}
+impl ZarrArrayMeta {
+    pub fn chunking_at_dim(
+        &self,
+        dim: &IStr,
+    ) -> Option<u64> {
+        let dim_idx = self
+            .dims
+            .iter()
+            .position(|d| d == dim)?;
+        if dim_idx >= self.chunk_shape.len() {
+            None
+        } else {
+            Some(self.chunk_shape[dim_idx])
+        }
+    }
+}

@@ -25,6 +25,7 @@ use crate::scan::shared::{
     build_coord_column, build_var_column,
     compute_in_bounds_mask,
     compute_var_chunk_indices,
+    should_include_column,
 };
 
 // =============================================================================
@@ -118,6 +119,7 @@ fn read_coord_chunks<
     dims: &[IStr],
     origin: &[u64],
     chunk_shape: &[u64],
+    with_columns: Option<&BTreeSet<IStr>>,
 ) -> BackendResult<
     std::collections::BTreeMap<IStr, ColumnData>,
 > {
@@ -127,6 +129,13 @@ fn read_coord_chunks<
     > = Default::default();
 
     for (d, dim_name) in dims.iter().enumerate() {
+        if !should_include_column(
+            dim_name,
+            with_columns,
+        ) {
+            continue;
+        }
+
         // Check if this dimension has a coordinate array
         let Some(coord_meta) =
             meta.array_by_path(*dim_name)
@@ -175,6 +184,7 @@ fn read_var_chunks<B: ChunkedDataBackendSync>(
     chunk_shape: &[u64],
     dims: &[IStr],
     vars: &[IStr],
+    with_columns: Option<&BTreeSet<IStr>>,
 ) -> BackendResult<
     Vec<(
         IStr,
@@ -192,6 +202,12 @@ fn read_var_chunks<B: ChunkedDataBackendSync>(
         // they can appear in `vars` (e.g. from `pl.col(["x","y",...])`). Reading them as
         // "variables" would create duplicate DataFrame columns (two "x" columns, etc.).
         if dims.iter().any(|d| d == name) {
+            continue;
+        }
+        if !should_include_column(
+            name,
+            with_columns,
+        ) {
             continue;
         }
 
@@ -261,7 +277,7 @@ pub fn chunk_to_df_from_grid_with_backend<
     sig: &ChunkGridSignature,
     array_shape: &[u64],
     vars: &[IStr],
-    _with_columns: Option<&BTreeSet<IStr>>,
+    with_columns: Option<&BTreeSet<IStr>>,
     chunk_subset: Option<&ChunkSubset>,
     meta: &ZarrMeta,
 ) -> BackendResult<DataFrame> {
@@ -295,6 +311,7 @@ pub fn chunk_to_df_from_grid_with_backend<
         dims,
         &origin,
         chunk_shape,
+        with_columns,
     )?;
 
     // Read variable chunks
@@ -305,6 +322,7 @@ pub fn chunk_to_df_from_grid_with_backend<
         chunk_shape,
         dims,
         vars,
+        with_columns,
     )?;
 
     // Build DataFrame columns
@@ -313,6 +331,13 @@ pub fn chunk_to_df_from_grid_with_backend<
 
     // Coordinate columns
     for (d, dim_name) in dims.iter().enumerate() {
+        if !should_include_column(
+            dim_name,
+            with_columns,
+        ) {
+            continue;
+        }
+
         let encoding = meta
             .array_by_path(*dim_name)
             .and_then(|m| m.encoding.as_ref());

@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use zarrs::array::{
     Array, AsyncArrayShardedReadableExt,
     AsyncArrayShardedReadableExtCache,
@@ -28,8 +30,11 @@ pub(crate) async fn retrieve_chunk_async(
     let idv = array
         .data_type()
         .name(ZarrVersion::V3)
-        .map(|s| s.into_owned())
-        .unwrap_or_else(|| "binary".to_string());
+        .map(|s| s.to_owned())
+        .unwrap_or_else(|| {
+            Cow::Borrowed("binary")
+        })
+        .into_owned();
     let id = idv.as_str();
     let options = CodecOptions::default();
     match id {

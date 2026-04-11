@@ -10,20 +10,17 @@ use snafu::ensure;
 use crate::IStr;
 use crate::errors::MaxChunksToReadExceededSnafu;
 use crate::scan::chunk_to_df_from_grid_with_backend_sync;
-use crate::scan::column_policy::ResolvedColumnPolicy;
 use crate::shared::HasMetadataBackendSync;
 use crate::shared::{
     ChunkedExpressionCompilerSync,
     FullyCachedZarrBackendSync,
+    expand_projection_to_flat_paths,
 };
 
 use super::iterating_common::{
     DEFAULT_BATCH_SIZE, IteratorState,
     OwnedGridGroup, collect_chunks_for_batch,
     combine_and_postprocess_batch,
-    output_columns_for_streaming_batch,
-    sort_grid_groups_for_streaming_join,
-    streaming_batch_row_cap,
 };
 
 /// Version of scan zarr sync that returns an iterator
@@ -96,37 +93,24 @@ impl ZarrIteratorInner {
     ) -> Result<(), PyErr> {
         // Get metadata from backend
         let meta = self.backend.metadata()?;
-        let effective_with_columns = self
+        // Expand struct column names to flat paths for chunk reading
+        let expanded_with_columns = self
             .with_columns
-            .clone()
-            .or_else(|| {
-                Some(
-                    meta.tidy_column_order(None)
-                        .into_iter()
-                        .collect(),
+            .as_ref()
+            .map(|cols| {
+                expand_projection_to_flat_paths(
+                    cols, &meta,
                 )
             });
-        // Expand struct column names to flat paths for chunk reading
-        let with_set: Option<BTreeSet<IStr>> =
-            effective_with_columns.as_ref().map(
-                |cols| {
-                    cols.iter().cloned().collect()
-                },
-            );
-        let policy = ResolvedColumnPolicy::new(
-            with_set, &self.expr, &meta,
-        );
-        let expanded_with_columns =
-            policy.physical_superset().cloned();
 
         // Compile grouped chunk plan
-        let (mut grouped_plan, _stats) = self
+        let (grouped_plan, _stats) = self
             .backend
             .compile_expression_sync(
                 &self.expr,
             )?;
 
-        // See `scan_zarr_with_backend_sync`: limit counts predicate plan only.
+        // Check max_chunks_to_read limit before doing any I/O
         if let Some(max_chunks) =
             self.max_chunks_to_read
         {
@@ -141,41 +125,15 @@ impl ZarrIteratorInner {
             );
         }
 
-        if let Some(ref superset) =
-            expanded_with_columns
-        {
-            grouped_plan
-                .augment_with_physical_vars(
-                    superset,
-                    meta.as_ref(),
-                )?;
-        }
-
         // Collect all grid groups upfront and convert to owned data
         // We need to own the data rather than borrow it because GroupedChunkPlan
         // will be dropped after this function returns
-        let mut grid_groups: Vec<OwnedGridGroup> =
-            grouped_plan
-                .iter_consolidated_chunks()
-                .collect::<Result<Vec<_>, _>>()?
-                .into_iter()
-                .map(OwnedGridGroup::from_consolidated)
-                .collect();
-        sort_grid_groups_for_streaming_join(
-            &mut grid_groups,
-        );
-        let batch_row_cap =
-            streaming_batch_row_cap(
-                grid_groups.len(),
-                self.batch_size,
-            );
-
-        let output_columns =
-            output_columns_for_streaming_batch(
-                meta.as_ref(),
-                self.with_columns.as_ref(),
-                expanded_with_columns.as_ref(),
-            );
+        let grid_groups: Vec<OwnedGridGroup> = grouped_plan
+            .iter_consolidated_chunks()
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .map(OwnedGridGroup::from_consolidated)
+            .collect();
 
         self.state = Some(IteratorState {
             grid_groups,
@@ -186,10 +144,8 @@ impl ZarrIteratorInner {
             total_rows_yielded: 0,
             num_rows_limit: self.num_rows,
             meta,
-            output_columns,
             expanded_with_columns,
             predicate: self.expr.clone(),
-            batch_row_cap,
         });
 
         Ok(())
@@ -232,7 +188,7 @@ impl ZarrIteratorInner {
                     group,
                     &mut state.current_chunk_idx,
                     state.current_batch_rows,
-                    state.batch_row_cap,
+                    self.batch_size,
                 );
 
             if !chunks_to_read.is_empty() {
@@ -284,7 +240,7 @@ impl ZarrIteratorInner {
 
             // Check if we have enough rows for a batch AFTER advancing position
             if state.current_batch_rows
-                >= state.batch_row_cap
+                >= self.batch_size
             {
                 break;
             }
@@ -297,23 +253,9 @@ impl ZarrIteratorInner {
             );
             state.current_batch_rows = 0;
 
-            // let meta = state.meta.clone();
-            // let wc = state
-            //     .expanded_with_columns
-            //     .clone();
-            // let backend = self.backend.clone();
             let result =
                 combine_and_postprocess_batch(
-                    batch_dfs,
-                    state,
-                    // move |df| {
-                    //     crate::scan::enrich_df_vars::enrich_df_missing_requested_vars(
-                    //         backend.as_ref(),
-                    //         df,
-                    //         &meta,
-                    //         wc.as_ref(),
-                    //     )
-                    // },
+                    batch_dfs, state,
                 )?;
             Ok(Some(result))
         } else {
