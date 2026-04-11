@@ -40,20 +40,17 @@ def test_arco_era5_specific_humidity_matches_xarray_point() -> None:
     longitude = 28.5
 
     ds = xr.open_zarr(ARCO_ERA5_URL)
-    try:
-        v_xr = float(
-            ds["specific_humidity"]
-            .sel(
-                time=t0,
-                level=level,
-                latitude=latitude,
-                longitude=longitude,
-                method="nearest",
-            )
-            .values
+    v_xr = float(
+        ds["specific_humidity"]
+        .sel(
+            time=t0,
+            level=level,
+            latitude=latitude,
+            longitude=longitude,
+            method="nearest",
         )
-    finally:
-        ds.close()
+        .values
+    )
 
     df = (
         rainbear.scan_zarr(ARCO_ERA5_URL)
@@ -63,7 +60,7 @@ def test_arco_era5_specific_humidity_matches_xarray_point() -> None:
             & (pl.col("latitude") == latitude)
             & (pl.col("longitude") == longitude)
         )
-        .select("specific_humidity")
+        .select(["specific_humidity", "latitude", "longitude", "time", "level"])
         .collect()
     )
     assert df.height == 1
