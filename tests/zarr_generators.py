@@ -129,7 +129,7 @@ def create_grid_dataset_constant():
     Create a synthetic dataset with linear gradients for testing interpolation.
     """
     # Define grid dimensions
-    nx, ny = 400, 400
+    nx, ny = 100, 100
     nt = 3  # number of time points
     nl = 10  # number of lead times
 
