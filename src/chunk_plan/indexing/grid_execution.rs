@@ -30,7 +30,9 @@ use crate::scan::column_policy::group_supplies_array_or_1d_enrichable;
 /// Owned version of [`ConsolidatedGridGroup`]: the plan is often dropped while
 /// streaming iteration continues.
 pub(crate) struct OwnedGridGroup {
-    pub sig: Arc<crate::chunk_plan::ChunkGridSignature>,
+    pub sig: Arc<
+        crate::chunk_plan::ChunkGridSignature,
+    >,
     pub vars: Vec<IStr>,
     pub chunk_indices: Vec<Vec<u64>>,
     pub chunk_subsets: Vec<Option<ChunkSubset>>,
@@ -65,7 +67,8 @@ pub(crate) struct GridGroupExecutionOpts<'a> {
     /// Drop 1D coord-only grids redundant with a multi-dim data grid (sync + streaming).
     pub drop_redundant_1d_coords: bool,
     /// If set, drop groups that cannot supply predicate / output columns in isolation.
-    pub streaming_batch_io_cut: Option<StreamingBatchIoCut<'a>>,
+    pub streaming_batch_io_cut:
+        Option<StreamingBatchIoCut<'a>>,
 }
 
 impl GroupedChunkPlan {
@@ -90,7 +93,9 @@ impl GroupedChunkPlan {
             groups =
                 filter_redundant_coord_only_groups(groups, meta);
         }
-        if let Some(cut) = opts.streaming_batch_io_cut {
+        if let Some(cut) =
+            opts.streaming_batch_io_cut
+        {
             groups = apply_streaming_batch_io_cut(
                 groups,
                 cut.predicate_refs,

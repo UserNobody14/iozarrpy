@@ -26,7 +26,8 @@ use crate::chunk_plan::{
     ChunkGridSignature, ChunkSubset,
 };
 use crate::scan::column_policy::{
-    DimMaterialization, ReadSpec, build_chunk_physical_plan,
+    DimMaterialization, ReadSpec,
+    build_chunk_physical_plan,
 };
 use crate::scan::shared::{
     build_coord_column, build_var_column,
@@ -147,12 +148,10 @@ async fn execute_read_async<
             )
             .await?
         }
-        ReadSpec::Chunk { indices } => {
-            (*backend
-                .read_chunk_async(&path, &indices)
-                .await?)
-            .clone()
-        }
+        ReadSpec::Chunk { indices } => (*backend
+            .read_chunk_async(&path, &indices)
+            .await?)
+            .clone(),
     };
     Ok((path, data))
 }
@@ -221,8 +220,10 @@ pub async fn chunk_to_df_from_grid_with_backend<
         ));
     }
 
-    let mut loaded: BTreeMap<IStr, Arc<ColumnData>> =
-        BTreeMap::new();
+    let mut loaded: BTreeMap<
+        IStr,
+        Arc<ColumnData>,
+    > = BTreeMap::new();
     while let Some(res) = read_futs.next().await {
         let (path, data) = res?;
         loaded.insert(path, Arc::new(data));

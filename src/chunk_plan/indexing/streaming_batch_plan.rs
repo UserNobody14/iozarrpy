@@ -16,10 +16,13 @@ use crate::meta::ZarrMeta;
 use super::grid_execution::OwnedGridGroup;
 
 /// Max chunk reads coalesced into one driver step before flushing (memory / parallelism).
-pub(crate) const MAX_DRIVER_CHUNKS_COALESCED: usize = 100;
+pub(crate) const MAX_DRIVER_CHUNKS_COALESCED:
+    usize = 100;
 
 /// One physical chunk read: index into [`OwnedGridGroup::chunk_indices`].
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+#[derive(
+    Clone, Copy, Debug, Eq, PartialEq, Hash,
+)]
 pub(crate) struct ChunkReadRef {
     pub group_idx: usize,
     pub chunk_slot: usize,
@@ -46,7 +49,10 @@ pub(crate) fn distinct_chunk_slots_in_batches(
     let mut seen = BTreeSet::new();
     for b in batches {
         for r in &b.reads {
-            seen.insert((r.group_idx, r.chunk_slot));
+            seen.insert((
+                r.group_idx,
+                r.chunk_slot,
+            ));
         }
     }
     seen.len()
@@ -65,7 +71,9 @@ pub(crate) fn build_streaming_schedule(
     }
     if groups.len() == 1 {
         return ScheduleBuilt::JoinClosed {
-            batches: build_single_group_batches(groups, batch_size),
+            batches: build_single_group_batches(
+                groups, batch_size,
+            ),
         };
     }
 
@@ -78,9 +86,7 @@ pub(crate) fn build_streaming_schedule(
     let driver_idx = pick_driver_group(groups);
     ScheduleBuilt::JoinClosed {
         batches: build_multi_group_batches(
-            groups,
-            driver_idx,
-            &join_dims,
+            groups, driver_idx, &join_dims,
             batch_size,
         ),
     }
@@ -107,7 +113,10 @@ fn join_dimension_intersection(
             .collect();
         acc = Some(match acc {
             None => s,
-            Some(i) => i.intersection(&s).cloned().collect(),
+            Some(i) => i
+                .intersection(&s)
+                .cloned()
+                .collect(),
         });
     }
     let inter = acc.unwrap_or_default();
@@ -119,7 +128,9 @@ fn join_dimension_intersection(
         .collect()
 }
 
-fn pick_driver_group(groups: &[OwnedGridGroup]) -> usize {
+fn pick_driver_group(
+    groups: &[OwnedGridGroup],
+) -> usize {
     groups
         .iter()
         .enumerate()
@@ -144,7 +155,8 @@ fn build_single_group_batches(
     for slot in 0..g.chunk_indices.len() {
         let rows = chunk_element_count(g, slot);
         if cur_rows > 0
-            && cur_rows.saturating_add(rows) > batch_size
+            && cur_rows.saturating_add(rows)
+                > batch_size
         {
             out.push(cur);
             cur = StreamingBatch::default();
@@ -156,7 +168,9 @@ fn build_single_group_batches(
         });
         cur_rows = cur_rows.saturating_add(rows);
 
-        if cur.reads.len() >= MAX_DRIVER_CHUNKS_COALESCED {
+        if cur.reads.len()
+            >= MAX_DRIVER_CHUNKS_COALESCED
+        {
             out.push(cur);
             cur = StreamingBatch::default();
             cur_rows = 0;
@@ -180,19 +194,21 @@ fn build_multi_group_batches(
     let mut acc_rows = 0usize;
 
     for slot in 0..driver.chunk_indices.len() {
-        let rows = chunk_element_count(driver, slot);
+        let rows =
+            chunk_element_count(driver, slot);
         let overflow_rows = acc_rows > 0
-            && acc_rows.saturating_add(rows) > batch_size;
-        let overflow_count =
-            acc_slots.len() >= MAX_DRIVER_CHUNKS_COALESCED;
+            && acc_rows.saturating_add(rows)
+                > batch_size;
+        let overflow_count = acc_slots.len()
+            >= MAX_DRIVER_CHUNKS_COALESCED;
         if overflow_rows || overflow_count {
             if !acc_slots.is_empty() {
-                batches.push(batch_for_driver_slots(
-                    groups,
-                    driver_idx,
-                    &acc_slots,
-                    join_dims,
-                ));
+                batches.push(
+                    batch_for_driver_slots(
+                        groups, driver_idx,
+                        &acc_slots, join_dims,
+                    ),
+                );
             }
             acc_slots.clear();
             acc_rows = 0;
@@ -202,9 +218,7 @@ fn build_multi_group_batches(
     }
     if !acc_slots.is_empty() {
         batches.push(batch_for_driver_slots(
-            groups,
-            driver_idx,
-            &acc_slots,
+            groups, driver_idx, &acc_slots,
             join_dims,
         ));
     }
@@ -228,7 +242,8 @@ fn batch_for_driver_slots(
         if j == driver_idx {
             continue;
         }
-        let mut covered: BTreeSet<usize> = BTreeSet::new();
+        let mut covered: BTreeSet<usize> =
+            BTreeSet::new();
         for &ds in driver_slots {
             for slot in 0..g.chunk_indices.len() {
                 if chunks_overlap_on_join_dims(
@@ -252,7 +267,10 @@ fn batch_for_driver_slots(
     StreamingBatch { reads }
 }
 
-fn dim_axis(sig_dims: &[IStr], dim: IStr) -> Option<usize> {
+fn dim_axis(
+    sig_dims: &[IStr],
+    dim: IStr,
+) -> Option<usize> {
     sig_dims.iter().position(|d| *d == dim)
 }
 
@@ -277,14 +295,20 @@ fn chunks_overlap_on_join_dims(
     join_dims: &[IStr],
 ) -> bool {
     for dim in join_dims {
-        let Some(ia) = dim_axis(ga.sig.dims(), *dim) else {
+        let Some(ia) =
+            dim_axis(ga.sig.dims(), *dim)
+        else {
             return false;
         };
-        let Some(ib) = dim_axis(gb.sig.dims(), *dim) else {
+        let Some(ib) =
+            dim_axis(gb.sig.dims(), *dim)
+        else {
             return false;
         };
-        let (sa, ea) = axis_interval(ga, slot_a, ia);
-        let (sb, eb) = axis_interval(gb, slot_b, ib);
+        let (sa, ea) =
+            axis_interval(ga, slot_a, ia);
+        let (sb, eb) =
+            axis_interval(gb, slot_b, ib);
         if ea <= sb || eb <= sa {
             return false;
         }
@@ -292,7 +316,10 @@ fn chunks_overlap_on_join_dims(
     true
 }
 
-fn chunk_element_count(g: &OwnedGridGroup, slot: usize) -> usize {
+fn chunk_element_count(
+    g: &OwnedGridGroup,
+    slot: usize,
+) -> usize {
     let idx = &g.chunk_indices[slot];
     let cs = g.sig.chunk_shape();
     let a = &g.array_shape;

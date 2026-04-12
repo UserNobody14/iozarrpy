@@ -7,8 +7,8 @@
 use std::sync::Once;
 
 use zarrs_codec::{
-    CodecRuntimePluginV2, CodecRuntimePluginV3, register_codec_v2,
-    register_codec_v3,
+    CodecRuntimePluginV2, CodecRuntimePluginV3,
+    register_codec_v2, register_codec_v3,
 };
 
 use super::aliases::ensure_alias_codec_plugin_registered;

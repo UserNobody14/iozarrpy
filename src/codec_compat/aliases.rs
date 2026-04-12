@@ -10,15 +10,21 @@ use std::sync::LazyLock;
 use std::sync::Once;
 
 use parking_lot::RwLock;
-use zarrs::array::codec::{BitroundCodec, BitroundCodecConfiguration};
+use zarrs::array::codec::{
+    BitroundCodec, BitroundCodecConfiguration,
+};
 use zarrs::metadata::v3::MetadataV3;
 use zarrs::plugin::PluginCreateError;
-use zarrs_codec::{Codec, CodecRuntimePluginV3, register_codec_v3};
+use zarrs_codec::{
+    Codec, CodecRuntimePluginV3,
+    register_codec_v3,
+};
 
 use super::fso::fixedscaleoffset_inner_from_v3;
 
-static ALIASES: LazyLock<RwLock<HashMap<String, String>>> =
-    LazyLock::new(|| RwLock::new(HashMap::new()));
+static ALIASES: LazyLock<
+    RwLock<HashMap<String, String>>,
+> = LazyLock::new(|| RwLock::new(HashMap::new()));
 
 static ALIAS_PLUGIN: Once = Once::new();
 
@@ -52,17 +58,24 @@ fn dispatch_aliased_v3(
             let inner = BitroundCodec::new_with_configuration(
                 &configuration,
             )?;
-            Ok(Codec::ArrayToArray(Arc::new(inner)))
+            Ok(Codec::ArrayToArray(Arc::new(
+                inner,
+            )))
         }
         "numcodecs.fixedscaleoffset" => {
-            let inner = fixedscaleoffset_inner_from_v3(
-                metadata,
-            )?;
-            Ok(Codec::ArrayToArray(Arc::new(inner)))
+            let inner =
+                fixedscaleoffset_inner_from_v3(
+                    metadata,
+                )?;
+            Ok(Codec::ArrayToArray(Arc::new(
+                inner,
+            )))
         }
-        _ => Err(PluginCreateError::Other(format!(
-            "internal error: unhandled canonical codec {canonical:?}"
-        ))),
+        _ => Err(PluginCreateError::Other(
+            format!(
+                "internal error: unhandled canonical codec {canonical:?}"
+            ),
+        )),
     }
 }
 
@@ -77,7 +90,9 @@ pub fn set_codec_aliases(
         if from.trim().is_empty() {
             return Err("codec alias key must not be empty".to_string());
         }
-        let to_resolved = resolve_canonical_target(&to)?.to_string();
+        let to_resolved =
+            resolve_canonical_target(&to)?
+                .to_string();
         resolved.insert(from, to_resolved);
     }
     *ALIASES.write() = resolved;
@@ -89,7 +104,8 @@ fn alias_match_name(name: &str) -> bool {
 }
 
 /// Register a single runtime plugin that consults [`ALIASES`] on each resolve.
-pub(crate) fn ensure_alias_codec_plugin_registered() {
+pub(crate) fn ensure_alias_codec_plugin_registered()
+ {
     ALIAS_PLUGIN.call_once(|| {
         let _h = register_codec_v3(CodecRuntimePluginV3::new(
             alias_match_name,

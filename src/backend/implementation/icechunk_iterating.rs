@@ -28,16 +28,19 @@ use crate::shared::HasMetadataBackendAsync;
 
 use super::FullyCachedIcechunkBackendAsync;
 use super::iterating_common::{
-    DEFAULT_BATCH_SIZE, IteratorState, LegacyBatchState,
-    StreamingSchedule, collect_chunks_for_batch,
+    DEFAULT_BATCH_SIZE, IteratorState,
+    LegacyBatchState, StreamingSchedule,
+    collect_chunks_for_batch,
     combine_and_postprocess_batch,
     empty_streaming_schema_batch,
     expr_top_literal_bool,
     output_columns_for_streaming_batch,
 };
 use crate::chunk_plan::{
-    GridGroupExecutionOpts, ScheduleBuilt, apply_streaming_batch_io_cut,
-    build_streaming_schedule, distinct_chunk_slots_in_batches,
+    GridGroupExecutionOpts, ScheduleBuilt,
+    apply_streaming_batch_io_cut,
+    build_streaming_schedule,
+    distinct_chunk_slots_in_batches,
     streaming_grid_chunk_read_count,
 };
 
@@ -274,14 +277,16 @@ impl IcechunkIterator {
                 if *cursor >= batches.len() {
                     return Ok(None);
                 }
-                let mut reads =
-                    batches[*cursor].reads.clone();
+                let mut reads = batches[*cursor]
+                    .reads
+                    .clone();
                 *cursor += 1;
                 reads.sort_by_key(|r| {
                     (r.group_idx, r.chunk_slot)
                 });
 
-                let backend = self.backend.clone();
+                let backend =
+                    self.backend.clone();
                 let expanded_with_columns = state
                     .expanded_with_columns
                     .clone();
@@ -356,7 +361,8 @@ impl IcechunkIterator {
                 while leg.current_group_idx
                     < state.grid_groups.len()
                 {
-                    let group = &state.grid_groups
+                    let group = &state
+                        .grid_groups
                         [leg.current_group_idx];
 
                     let chunks_to_read =
@@ -367,19 +373,24 @@ impl IcechunkIterator {
                             self.batch_size,
                         );
 
-                    if !chunks_to_read.is_empty() {
-                        let vars = group.vars.clone();
+                    if !chunks_to_read.is_empty()
+                    {
+                        let vars =
+                            group.vars.clone();
                         let backend =
                             self.backend.clone();
-                        let sig = group.sig.clone();
-                        let array_shape =
-                            group.array_shape.clone();
+                        let sig =
+                            group.sig.clone();
+                        let array_shape = group
+                            .array_shape
+                            .clone();
                         let expanded_with_columns = state
                             .expanded_with_columns
                             .clone();
                         let max_concurrency =
                             self.max_concurrency;
-                        let meta = state.meta.clone();
+                        let meta =
+                            state.meta.clone();
 
                         let chunk_dfs: Result<Vec<DataFrame>, PyErr> = self.runtime.block_on(async {
                             let semaphore = Arc::new(Semaphore::new(max_concurrency));
@@ -420,14 +431,18 @@ impl IcechunkIterator {
                         for df in chunk_dfs? {
                             leg.current_batch_rows +=
                                 df.height();
-                            leg.current_batch.push(df);
+                            leg.current_batch
+                                .push(df);
                         }
                     }
 
                     if leg.current_chunk_idx
-                        >= group.chunk_indices.len()
+                        >= group
+                            .chunk_indices
+                            .len()
                     {
-                        leg.current_group_idx += 1;
+                        leg.current_group_idx +=
+                            1;
                         leg.current_chunk_idx = 0;
                     }
 
@@ -439,9 +454,11 @@ impl IcechunkIterator {
                 }
 
                 if !leg.current_batch.is_empty() {
-                    let batch_dfs = std::mem::take(
-                        &mut leg.current_batch,
-                    );
+                    let batch_dfs =
+                        std::mem::take(
+                            &mut leg
+                                .current_batch,
+                        );
                     leg.current_batch_rows = 0;
 
                     let result =

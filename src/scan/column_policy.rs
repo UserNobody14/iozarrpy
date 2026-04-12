@@ -2,16 +2,21 @@
 //! **shared eligibility** for 1D variables (chunk group vs post-merge enrichment),
 //! and **per-chunk physical read plans** (deduped zarr reads + column materialization).
 
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{
+    BTreeMap, BTreeSet, HashSet,
+};
 
 use polars::prelude::Expr;
 
 use crate::IStr;
 use crate::chunk_plan::collect_column_refs;
-use crate::errors::{BackendError, BackendResult};
+use crate::errors::{
+    BackendError, BackendResult,
+};
 use crate::meta::ZarrMeta;
 use crate::scan::shared::{
-    compute_var_chunk_indices, should_include_column,
+    compute_var_chunk_indices,
+    should_include_column,
 };
 use crate::shared::expand_projection_to_flat_paths;
 
@@ -270,7 +275,8 @@ fn add_var_step(
     if seen_names.contains(&name) {
         return Ok(());
     }
-    if !should_include_column(&name, with_columns) {
+    if !should_include_column(&name, with_columns)
+    {
         return Ok(());
     }
     if primary_dims.iter().any(|d| d == &name) {
@@ -279,19 +285,18 @@ fn add_var_step(
     let Some(var_meta) = meta.array_by_path(name)
     else {
         if require_known {
-            return Err(BackendError::UnknownDataVar {
-                name,
-                available_vars: meta
-                    .all_data_var_paths(),
-            });
+            return Err(
+                BackendError::UnknownDataVar {
+                    name,
+                    available_vars: meta
+                        .all_data_var_paths(),
+                },
+            );
         }
         return Ok(());
     };
-    let var_dims: Vec<IStr> = var_meta
-        .dims
-        .iter()
-        .cloned()
-        .collect();
+    let var_dims: Vec<IStr> =
+        var_meta.dims.iter().cloned().collect();
     let (chunk_indices, offsets) =
         compute_var_chunk_indices(
             primary_idx,
@@ -313,7 +318,9 @@ fn add_var_step(
         name,
         path: var_meta.path,
         var_dims,
-        var_chunk_shape: var_meta.chunk_shape.to_vec(),
+        var_chunk_shape: var_meta
+            .chunk_shape
+            .to_vec(),
         offsets,
     });
     Ok(())
@@ -373,15 +380,19 @@ pub(crate) fn build_chunk_physical_plan(
         // Always materialize every primary-grid dimension column: row-major
         // layout and predicates reference these names even when Polars projection
         // omits them from IO `with_columns` (see streaming empty-result tests).
-        let mat = match meta.array_by_path(*dim_name) {
+        let mat = match meta
+            .array_by_path(*dim_name)
+        {
             Some(am) if am.shape.len() == 1 => {
                 let start = origin[dim_idx];
-                let len = primary_chunk_shape[dim_idx];
+                let len =
+                    primary_chunk_shape[dim_idx];
                 register_read(
                     &mut reads_acc,
                     am.path,
                     ReadSpec::Slice1d {
-                        coord_chunk_shape: am.chunk_shape[0],
+                        coord_chunk_shape: am
+                            .chunk_shape[0],
                         start,
                         len,
                     },
@@ -449,9 +460,5 @@ pub(crate) fn build_chunk_physical_plan(
     let reads: Vec<(IStr, ReadSpec)> =
         reads_acc.into_iter().collect();
 
-    Ok(ChunkPhysicalPlan {
-        dims,
-        vars,
-        reads,
-    })
+    Ok(ChunkPhysicalPlan { dims, vars, reads })
 }

@@ -16,7 +16,8 @@ use crate::reader::{
     compute_strides,
 };
 use crate::scan::column_policy::{
-    DimMaterialization, ReadSpec, build_chunk_physical_plan,
+    DimMaterialization, ReadSpec,
+    build_chunk_physical_plan,
 };
 use crate::scan::shared::{
     build_coord_column, build_var_column,
@@ -108,7 +109,9 @@ fn read_coord_range_chunked<
     }))
 }
 
-fn execute_read_sync<B: ChunkedDataBackendSync>(
+fn execute_read_sync<
+    B: ChunkedDataBackendSync,
+>(
     backend: &B,
     path: &IStr,
     spec: &ReadSpec,
@@ -126,7 +129,10 @@ fn execute_read_sync<B: ChunkedDataBackendSync>(
             *len,
         ),
         ReadSpec::Chunk { indices } => {
-            Ok((*backend.read_chunk_sync(path, indices)?).clone())
+            Ok((*backend.read_chunk_sync(
+                path, indices,
+            )?)
+            .clone())
         }
     }
 }
@@ -184,11 +190,14 @@ pub fn chunk_to_df_from_grid_with_backend<
         with_columns,
     )?;
 
-    let mut loaded: BTreeMap<IStr, Arc<ColumnData>> =
-        BTreeMap::new();
+    let mut loaded: BTreeMap<
+        IStr,
+        Arc<ColumnData>,
+    > = BTreeMap::new();
     for (path, spec) in &plan.reads {
-        let data =
-            execute_read_sync(backend, path, spec)?;
+        let data = execute_read_sync(
+            backend, path, spec,
+        )?;
         loaded.insert(*path, Arc::new(data));
     }
 

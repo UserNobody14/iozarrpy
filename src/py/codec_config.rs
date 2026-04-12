@@ -15,8 +15,10 @@ use pyo3::prelude::*;
 pub fn configure_zarr_codecs(
     aliases: Option<HashMap<String, String>>,
 ) -> PyResult<()> {
-    crate::codec_compat::set_codec_aliases(aliases.unwrap_or_default())
-        .map_err(|e| {
-            pyo3::exceptions::PyValueError::new_err(e)
-        })
+    crate::codec_compat::set_codec_aliases(
+        aliases.unwrap_or_default(),
+    )
+    .map_err(|e| {
+        pyo3::exceptions::PyValueError::new_err(e)
+    })
 }

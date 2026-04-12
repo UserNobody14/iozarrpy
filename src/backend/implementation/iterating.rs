@@ -18,16 +18,19 @@ use crate::shared::{
 };
 
 use super::iterating_common::{
-    DEFAULT_BATCH_SIZE, IteratorState, LegacyBatchState,
-    StreamingSchedule, collect_chunks_for_batch,
+    DEFAULT_BATCH_SIZE, IteratorState,
+    LegacyBatchState, StreamingSchedule,
+    collect_chunks_for_batch,
     combine_and_postprocess_batch,
     empty_streaming_schema_batch,
     expr_top_literal_bool,
     output_columns_for_streaming_batch,
 };
 use crate::chunk_plan::{
-    GridGroupExecutionOpts, ScheduleBuilt, apply_streaming_batch_io_cut,
-    build_streaming_schedule, distinct_chunk_slots_in_batches,
+    GridGroupExecutionOpts, ScheduleBuilt,
+    apply_streaming_batch_io_cut,
+    build_streaming_schedule,
+    distinct_chunk_slots_in_batches,
     streaming_grid_chunk_read_count,
 };
 
@@ -135,25 +138,29 @@ impl ZarrIteratorInner {
             expr_top_literal_bool(&self.expr)
                 == Some(false);
 
-        let groups_uncut = grouped_plan.owned_grid_groups_for_io(
-            meta.as_ref(),
-            GridGroupExecutionOpts {
-                literal_false_clear: emit_empty_schema_once,
-                drop_redundant_1d_coords: !emit_empty_schema_once,
-                streaming_batch_io_cut: None,
-            },
-        )?;
-
-        let grid_groups = if emit_empty_schema_once {
-            groups_uncut
-        } else {
-            apply_streaming_batch_io_cut(
-                groups_uncut,
-                policy.predicate_refs(),
-                self.with_columns.as_ref(),
+        let groups_uncut = grouped_plan
+            .owned_grid_groups_for_io(
                 meta.as_ref(),
-            )
-        };
+                GridGroupExecutionOpts {
+                    literal_false_clear:
+                        emit_empty_schema_once,
+                    drop_redundant_1d_coords:
+                        !emit_empty_schema_once,
+                    streaming_batch_io_cut: None,
+                },
+            )?;
+
+        let grid_groups =
+            if emit_empty_schema_once {
+                groups_uncut
+            } else {
+                apply_streaming_batch_io_cut(
+                    groups_uncut,
+                    policy.predicate_refs(),
+                    self.with_columns.as_ref(),
+                    meta.as_ref(),
+                )
+            };
 
         let built = build_streaming_schedule(
             &grid_groups,
@@ -162,7 +169,9 @@ impl ZarrIteratorInner {
         );
 
         let schedule = match built {
-            ScheduleBuilt::JoinClosed { batches } => {
+            ScheduleBuilt::JoinClosed {
+                batches,
+            } => {
                 if let Some(max_chunks) =
                     self.max_chunks_to_read
                 {
@@ -275,14 +284,16 @@ impl ZarrIteratorInner {
                 if *cursor >= batches.len() {
                     return Ok(None);
                 }
-                let mut reads =
-                    batches[*cursor].reads.clone();
+                let mut reads = batches[*cursor]
+                    .reads
+                    .clone();
                 *cursor += 1;
                 reads.sort_by_key(|r| {
                     (r.group_idx, r.chunk_slot)
                 });
 
-                let backend = self.backend.clone();
+                let backend =
+                    self.backend.clone();
                 let expanded_with_columns = state
                     .expanded_with_columns
                     .clone();
@@ -323,7 +334,8 @@ impl ZarrIteratorInner {
                 while leg.current_group_idx
                     < state.grid_groups.len()
                 {
-                    let group = &state.grid_groups
+                    let group = &state
+                        .grid_groups
                         [leg.current_group_idx];
 
                     let chunks_to_read =
@@ -334,19 +346,23 @@ impl ZarrIteratorInner {
                             self.batch_size,
                         );
 
-                    if !chunks_to_read.is_empty() {
+                    if !chunks_to_read.is_empty()
+                    {
                         let vars: Vec<IStr> =
                             group.vars.clone();
 
                         let backend =
                             self.backend.clone();
-                        let sig = group.sig.clone();
-                        let array_shape =
-                            group.array_shape.clone();
+                        let sig =
+                            group.sig.clone();
+                        let array_shape = group
+                            .array_shape
+                            .clone();
                         let expanded_with_columns = state
                             .expanded_with_columns
                             .clone();
-                        let meta = state.meta.clone();
+                        let meta =
+                            state.meta.clone();
 
                         let dfs: Vec<DataFrame> =
                             chunks_to_read
@@ -371,14 +387,18 @@ impl ZarrIteratorInner {
                         for df in dfs {
                             leg.current_batch_rows +=
                                 df.height();
-                            leg.current_batch.push(df);
+                            leg.current_batch
+                                .push(df);
                         }
                     }
 
                     if leg.current_chunk_idx
-                        >= group.chunk_indices.len()
+                        >= group
+                            .chunk_indices
+                            .len()
                     {
-                        leg.current_group_idx += 1;
+                        leg.current_group_idx +=
+                            1;
                         leg.current_chunk_idx = 0;
                     }
 
@@ -390,9 +410,11 @@ impl ZarrIteratorInner {
                 }
 
                 if !leg.current_batch.is_empty() {
-                    let batch_dfs = std::mem::take(
-                        &mut leg.current_batch,
-                    );
+                    let batch_dfs =
+                        std::mem::take(
+                            &mut leg
+                                .current_batch,
+                        );
                     leg.current_batch_rows = 0;
 
                     let result =

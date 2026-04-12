@@ -3,7 +3,8 @@
 use std::sync::Arc;
 
 use zarrs::array::codec::{
-    FixedScaleOffsetCodec, FixedScaleOffsetCodecConfiguration,
+    FixedScaleOffsetCodec,
+    FixedScaleOffsetCodecConfiguration,
 };
 use zarrs::metadata::v2::MetadataV2;
 use zarrs::metadata::v3::MetadataV3;
@@ -33,7 +34,10 @@ fn apply_fixedscaleoffset_numpy_dtype_normalization(
 
 pub(crate) fn fixedscaleoffset_inner_from_v3(
     metadata: &MetadataV3,
-) -> Result<FixedScaleOffsetCodec, PluginCreateError> {
+) -> Result<
+    FixedScaleOffsetCodec,
+    PluginCreateError,
+> {
     let mut configuration: FixedScaleOffsetCodecConfiguration =
         metadata.to_typed_configuration()?;
     apply_fixedscaleoffset_numpy_dtype_normalization(
@@ -46,7 +50,10 @@ pub(crate) fn fixedscaleoffset_inner_from_v3(
 
 pub(crate) fn fixedscaleoffset_inner_from_v2(
     metadata: &MetadataV2,
-) -> Result<FixedScaleOffsetCodec, PluginCreateError> {
+) -> Result<
+    FixedScaleOffsetCodec,
+    PluginCreateError,
+> {
     let mut configuration: FixedScaleOffsetCodecConfiguration =
         metadata.to_typed_configuration()?;
     apply_fixedscaleoffset_numpy_dtype_normalization(
@@ -61,7 +68,8 @@ pub(crate) fn fixedscaleoffset_inner_from_v2(
 pub(crate) fn fixedscaleoffset_codec_from_v3_metadata(
     metadata: &MetadataV3,
 ) -> Result<Codec, PluginCreateError> {
-    let inner = fixedscaleoffset_inner_from_v3(metadata)?;
+    let inner =
+        fixedscaleoffset_inner_from_v3(metadata)?;
     Ok(Codec::ArrayToArray(Arc::new(inner)))
 }
 
@@ -69,6 +77,7 @@ pub(crate) fn fixedscaleoffset_codec_from_v3_metadata(
 pub(crate) fn fixedscaleoffset_codec_from_v2_metadata(
     metadata: &MetadataV2,
 ) -> Result<Codec, PluginCreateError> {
-    let inner = fixedscaleoffset_inner_from_v2(metadata)?;
+    let inner =
+        fixedscaleoffset_inner_from_v2(metadata)?;
     Ok(Codec::ArrayToArray(Arc::new(inner)))
 }

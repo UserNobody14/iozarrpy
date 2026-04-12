@@ -65,16 +65,20 @@ pub fn scan_zarr_with_backend_sync(
         backend.compile_expression_sync(&expr)?;
 
     let emit_empty_schema_once =
-        expr_top_literal_bool(&expr) == Some(false);
+        expr_top_literal_bool(&expr)
+            == Some(false);
 
-    let grid_groups = grouped_plan.owned_grid_groups_for_io(
-        &meta,
-        GridGroupExecutionOpts {
-            literal_false_clear: emit_empty_schema_once,
-            drop_redundant_1d_coords: !emit_empty_schema_once,
-            streaming_batch_io_cut: None,
-        },
-    )?;
+    let grid_groups = grouped_plan
+        .owned_grid_groups_for_io(
+            &meta,
+            GridGroupExecutionOpts {
+                literal_false_clear:
+                    emit_empty_schema_once,
+                drop_redundant_1d_coords:
+                    !emit_empty_schema_once,
+                streaming_batch_io_cut: None,
+            },
+        )?;
 
     // Check max_chunks_to_read limit before doing any I/O
     if let Some(max_chunks) = max_chunks_to_read {
@@ -100,7 +104,12 @@ pub fn scan_zarr_with_backend_sync(
             .chunk_indices
             .iter()
             .cloned()
-            .zip(group.chunk_subsets.iter().cloned())
+            .zip(
+                group
+                    .chunk_subsets
+                    .iter()
+                    .cloned(),
+            )
         {
             let df =
                 chunk_to_df_from_grid_with_backend(

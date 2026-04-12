@@ -35,12 +35,12 @@ pub(crate) fn expr_top_literal_bool(
     expr: &Expr,
 ) -> Option<bool> {
     match expr {
-        Expr::Literal(LiteralValue::Scalar(s)) => {
-            match s.value() {
-                AnyValue::Boolean(b) => Some(*b),
-                _ => None,
-            }
-        }
+        Expr::Literal(LiteralValue::Scalar(
+            s,
+        )) => match s.value() {
+            AnyValue::Boolean(b) => Some(*b),
+            _ => None,
+        },
         Expr::Alias(inner, _) => {
             expr_top_literal_bool(inner)
         }
@@ -302,14 +302,17 @@ pub(crate) fn combine_and_postprocess_batch(
 pub(crate) fn empty_streaming_schema_batch(
     state: &IteratorState,
 ) -> Result<DataFrame, BackendError> {
-    let keys: Vec<IStr> = match &state.output_columns {
-        Some(cols) => cols.clone(),
-        None => state.meta.tidy_column_order(None),
-    };
+    let keys: Vec<IStr> =
+        match &state.output_columns {
+            Some(cols) => cols.clone(),
+            None => {
+                state.meta.tidy_column_order(None)
+            }
+        };
     let df = DataFrame::empty_with_schema(
-        &state.meta.tidy_schema(Some(
-            keys.as_slice(),
-        )),
+        &state
+            .meta
+            .tidy_schema(Some(keys.as_slice())),
     );
     let df = if state.meta.is_hierarchical() {
         restructure_to_structs(&df, &state.meta)?
