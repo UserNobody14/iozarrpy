@@ -154,14 +154,14 @@ fn filter_redundant_coord_only_groups(
                     return false;
                 }
                 let od = other.sig.dims();
-                if od.len() < 2 || !od.iter().any(|x| *x == d) {
+                if od.len() < 2 || !od.contains(&d) {
                     return false;
                 }
                 other.vars.iter().any(|v| {
                     meta.array_by_path(*v)
                         .map(|am| {
                             array_dims_match_signature(
-                                &am, od,
+                                am, od,
                             )
                         })
                         .unwrap_or(false)

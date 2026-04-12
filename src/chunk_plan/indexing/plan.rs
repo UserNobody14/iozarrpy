@@ -285,7 +285,7 @@ impl GroupedChunkPlan {
                         crate::errors::backend::IncompatibleDimensionalitySnafu {
                             dims: sig.dims().to_vec(),
                             shape: chunkgrid.array_shape().to_vec(),
-                            paths: vars.iter().copied().collect::<Vec<IStr>>(),
+                            paths: vars.to_vec(),
                         }
                     )?;
                 if let Some(indices) = indices {
@@ -340,7 +340,7 @@ impl GroupedChunkPlan {
                             crate::errors::backend::IncompatibleDimensionalitySnafu {
                                 dims: sig.dims().to_vec(),
                                 shape: chunkgrid.array_shape().to_vec(),
-                                paths: vars.iter().copied().collect::<Vec<IStr>>(),
+                                paths: vars.to_vec(),
                             }
                         )?;
                     if let Some(indices) = indices

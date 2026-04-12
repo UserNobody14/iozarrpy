@@ -43,14 +43,14 @@ fn projection_dims_used(
             .iter()
             .any(|d| d == col)
         {
-            out.insert(col.clone());
+            out.insert(*col);
             continue;
         }
         if let Some(am) =
-            meta.array_by_path(col.clone())
+            meta.array_by_path(*col)
         {
             for d in am.dims.iter() {
-                out.insert(d.clone());
+                out.insert(*d);
             }
         }
     }
@@ -75,7 +75,7 @@ fn expand_1d_aux_on_projection_dims(
             continue;
         }
         let Some(am) =
-            meta.array_by_path(p.clone())
+            meta.array_by_path(p)
         else {
             continue;
         };
@@ -104,19 +104,16 @@ pub(crate) fn expand_io_source_physical(
     predicate_refs: &BTreeSet<IStr>,
     meta: &ZarrMeta,
 ) -> Option<BTreeSet<IStr>> {
-    let mut cols = match with_columns {
-        None => return None,
-        Some(c) => c,
-    };
+    let mut cols = with_columns?;
     for r in predicate_refs {
-        cols.insert(r.clone());
+        cols.insert(*r);
     }
     // Always include every dataset dimension. Polars may omit index-only dims
     // like `point` when the projection is only filter columns + `.select(...)`,
     // but we need them in each chunk row to join/enrich aux vars (`station_id`
     // on `point`, etc.).
     for d in &meta.dim_analysis.all_dims {
-        cols.insert(d.clone());
+        cols.insert(*d);
     }
     let mut expanded =
         expand_projection_to_flat_paths(

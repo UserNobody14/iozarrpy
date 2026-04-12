@@ -231,11 +231,10 @@ impl ZarrMeta {
             let var_str: &str = var.as_ref();
             if var_set
                 .as_ref()
-                .map_or(true, |vs| {
+                .is_none_or(|vs| {
                     vs.contains(var_str)
                 })
-            {
-                if let Some(m) =
+                && let Some(m) =
                     self.root.arrays.get(var)
                 {
                     fields.push(Field::new(
@@ -245,7 +244,6 @@ impl ZarrMeta {
                     field_names
                         .insert(var_str.into());
                 }
-            }
         }
 
         // CF-style auxiliary coordinates (lat/lon, …): stored in `arrays` but
@@ -257,7 +255,7 @@ impl ZarrMeta {
             }
             if var_set
                 .as_ref()
-                .map_or(true, |vs| {
+                .is_none_or(|vs| {
                     vs.contains(var_str)
                 })
             {
