@@ -172,10 +172,7 @@ fn make_test_meta() -> ZarrMeta {
     let dim_analysis =
         DimensionAnalysis::compute(&root);
 
-    ZarrMeta {
-        root,
-        dim_analysis,
-    }
+    ZarrMeta { root, dim_analysis }
 }
 
 // =============================================================================

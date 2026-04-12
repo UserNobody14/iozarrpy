@@ -8,13 +8,13 @@ pub use crate::reader::{
     compute_strides,
 };
 
+pub use crate::scan::shared::columns::KeepMask;
 pub use crate::scan::shared::{
-    build_coord_column,
-    build_var_column, compute_in_bounds_mask,
+    build_coord_column, build_var_column,
+    compute_in_bounds_mask,
     compute_var_chunk_indices,
     should_include_column,
 };
-pub use crate::scan::shared::columns::KeepMask;
 
 pub use crate::scan::sync_scan::chunk_to_df_from_grid_with_backend;
 
@@ -23,14 +23,15 @@ pub use crate::shared::{
     ChunkedDataBackendSync,
 };
 
+pub use crate::chunk_plan::exprs::expr_plan::ExprPlan;
+pub use crate::chunk_plan::indexing::DatasetSelection;
 pub use crate::chunk_plan::{
-    ChunkGridSignature, ChunkSubset, GroupedChunkPlan,
-    LazyCompileCtx, compile_expr,
+    ChunkGridSignature, ChunkSubset,
+    GroupedChunkPlan, LazyCompileCtx,
+    compile_expr,
     compute_dims_and_lengths_unified,
     selection_to_grouped_chunk_plan_unified_from_meta,
 };
-pub use crate::chunk_plan::exprs::expr_plan::ExprPlan;
-pub use crate::chunk_plan::indexing::DatasetSelection;
 
 pub use crate::errors::BackendError;
 
