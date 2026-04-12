@@ -48,8 +48,10 @@ pub struct DimensionAnalysis {
     /// All unique dimensions across the tree, in output order (root dims first)
     pub all_dims: Vec<IStr>,
     /// Dimensions from the root node
+    #[allow(dead_code)]
     pub root_dims: Vec<IStr>,
     /// For each node path, its dimension set
+    #[allow(dead_code)]
     pub node_dims: BTreeMap<IStr, Vec<IStr>>,
     /// Dimension name -> length
     pub dim_lengths: BTreeMap<IStr, u64>,
@@ -229,21 +231,18 @@ impl ZarrMeta {
         // Add root data variable columns
         for var in &self.root.data_vars {
             let var_str: &str = var.as_ref();
-            if var_set
-                .as_ref()
-                .is_none_or(|vs| {
-                    vs.contains(var_str)
-                })
-                && let Some(m) =
-                    self.root.arrays.get(var)
-                {
-                    fields.push(Field::new(
-                        var_str.into(),
-                        m.polars_dtype.clone(),
-                    ));
-                    field_names
-                        .insert(var_str.into());
-                }
+            if var_set.as_ref().is_none_or(|vs| {
+                vs.contains(var_str)
+            }) && let Some(m) =
+                self.root.arrays.get(var)
+            {
+                fields.push(Field::new(
+                    var_str.into(),
+                    m.polars_dtype.clone(),
+                ));
+                field_names
+                    .insert(var_str.into());
+            }
         }
 
         // CF-style auxiliary coordinates (lat/lon, …): stored in `arrays` but
@@ -253,12 +252,9 @@ impl ZarrMeta {
             if field_names.contains(var_str) {
                 continue;
             }
-            if var_set
-                .as_ref()
-                .is_none_or(|vs| {
-                    vs.contains(var_str)
-                })
-            {
+            if var_set.as_ref().is_none_or(|vs| {
+                vs.contains(var_str)
+            }) {
                 fields.push(Field::new(
                     var_str.into(),
                     meta.polars_dtype.clone(),
@@ -619,6 +615,7 @@ pub struct ZarrArrayMeta {
 }
 
 impl ZarrArrayMeta {
+    #[allow(dead_code)]
     pub fn chunking_at_dim(
         &self,
         dim: &IStr,

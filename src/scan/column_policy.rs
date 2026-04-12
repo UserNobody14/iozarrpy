@@ -2,9 +2,7 @@
 //! **shared eligibility** for 1D variables (chunk group vs post-merge enrichment),
 //! and **per-chunk physical read plans** (deduped zarr reads + column materialization).
 
-use std::collections::{
-    BTreeMap, BTreeSet, HashSet,
-};
+use std::collections::{BTreeMap, BTreeSet};
 
 use polars::prelude::Expr;
 
@@ -46,8 +44,7 @@ fn projection_dims_used(
             out.insert(*col);
             continue;
         }
-        if let Some(am) =
-            meta.array_by_path(*col)
+        if let Some(am) = meta.array_by_path(*col)
         {
             for d in am.dims.iter() {
                 out.insert(*d);
@@ -74,8 +71,7 @@ fn expand_1d_aux_on_projection_dims(
         if expanded.contains(&p) {
             continue;
         }
-        let Some(am) =
-            meta.array_by_path(p)
+        let Some(am) = meta.array_by_path(p)
         else {
             continue;
         };
@@ -190,21 +186,6 @@ pub(crate) fn group_supplies_array_or_1d_enrichable(
     };
     vm.shape.len() == 1
         && sig_dims.contains(&vm.dims[0])
-}
-
-/// True if `var` names a 1D Zarr array whose dimension column is already in `columns`.
-pub(crate) fn one_d_var_enrichable_from_columns(
-    var: &IStr,
-    columns: &HashSet<IStr>,
-    meta: &ZarrMeta,
-) -> bool {
-    let Some(vm) = meta.array_by_path(var) else {
-        return false;
-    };
-    if vm.shape.len() != 1 {
-        return false;
-    }
-    columns.contains(&vm.dims[0])
 }
 
 // =============================================================================

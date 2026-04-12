@@ -264,41 +264,6 @@ impl GroupedChunkPlan {
         )
     }
 
-    /// Count total unique chunks across all grid groups.
-    ///
-    /// This deduplicates chunk indices from potentially overlapping
-    /// array subsets within each grid group.
-    pub fn total_unique_chunks(
-        &self,
-    ) -> BackendResult<usize> {
-        let mut total = 0;
-        for (sig, vars, subsets, chunkgrid) in
-            self.iter_grids()
-        {
-            let mut seen: BTreeSet<Vec<u64>> =
-                BTreeSet::new();
-            for subset in subsets.subsets_iter() {
-                let indices = chunkgrid
-                    .chunks_in_array_subset(
-                        subset,
-                    ).context(
-                        crate::errors::backend::IncompatibleDimensionalitySnafu {
-                            dims: sig.dims().to_vec(),
-                            shape: chunkgrid.array_shape().to_vec(),
-                            paths: vars.to_vec(),
-                        }
-                    )?;
-                if let Some(indices) = indices {
-                    for idx in indices.indices() {
-                        seen.insert(idx.to_vec());
-                    }
-                }
-            }
-            total += seen.len();
-        }
-        Ok(total)
-    }
-
     /// Iterate over grid groups with deduplicated chunk indices.
     ///
     /// Each group yields its signature, associated variables,

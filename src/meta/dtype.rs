@@ -1,5 +1,3 @@
-use std::borrow::Cow;
-
 use polars::prelude::DataType as PlDataType;
 use zarrs::{
     array::DataType as ZarrDataType,
@@ -17,11 +15,8 @@ pub(crate) fn zarr_dtype_to_polars(
     }
     let binding = zarr_dtype
         .name(ZarrVersion::V3)
-        .map(|s| s.to_owned())
-        .unwrap_or_else(|| {
-            Cow::Borrowed("binary")
-        })
-        .into_owned();
+        .map(|s| s.into_owned())
+        .unwrap_or_else(|| "binary".to_string());
     let zarr_identifier = binding.as_str();
 
     match zarr_identifier {

@@ -1,65 +1,7 @@
 use super::expr_walk::walk_expr;
-use super::literals::{
-    literal_to_scalar, reverse_operator,
-    strip_wrappers,
-};
-use crate::chunk_plan::indexing::types::ValueRangePresent;
+use super::literals::strip_wrappers;
 use crate::chunk_plan::prelude::*;
 use crate::{IStr, IntoIStr};
-
-/// Try to extract a column name and value range from a comparison expression.
-pub(super) fn try_expr_to_value_range_lazy(
-    expr: &Expr,
-) -> Option<(IStr, ValueRangePresent)> {
-    let expr = strip_wrappers(expr);
-    let Expr::BinaryExpr { left, op, right } =
-        expr
-    else {
-        return None;
-    };
-    if !matches!(
-        op,
-        Operator::Eq
-            | Operator::GtEq
-            | Operator::Gt
-            | Operator::LtEq
-            | Operator::Lt
-    ) {
-        return None;
-    }
-
-    let (col, lit, op_eff) = if let (
-        Expr::Column(name),
-        Expr::Literal(lit),
-    ) = (
-        strip_wrappers(left),
-        strip_wrappers(right),
-    ) {
-        (name.istr(), lit, *op)
-    } else if let (
-        Expr::Literal(lit),
-        Expr::Column(name),
-    ) = (
-        strip_wrappers(left),
-        strip_wrappers(right),
-    ) {
-        (name.istr(), lit, reverse_operator(*op))
-    } else {
-        return None;
-    };
-
-    let Ok(scalar) = literal_to_scalar(lit)
-    else {
-        return None;
-    };
-
-    let vr = ValueRangePresent::from_polars_op(
-        op_eff, scalar,
-    )
-    .ok()?;
-
-    Some((col, vr))
-}
 
 pub(super) fn expr_to_col_name(
     e: &Expr,
