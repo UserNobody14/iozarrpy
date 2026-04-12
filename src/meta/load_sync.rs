@@ -12,6 +12,8 @@ use crate::store::OpenedStore;
 pub fn load_zarr_meta_from_opened(
     opened: &OpenedStore,
 ) -> BackendResult<ZarrMeta> {
+    crate::codec_compat::ensure_zarr_compat_registered();
+
     let store = opened.store.clone();
     let root_path = opened.root.clone();
     let root_path_str: &str = root_path.as_ref();

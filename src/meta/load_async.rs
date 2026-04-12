@@ -13,6 +13,8 @@ use crate::store::AsyncOpenedStore;
 pub async fn load_zarr_meta_from_opened_async(
     opened: &AsyncOpenedStore,
 ) -> BackendResult<ZarrMeta> {
+    crate::codec_compat::ensure_zarr_compat_registered();
+
     let store = opened.store.clone();
     let root_path = opened.root.clone();
     let root_path_str: &str = root_path.as_ref();
@@ -37,6 +39,8 @@ pub async fn load_zarr_meta_from_store_async(
     store: &AsyncReadableWritableListableStorage,
     root_path: &str,
 ) -> BackendResult<ZarrMeta> {
+    crate::codec_compat::ensure_zarr_compat_registered();
+
     let store = store.clone();
 
     let group = zarrs::group::Group::async_open(

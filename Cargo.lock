@@ -4221,8 +4221,10 @@ dependencies = [
  "tracing",
  "url",
  "zarrs",
+ "zarrs_codec",
  "zarrs_icechunk",
  "zarrs_object_store",
+ "zarrs_plugin",
 ]
 
 [[package]]

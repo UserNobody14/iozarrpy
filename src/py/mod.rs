@@ -1,6 +1,7 @@
 use pyo3::prelude::*;
 use pyo3::wrap_pyfunction;
 
+mod codec_config;
 mod debug;
 pub(crate) mod expr_extract;
 
@@ -11,6 +12,10 @@ pub(crate) fn init_module(
 
     m.add_function(wrap_pyfunction!(
         print_extension_info,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        codec_config::configure_zarr_codecs,
         m
     )?)?;
 
