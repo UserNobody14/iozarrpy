@@ -6,7 +6,7 @@ use crate::IStr;
 
 /// Error type for resolution operations.
 #[derive(Debug, Clone)]
-pub(crate) enum ResolutionError {
+pub enum ResolutionError {
     /// Resolution was attempted but failed (e.g., non-monotonic array).
     Unresolvable(String),
 }

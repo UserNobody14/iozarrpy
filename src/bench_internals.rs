@@ -8,9 +8,10 @@ pub use crate::reader::{
     compute_strides,
 };
 
+pub use crate::scan::shared::columns::KeepMask;
 pub use crate::scan::shared::{
-    KeepMask, build_coord_column,
-    build_var_column, compute_in_bounds_mask,
+    build_coord_column, build_var_column,
+    compute_in_bounds_mask,
     compute_var_chunk_indices,
     should_include_column,
 };
@@ -22,10 +23,12 @@ pub use crate::shared::{
     ChunkedDataBackendSync,
 };
 
+pub use crate::chunk_plan::exprs::expr_plan::ExprPlan;
+pub use crate::chunk_plan::indexing::DatasetSelection;
 pub use crate::chunk_plan::{
     ChunkGridSignature, ChunkSubset,
-    DatasetSelection, ExprPlan, GroupedChunkPlan,
-    LazyCompileCtx, compile_expr,
+    GroupedChunkPlan, LazyCompileCtx,
+    compile_expr,
     compute_dims_and_lengths_unified,
     selection_to_grouped_chunk_plan_unified_from_meta,
 };

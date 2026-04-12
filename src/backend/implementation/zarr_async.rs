@@ -3,6 +3,10 @@ use std::sync::Arc;
 use snafu::ensure;
 
 use crate::IStr;
+use crate::backend::implementation::iterating_common::expr_top_literal_bool;
+use crate::chunk_plan::{
+    GridGroupExecutionOpts, streaming_grid_chunk_read_count,
+};
 use crate::errors::BackendError;
 use crate::errors::MaxChunksToReadExceededSnafu;
 use crate::meta::ZarrMeta;
@@ -49,10 +53,28 @@ where
         .compile_expression_async(&expr)
         .await?;
 
+    let emit_empty_schema_once =
+        expr_top_literal_bool(&expr)
+            == Some(false);
+
+    let grid_groups = grouped_plan
+        .owned_grid_groups_for_io(
+            &meta,
+            GridGroupExecutionOpts {
+                literal_false_clear:
+                    emit_empty_schema_once,
+                drop_redundant_1d_coords:
+                    !emit_empty_schema_once,
+                streaming_batch_io_cut: None,
+            },
+        )?;
+
     // Check max_chunks_to_read limit before doing any I/O
     if let Some(max_chunks) = max_chunks_to_read {
         let total_chunks =
-            grouped_plan.total_unique_chunks()?;
+            streaming_grid_chunk_read_count(
+                &grid_groups,
+            );
         ensure!(
             total_chunks <= max_chunks,
             MaxChunksToReadExceededSnafu {
@@ -71,10 +93,7 @@ where
 
     // Read chunks using consolidated (deduplicated) iteration
     let mut futs = FuturesUnordered::new();
-    for group in
-        grouped_plan.iter_consolidated_chunks()
-    {
-        let group = group?;
+    for group in grid_groups {
         let vars: Vec<IStr> = group.vars;
 
         for (idx, subset) in group
@@ -98,7 +117,7 @@ where
                 chunk_to_df_from_grid_with_backend(
                     backend.as_ref(),
                     idx,
-                    &sig,
+                    sig.as_ref(),
                     &array_shape,
                     &vars,
                     None,

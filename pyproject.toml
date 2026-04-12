@@ -1,6 +1,6 @@
 [project]
 name = "rainbear"
-version = "2.7.0"
+version = "2.8.0"
 description = "Build lazy Zarr scans with Polars"
 readme = "README.md"
 authors = [
@@ -81,6 +81,8 @@ build = [
 extraPaths = ["."]
 
 [tool.pyrefly]
+# Include repo root so `tests.*` and relative imports under `tests/` resolve (src-layout heuristic alone only adds `src/`).
+search_path = [".", "src"]
 site_package_path = ["."]
 
 [tool.pytest.ini_options]

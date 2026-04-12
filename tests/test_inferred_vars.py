@@ -10,7 +10,7 @@ import pytest
 from rainbear import ZarrBackend
 
 if TYPE_CHECKING:
-    from conftest import MultiVarDatasetInfo
+    from tests.conftest import MultiVarDatasetInfo
 
     from rainbear._core import SelectedChunksDebugReturn
 
@@ -123,7 +123,7 @@ class TestSelectorSetOps:
         expr = cs.all() - cs.by_name("surface")
         inferred = get_inferred_vars(multi_var_dataset.path, expr)
         # All data vars except surface
-        expected = {"temp", "precip", "wind_u", "wind_v", "pressure"}
+        expected = {"a", "b", "c", "lon", "lat", "temp", "precip", "wind_u", "wind_v", "pressure"}
         assert inferred == expected
 
     def test_selector_intersection(self, multi_var_dataset: MultiVarDatasetInfo):
@@ -144,7 +144,7 @@ class TestSelectorSetOps:
         expr = cs.numeric()
         inferred = get_inferred_vars(multi_var_dataset.path, expr)
         # All data vars are numeric
-        expected = {"temp", "precip", "wind_u", "wind_v", "pressure", "surface"}
+        expected = {"a", "b", "c", "lon", "lat", "temp", "precip", "wind_u", "wind_v", "pressure", "surface"}
         assert inferred == expected
 
     def test_cs_float(self, multi_var_dataset: MultiVarDatasetInfo):
@@ -152,7 +152,7 @@ class TestSelectorSetOps:
         expr = cs.float()
         inferred = get_inferred_vars(multi_var_dataset.path, expr)
         # All data vars are float64
-        expected = {"temp", "precip", "wind_u", "wind_v", "pressure", "surface"}
+        expected = {"lon", "lat", "temp", "precip", "wind_u", "wind_v", "pressure", "surface"}
         assert inferred == expected
 
     def test_cs_matches_regex(self, multi_var_dataset: MultiVarDatasetInfo):

@@ -9,7 +9,7 @@ These tests verify that the chunk planning system correctly handles:
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import numpy as np
 import polars as pl
@@ -190,7 +190,7 @@ class TestDifferentChunkShapes:
         
         expected_rows = 5 * 30  # 5 y values * 30 x values
         assert len(filtered) == expected_rows
-        assert filtered["y"].max() < 5
+        assert cast(int, filtered["y"].max()) < 5
     
     def test_chunk_selection_per_variable(self, heterogeneous_chunks_dataset: str) -> None:
         """Chunk selection should work independently for each variable's grid."""

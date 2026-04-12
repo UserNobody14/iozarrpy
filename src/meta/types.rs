@@ -44,13 +44,14 @@ pub struct ZarrNode {
 
 /// Dimension analysis across a tree - tracks how dimensions relate across nodes.
 #[derive(Debug, Clone, Default)]
-#[allow(dead_code)] // `root_dims` / `node_dims` reserved for callers / future layout logic
 pub struct DimensionAnalysis {
     /// All unique dimensions across the tree, in output order (root dims first)
     pub all_dims: Vec<IStr>,
     /// Dimensions from the root node
+    #[allow(dead_code)]
     pub root_dims: Vec<IStr>,
     /// For each node path, its dimension set
+    #[allow(dead_code)]
     pub node_dims: BTreeMap<IStr, Vec<IStr>>,
     /// Dimension name -> length
     pub dim_lengths: BTreeMap<IStr, u64>,
@@ -174,7 +175,7 @@ impl ZarrMeta {
 
     /// All array paths (data vars) using recursive tree traversal.
     pub fn all_array_paths(&self) -> Vec<IStr> {
-        self.all_data_var_paths()
+        self.all_zarr_array_paths()
     }
 
     pub fn all_zarr_array_paths(
@@ -303,6 +304,7 @@ impl ZarrMeta {
         fields.into_iter().collect()
     }
 
+    /// Column names in the same order as [`Self::tidy_schema`].
     pub fn tidy_column_order(
         &self,
         variables: Option<&[IStr]>,
@@ -612,4 +614,20 @@ pub struct ZarrArrayMeta {
         Option<Arc<zarrs::array::ArrayMetadata>>,
 }
 
-impl ZarrArrayMeta {}
+impl ZarrArrayMeta {
+    #[allow(dead_code)]
+    pub fn chunking_at_dim(
+        &self,
+        dim: &IStr,
+    ) -> Option<u64> {
+        let dim_idx = self
+            .dims
+            .iter()
+            .position(|d| d == dim)?;
+        if dim_idx >= self.chunk_shape.len() {
+            None
+        } else {
+            Some(self.chunk_shape[dim_idx])
+        }
+    }
+}

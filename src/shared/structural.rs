@@ -11,10 +11,13 @@ use crate::meta::{ZarrMeta, ZarrNode};
 /// Strategy:
 /// 1. Group DataFrames by their column schema (signature)
 /// 2. Within each group, use vstack (same schema)
-/// 3. Across groups, join **pairwise** on overlapping dimension columns (starting
-///    with the frame that has the most dim columns) so aux 1D layouts (lat/lon on
-///    `point`) merge onto the fact grid even when no single dim appears in **every**
-///    schema group.
+/// 3. Across groups, join on shared coordinate columns
+///
+/// **Join keys** are the intersection of [`ZarrMeta::dim_analysis`] dimension
+/// names that appear as columns in every schema group. For example, a 3D chunk
+/// grid (`foo`, `bar`, `a`) merged with a 1D grid on (`a`) joins on shared dims
+/// such as `a` so auxiliary variables indexed only along `a` align with the
+/// primary field’s rows.
 pub fn combine_chunk_dataframes(
     mut dfs: Vec<DataFrame>,
     meta: &ZarrMeta,
@@ -85,57 +88,72 @@ pub fn combine_chunk_dataframes(
             .unwrap());
     }
 
-    vstacked.sort_by_key(|df| {
-        std::cmp::Reverse(
-            df.get_column_names_owned()
+    // Multiple schema groups - join on coordinate columns
+    // Find shared coordinate columns across all vstacked DFs
+    let shared_coords: Vec<PlSmallStr> = {
+        let first_cols: BTreeSet<PlSmallStr> =
+            vstacked[0]
+                .get_column_names_owned()
                 .into_iter()
                 .filter(|c| {
                     dim_cols.contains(c.as_str())
                 })
-                .count(),
-        )
-    });
+                .collect();
 
+        vstacked
+            .iter()
+            .skip(1)
+            .fold(first_cols, |acc, df| {
+                let df_dims: BTreeSet<
+                    PlSmallStr,
+                > = df
+                    .get_column_names_owned()
+                    .into_iter()
+                    .filter(|c| {
+                        dim_cols
+                            .contains(c.as_str())
+                    })
+                    .collect();
+                acc.intersection(&df_dims)
+                    .cloned()
+                    .collect()
+            })
+            .into_iter()
+            .collect()
+    };
+
+    if shared_coords.is_empty() {
+        // No shared coordinates - fall back to diagonal concat
+        return polars::functions::concat_df_diagonal(
+            &vstacked,
+        ).context(
+            PolarsSnafu {
+                message: "Error concatenating DataFrames (no shared coordinates)"
+                    .to_string(),
+            }
+        );
+    }
+
+    // Join on shared coordinates
+    // Start with the first DF and successively join others
     let mut result = vstacked.remove(0);
     for df in vstacked {
-        let join_on: Vec<PlSmallStr> = result
-            .get_column_names_owned()
-            .into_iter()
-            .filter(|c| {
-                dim_cols.contains(c.as_str())
-                    && df
-                        .column(c.as_str())
-                        .is_ok()
-            })
-            .collect();
-
-        result = if join_on.is_empty() {
-            polars::functions::concat_df_diagonal(
-                &[result, df],
+        result = result
+            .join(
+                &df,
+                shared_coords.as_slice(),
+                shared_coords.as_slice(),
+                JoinArgs::new(JoinType::Full)
+                    .with_coalesce(
+                    JoinCoalesce::CoalesceColumns,
+                ),
+                None,
             )
             .context(PolarsSnafu {
                 message:
-                    "Error diagonal-concatenating DataFrames"
+                    "Error joining DataFrames"
                         .to_string(),
-            })?
-        } else {
-            result
-                .join(
-                    &df,
-                    join_on.as_slice(),
-                    join_on.as_slice(),
-                    JoinArgs::new(JoinType::Full)
-                        .with_coalesce(
-                            JoinCoalesce::CoalesceColumns,
-                        ),
-                    None,
-                )
-                .context(PolarsSnafu {
-                    message:
-                        "Error joining DataFrames"
-                        .to_string(),
-                })?
-        };
+            })?;
     }
 
     Ok(result)

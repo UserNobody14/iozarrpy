@@ -116,6 +116,8 @@ zarrs = { version = "0.23.3", features = [
     "chrono",
     "bitround",
     ] }
+zarrs_codec = { version = "0.2.0", features = ["async"] }
+zarrs_plugin = "0.4.1"
 zarrs_object_store = { version = "0.6.1", features = [
     "aws",
     "azure",

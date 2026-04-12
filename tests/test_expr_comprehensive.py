@@ -32,7 +32,7 @@ import pytest
 from rainbear import ZarrBackend
 
 if TYPE_CHECKING:
-    from conftest import ComprehensiveDatasetInfo
+    from tests.conftest import ComprehensiveDatasetInfo
 
     from rainbear._core import SelectedChunksDebugReturn
 

@@ -6,6 +6,10 @@ use std::sync::Arc;
 use polars::prelude::*;
 
 use crate::IStr;
+use crate::backend::implementation::iterating_common::expr_top_literal_bool;
+use crate::chunk_plan::{
+    GridGroupExecutionOpts, streaming_grid_chunk_read_count,
+};
 use crate::errors::BackendError;
 use crate::errors::MaxChunksToReadExceededSnafu;
 use crate::scan::column_policy::ResolvedColumnPolicy;
@@ -15,6 +19,7 @@ use crate::shared::FullyCachedZarrBackendSync;
 use crate::shared::{
     HasMetadataBackendSync,
     combine_chunk_dataframes,
+    expand_projection_to_flat_paths,
     restructure_to_structs,
 };
 use snafu::ensure;
@@ -34,6 +39,12 @@ pub fn scan_zarr_with_backend_sync(
     // Get metadata from backend
     let meta = backend.metadata()?;
 
+    let chunk_expanded =
+        with_columns.as_ref().map(|cols| {
+            expand_projection_to_flat_paths(
+                cols, &meta,
+            )
+        });
     let enrich_policy = ResolvedColumnPolicy::new(
         with_columns.clone().or_else(|| {
             Some(
@@ -45,16 +56,36 @@ pub fn scan_zarr_with_backend_sync(
         &expr,
         &meta,
     );
+    let _enrich_wc = enrich_policy
+        .physical_superset()
+        .cloned();
+
     // Compile grouped chunk plan
-    let (mut grouped_plan, _stats) =
+    let (grouped_plan, _stats) =
         backend.compile_expression_sync(&expr)?;
 
-    // Limit applies to predicate-driven chunk enumeration only. Projection-only
-    // arrays merged via [`GroupedChunkPlan::augment_with_physical_vars`] may add
-    // further grids (e.g. 1D ``x``/``y`` coordinates) without affecting this check.
+    let emit_empty_schema_once =
+        expr_top_literal_bool(&expr)
+            == Some(false);
+
+    let grid_groups = grouped_plan
+        .owned_grid_groups_for_io(
+            &meta,
+            GridGroupExecutionOpts {
+                literal_false_clear:
+                    emit_empty_schema_once,
+                drop_redundant_1d_coords:
+                    !emit_empty_schema_once,
+                streaming_batch_io_cut: None,
+            },
+        )?;
+
+    // Check max_chunks_to_read limit before doing any I/O
     if let Some(max_chunks) = max_chunks_to_read {
         let total_chunks =
-            grouped_plan.total_unique_chunks()?;
+            streaming_grid_chunk_read_count(
+                &grid_groups,
+            );
         ensure!(
             total_chunks <= max_chunks,
             MaxChunksToReadExceededSnafu {
@@ -64,39 +95,30 @@ pub fn scan_zarr_with_backend_sync(
         );
     }
 
-    if let Some(superset) =
-        enrich_policy.physical_superset()
-    {
-        grouped_plan.augment_with_physical_vars(
-            superset, &meta,
-        )?;
-    }
-
-    let chunk_read_superset = enrich_policy
-        .physical_superset()
-        .cloned();
-
     // Read chunks using consolidated (deduplicated) iteration
     let mut dfs = Vec::new();
-    for group in
-        grouped_plan.iter_consolidated_chunks()
-    {
-        let group = group?;
-        let vars: Vec<IStr> = group.vars;
+    for group in &grid_groups {
+        let vars: Vec<IStr> = group.vars.clone();
 
         for (idx, subset) in group
             .chunk_indices
-            .into_iter()
-            .zip(group.chunk_subsets)
+            .iter()
+            .cloned()
+            .zip(
+                group
+                    .chunk_subsets
+                    .iter()
+                    .cloned(),
+            )
         {
             let df =
                 chunk_to_df_from_grid_with_backend(
                     backend,
                     idx,
-                    group.sig,
+                    group.sig.as_ref(),
                     &group.array_shape,
                     &vars,
-                    chunk_read_superset.as_ref(),
+                    chunk_expanded.as_ref(),
                     subset.as_ref(),
                     &meta,
                 )?;

@@ -1,12 +1,21 @@
-//! Single place for **predicate column refs** and **physical read superset** expansion.
+//! Single place for **predicate column refs**, **physical read superset** expansion,
+//! **shared eligibility** for 1D variables (chunk group vs post-merge enrichment),
+//! and **per-chunk physical read plans** (deduped zarr reads + column materialization).
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use polars::prelude::Expr;
 
 use crate::IStr;
 use crate::chunk_plan::collect_column_refs;
+use crate::errors::{
+    BackendError, BackendResult,
+};
 use crate::meta::ZarrMeta;
+use crate::scan::shared::{
+    compute_var_chunk_indices,
+    should_include_column,
+};
 use crate::shared::expand_projection_to_flat_paths;
 
 /// All column names referenced by a Polars predicate expression.
@@ -116,8 +125,10 @@ pub(crate) fn expand_io_source_physical(
     Some(expanded)
 }
 
-/// Policy built from Polars pushdown + predicate: expanded physical column set.
+/// Policy built from Polars pushdown + predicate: predicate refs and the expanded
+/// physical column set used for streaming reads and enrichment.
 pub(crate) struct ResolvedColumnPolicy {
+    predicate_refs: BTreeSet<IStr>,
     physical_superset: Option<BTreeSet<IStr>>,
 }
 
@@ -139,7 +150,16 @@ impl ResolvedColumnPolicy {
                 &predicate_refs,
                 meta,
             );
-        Self { physical_superset }
+        Self {
+            predicate_refs,
+            physical_superset,
+        }
+    }
+
+    pub(crate) fn predicate_refs(
+        &self,
+    ) -> &BTreeSet<IStr> {
+        &self.predicate_refs
     }
 
     pub(crate) fn physical_superset(
@@ -147,4 +167,276 @@ impl ResolvedColumnPolicy {
     ) -> Option<&BTreeSet<IStr>> {
         self.physical_superset.as_ref()
     }
+}
+
+/// True if this chunk group reads `name` directly, or `name` is 1D on a dimension
+/// this group's signature materializes (same rule as enrichment along that dim).
+pub(crate) fn group_supplies_array_or_1d_enrichable(
+    name: &IStr,
+    sig_dims: &BTreeSet<IStr>,
+    vars: &BTreeSet<IStr>,
+    meta: &ZarrMeta,
+) -> bool {
+    if vars.contains(name) {
+        return true;
+    }
+    let Some(vm) = meta.array_by_path(name)
+    else {
+        return false;
+    };
+    vm.shape.len() == 1
+        && sig_dims.contains(&vm.dims[0])
+}
+
+// =============================================================================
+// Per-chunk physical read plan (unified coords + variables)
+// =============================================================================
+
+/// One physical zarr read for the current chunk iteration.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ReadSpec {
+    /// Contiguous global range along a 1D array (coordinate fast path).
+    Slice1d {
+        coord_chunk_shape: u64,
+        start: u64,
+        len: u64,
+    },
+    /// Single chunk index tuple for an arbitrary-C layout array.
+    Chunk { indices: Vec<u64> },
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum DimMaterialization {
+    /// Integer index: `local + origin` (see [`crate::scan::shared::build_coord_column`]).
+    Synthetic,
+    /// Values loaded from this on-disk path (1D coord aligned with the dimension).
+    FromArray { path: IStr },
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct DimStep {
+    pub(crate) dim_name: IStr,
+    pub(crate) dim_idx: usize,
+    pub(crate) mat: DimMaterialization,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct VarStep {
+    pub(crate) name: IStr,
+    pub(crate) path: IStr,
+    pub(crate) var_dims: Vec<IStr>,
+    pub(crate) var_chunk_shape: Vec<u64>,
+    pub(crate) offsets: Vec<u64>,
+}
+
+/// Deduped reads and column build recipe for one primary-grid chunk.
+#[derive(Debug, Clone)]
+pub(crate) struct ChunkPhysicalPlan {
+    pub(crate) dims: Vec<DimStep>,
+    pub(crate) vars: Vec<VarStep>,
+    /// Sorted by zarr path for stable I/O ordering.
+    pub(crate) reads: Vec<(IStr, ReadSpec)>,
+}
+
+fn add_var_step(
+    meta: &ZarrMeta,
+    primary_dims: &[IStr],
+    primary_idx: &[u64],
+    primary_chunk_shape: &[u64],
+    with_columns: Option<&BTreeSet<IStr>>,
+    name: IStr,
+    require_known: bool,
+    reads_acc: &mut BTreeMap<IStr, ReadSpec>,
+    vars: &mut Vec<VarStep>,
+    seen_names: &mut BTreeSet<IStr>,
+) -> BackendResult<()> {
+    if seen_names.contains(&name) {
+        return Ok(());
+    }
+    if !should_include_column(&name, with_columns)
+    {
+        return Ok(());
+    }
+    if primary_dims.iter().any(|d| d == &name) {
+        return Ok(());
+    }
+    let Some(var_meta) = meta.array_by_path(name)
+    else {
+        if require_known {
+            return Err(
+                BackendError::UnknownDataVar {
+                    name,
+                    available_vars: meta
+                        .all_data_var_paths(),
+                },
+            );
+        }
+        return Ok(());
+    };
+    let var_dims: Vec<IStr> =
+        var_meta.dims.iter().cloned().collect();
+    let (chunk_indices, offsets) =
+        compute_var_chunk_indices(
+            primary_idx,
+            primary_chunk_shape,
+            primary_dims,
+            &var_dims,
+            &var_meta.chunk_shape,
+            &var_meta.shape,
+        );
+    register_read(
+        reads_acc,
+        var_meta.path,
+        ReadSpec::Chunk {
+            indices: chunk_indices,
+        },
+    )?;
+    seen_names.insert(name);
+    vars.push(VarStep {
+        name,
+        path: var_meta.path,
+        var_dims,
+        var_chunk_shape: var_meta
+            .chunk_shape
+            .to_vec(),
+        offsets,
+    });
+    Ok(())
+}
+
+fn register_read(
+    reads: &mut BTreeMap<IStr, ReadSpec>,
+    path: IStr,
+    spec: ReadSpec,
+) -> BackendResult<()> {
+    use std::collections::btree_map::Entry;
+    match reads.entry(path) {
+        Entry::Vacant(e) => {
+            e.insert(spec);
+            Ok(())
+        }
+        Entry::Occupied(o) => {
+            if o.get() == &spec {
+                Ok(())
+            } else {
+                Err(BackendError::Other {
+                    msg: format!(
+                        "conflicting physical read specs for zarr path {}",
+                        o.key()
+                    ),
+                })
+            }
+        }
+    }
+}
+
+/// Build the physical read plan for one chunk of a primary [`crate::chunk_plan::ChunkGridSignature`].
+///
+/// `with_columns` is the expanded physical superset (predicate + projection); `None` means
+/// read every column the group can supply.
+pub(crate) fn build_chunk_physical_plan(
+    meta: &ZarrMeta,
+    primary_dims: &[IStr],
+    primary_idx: &[u64],
+    primary_chunk_shape: &[u64],
+    origin: &[u64],
+    group_vars: &[IStr],
+    with_columns: Option<&BTreeSet<IStr>>,
+) -> BackendResult<ChunkPhysicalPlan> {
+    let sig_dims: BTreeSet<IStr> =
+        primary_dims.iter().cloned().collect();
+    let vars_in_group: BTreeSet<IStr> =
+        group_vars.iter().cloned().collect();
+
+    let mut reads_acc: BTreeMap<IStr, ReadSpec> =
+        BTreeMap::new();
+    let mut dims: Vec<DimStep> = Vec::new();
+
+    for (dim_idx, dim_name) in
+        primary_dims.iter().enumerate()
+    {
+        // Always materialize every primary-grid dimension column: row-major
+        // layout and predicates reference these names even when Polars projection
+        // omits them from IO `with_columns` (see streaming empty-result tests).
+        let mat = match meta
+            .array_by_path(*dim_name)
+        {
+            Some(am) if am.shape.len() == 1 => {
+                let start = origin[dim_idx];
+                let len =
+                    primary_chunk_shape[dim_idx];
+                register_read(
+                    &mut reads_acc,
+                    am.path,
+                    ReadSpec::Slice1d {
+                        coord_chunk_shape: am
+                            .chunk_shape[0],
+                        start,
+                        len,
+                    },
+                )?;
+                DimMaterialization::FromArray {
+                    path: am.path,
+                }
+            }
+            _ => DimMaterialization::Synthetic,
+        };
+        dims.push(DimStep {
+            dim_name: *dim_name,
+            dim_idx,
+            mat,
+        });
+    }
+
+    let mut vars: Vec<VarStep> = Vec::new();
+    let mut seen_names: BTreeSet<IStr> =
+        BTreeSet::new();
+
+    for &name in group_vars {
+        add_var_step(
+            meta,
+            primary_dims,
+            primary_idx,
+            primary_chunk_shape,
+            with_columns,
+            name,
+            true,
+            &mut reads_acc,
+            &mut vars,
+            &mut seen_names,
+        )?;
+    }
+
+    if let Some(expanded) = with_columns {
+        for name in expanded.iter() {
+            if seen_names.contains(name) {
+                continue;
+            }
+            if !group_supplies_array_or_1d_enrichable(
+                name,
+                &sig_dims,
+                &vars_in_group,
+                meta,
+            ) {
+                continue;
+            }
+            add_var_step(
+                meta,
+                primary_dims,
+                primary_idx,
+                primary_chunk_shape,
+                with_columns,
+                *name,
+                false,
+                &mut reads_acc,
+                &mut vars,
+                &mut seen_names,
+            )?;
+        }
+    }
+
+    let reads: Vec<(IStr, ReadSpec)> =
+        reads_acc.into_iter().collect();
+
+    Ok(ChunkPhysicalPlan { dims, vars, reads })
 }

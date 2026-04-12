@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import shutil
 from pathlib import Path
+from typing import cast
 
 import numpy as np
 import polars as pl
@@ -82,7 +83,7 @@ def test_string_filter_on_coordinate(string_dataset: str) -> None:
 
     assert df.shape == (6, 4)
     # All remaining y values should be >= 2
-    assert df["y"].min() >= 2.0
+    assert cast(int, df["y"].min()) >= 2
     # Verify the string values match expectations
     labels = set(df["label"].to_list())
     assert labels == {"c0", "c1", "c2", "d0", "d1", "d2"}

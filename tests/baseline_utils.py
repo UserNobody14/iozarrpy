@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import polars as pl
+import xarray as xr
 from polars.testing import assert_frame_equal
 
 
 def scan_via_xarray(
     zarr_path: str,
     *,
-    columns: list[str],
+    columns: list[str] | None = None,
 ) -> pl.LazyFrame:
     """
     Load a Zarr dataset via xarray and convert to a Polars LazyFrame.
@@ -17,20 +18,29 @@ def scan_via_xarray(
     This is the "baseline" implementation to compare against rainbear.
     Returns a LazyFrame so the same filters can be applied to both.
     """
-    import xarray as xr
-
     ds = xr.open_zarr(zarr_path, consolidated=None)
 
     # Build a tidy DataFrame from xarray
     # Select only the requested columns as data_vars
-    data_vars = {name: ds[name] for name in columns if name in ds}
-    ds_out = xr.Dataset(data_vars=data_vars)
+    ds_out = xr.Dataset(data_vars={name: ds[name] for name in columns if name in ds}) if columns is not None else ds
+    return dataset_to_polars_lazyframe(ds_out)
 
-    pdf = ds_out.to_dataframe().reset_index()
+
+def dataset_to_polars_lazyframe(
+    ds: xr.Dataset,
+    columns: list[str] | None = None,
+) -> pl.LazyFrame:
+    """
+    Load a Zarr dataset via xarray and convert to a Polars LazyFrame.
+    
+    This is the "baseline" implementation to compare against rainbear.
+    Returns a LazyFrame so the same filters can be applied to both.
+    """
+    pdf = ds.to_dataframe().reset_index()
     df = pl.from_pandas(pdf)
 
     # Select columns in the requested order
-    df = df.select(columns)
+    df = df.select(columns) if columns is not None else df
     
     return df.lazy()
 

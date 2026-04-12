@@ -12,7 +12,8 @@ use snafu::ResultExt;
 use crate::FromIStr;
 use crate::IStr;
 use crate::chunk_plan::ChunkSubset;
-use crate::chunk_plan::ConsolidatedGridGroup;
+use crate::chunk_plan::OwnedGridGroup;
+use crate::chunk_plan::StreamingBatch;
 use crate::errors::BackendError;
 use crate::errors::PolarsSnafu;
 use crate::meta::ZarrMeta;
@@ -29,79 +30,45 @@ pub(crate) const CHUNKS_PER_BATCH_LIMIT: usize =
 pub(crate) const DEFAULT_BATCH_SIZE: usize =
     10_000;
 
-/// Owned version of [`ConsolidatedGridGroup`] for storage in iterator state.
-///
-/// We need owned data because [`GroupedChunkPlan`] is dropped after
-/// initialization, but we continue iterating over the chunk indices.
-pub(crate) struct OwnedGridGroup {
-    pub sig: Arc<
-        crate::chunk_plan::ChunkGridSignature,
-    >,
-    pub vars: Vec<IStr>,
-    pub chunk_indices: Vec<Vec<u64>>,
-    pub chunk_subsets: Vec<Option<ChunkSubset>>,
-    pub array_shape: Vec<u64>,
-}
-
-impl OwnedGridGroup {
-    /// Convert from a borrowed [`ConsolidatedGridGroup`] produced by the chunk planner.
-    #[inline]
-    pub fn from_consolidated(
-        group: ConsolidatedGridGroup<'_>,
-    ) -> Self {
-        Self {
-            sig: Arc::new(group.sig.clone()),
-            vars: group.vars,
-            chunk_indices: group.chunk_indices,
-            chunk_subsets: group.chunk_subsets,
-            array_shape: group.array_shape,
+/// Top-level boolean literal after stripping [`Expr::Alias`], if any.
+pub(crate) fn expr_top_literal_bool(
+    expr: &Expr,
+) -> Option<bool> {
+    match expr {
+        Expr::Literal(LiteralValue::Scalar(
+            s,
+        )) => match s.value() {
+            AnyValue::Boolean(b) => Some(*b),
+            _ => None,
+        },
+        Expr::Alias(inner, _) => {
+            expr_top_literal_bool(inner)
         }
+        _ => None,
     }
 }
 
-/// Sort grids so lower-dimensional / smaller auxiliary layouts are read before the
-/// largest grid. Otherwise the first chunk of a high-D grid can hit Polars'
-/// `batch_size` and flush **before** 1D coordinate batches run, so
-/// [`combine_chunk_dataframes`] never sees `latitude` / `station_id` in that batch.
-pub(crate) fn sort_grid_groups_for_streaming_join(
-    groups: &mut [OwnedGridGroup],
-) {
-    groups.sort_by(|a, b| {
-        let da = a.sig.dims().len();
-        let db = b.sig.dims().len();
-        let pa: u64 =
-            a.array_shape.iter().product();
-        let pb: u64 =
-            b.array_shape.iter().product();
-        da.cmp(&db)
-            .then(pa.cmp(&pb))
-            .then(a.sig.cmp(&b.sig))
-    });
+/// Legacy sequential batching (non-join-closed) state.
+pub(crate) struct LegacyBatchState {
+    pub current_group_idx: usize,
+    pub current_chunk_idx: usize,
+    pub current_batch: Vec<DataFrame>,
+    pub current_batch_rows: usize,
 }
 
-/// Row cap for [`collect_chunks_for_batch`]. With multiple chunk grids, a single
-/// primary chunk can exceed `batch_size`; aux grids must be merged in the **same**
-/// batch, so we disable cross-batch splitting until we support join-aware batching.
-#[inline]
-pub(crate) fn streaming_batch_row_cap(
-    grid_group_count: usize,
-    requested_batch_size: usize,
-) -> usize {
-    if grid_group_count > 1 {
-        usize::MAX
-    } else {
-        requested_batch_size
-    }
+/// Join-closed plan vs sequential streaming.
+pub(crate) enum StreamingSchedule {
+    Legacy(LegacyBatchState),
+    JoinClosed {
+        batches: Vec<StreamingBatch>,
+        cursor: usize,
+    },
 }
 
 /// Iterator state shared by both sync and async zarr iterators.
 pub(crate) struct IteratorState {
     pub grid_groups: Vec<OwnedGridGroup>,
-    pub current_group_idx: usize,
-    pub current_chunk_idx: usize,
-
-    pub current_batch: Vec<DataFrame>,
-    pub current_batch_rows: usize,
+    pub schedule: StreamingSchedule,
 
     pub total_rows_yielded: usize,
     pub num_rows_limit: Option<usize>,
@@ -115,8 +82,8 @@ pub(crate) struct IteratorState {
 
     pub predicate: Expr,
 
-    /// Effective cap for [`collect_chunks_for_batch`] (see [`streaming_batch_row_cap`]).
-    pub batch_row_cap: usize,
+    /// When set, yield one empty (zero-row) batch with the correct output schema then clear.
+    pub emit_empty_schema_once: bool,
 }
 
 /// Final column projection for streaming batches.
@@ -225,7 +192,7 @@ fn project_to_polars_output(
 /// Collect the next batch of chunk indices to read from the current group.
 ///
 /// Advances `current_chunk_idx` and returns up to `CHUNKS_PER_BATCH_LIMIT` chunks,
-/// or until `current_batch_rows` would exceed `batch_row_cap`, or the group is exhausted.
+/// or until `current_batch_rows` would exceed `batch_size`, or the group is exhausted.
 ///
 /// Returns `(chunks_to_read, num_chunks_advanced)`.
 #[inline]
@@ -233,12 +200,12 @@ pub(crate) fn collect_chunks_for_batch(
     group: &OwnedGridGroup,
     current_chunk_idx: &mut usize,
     current_batch_rows: usize,
-    batch_row_cap: usize,
+    batch_size: usize,
 ) -> Vec<(Vec<u64>, Option<ChunkSubset>)> {
     let mut chunks_to_read = Vec::new();
     while *current_chunk_idx
         < group.chunk_indices.len()
-        && current_batch_rows < batch_row_cap
+        && current_batch_rows < batch_size
     {
         let ci = *current_chunk_idx;
         chunks_to_read.push((
@@ -327,6 +294,33 @@ pub(crate) fn combine_and_postprocess_batch(
 
     project_to_polars_output(
         result,
+        state.output_columns.as_deref(),
+    )
+}
+
+/// Zero-row batch matching streaming output schema (e.g. unsatisfiable filter folded to `false`).
+pub(crate) fn empty_streaming_schema_batch(
+    state: &IteratorState,
+) -> Result<DataFrame, BackendError> {
+    let keys: Vec<IStr> =
+        match &state.output_columns {
+            Some(cols) => cols.clone(),
+            None => {
+                state.meta.tidy_column_order(None)
+            }
+        };
+    let df = DataFrame::empty_with_schema(
+        &state
+            .meta
+            .tidy_schema(Some(keys.as_slice())),
+    );
+    let df = if state.meta.is_hierarchical() {
+        restructure_to_structs(&df, &state.meta)?
+    } else {
+        df
+    };
+    project_to_polars_output(
+        df,
         state.output_columns.as_deref(),
     )
 }

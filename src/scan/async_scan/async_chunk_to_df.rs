@@ -25,15 +25,21 @@ use crate::IStr;
 use crate::chunk_plan::{
     ChunkGridSignature, ChunkSubset,
 };
+use crate::scan::column_policy::{
+    DimMaterialization, ReadSpec,
+    build_chunk_physical_plan,
+};
 use crate::scan::shared::{
     build_coord_column, build_var_column,
     compute_in_bounds_mask,
-    compute_var_chunk_indices,
 };
 use crate::shared::ChunkedDataBackendAsync;
 
+use std::collections::BTreeMap;
+use std::sync::Arc;
+
 // =============================================================================
-// Chunked Coordinate Reading (replaces retrieve_1d_subset)
+// Physical reads (slice + chunk)
 // =============================================================================
 
 /// Read coordinate values for a range using chunked access.
@@ -120,172 +126,34 @@ async fn read_coord_range_chunked<
     }))
 }
 
-// =============================================================================
-// Main Chunk-to-DataFrame Function (Generic Backend)
-// =============================================================================
-
-/// Read coordinate chunks for all dimensions.
-async fn read_coord_chunks<
+async fn execute_read_async<
     B: ChunkedDataBackendAsync,
 >(
     backend: &B,
-    meta: &ZarrMeta,
-    dims: &[IStr],
-    origin: &[u64],
-    chunk_shape: &[u64],
-) -> BackendResult<
-    std::collections::BTreeMap<IStr, ColumnData>,
-> {
-    let mut coord_reads = FuturesUnordered::new();
-
-    for (d, dim_name) in dims.iter().enumerate() {
-        // Check if this dimension has a coordinate array
-        let Some(coord_meta) =
-            meta.array_by_path(*dim_name)
-        else {
-            continue;
-        };
-
-        // Only process 1D coordinate arrays
-        if coord_meta.shape.len() != 1 {
-            continue;
-        }
-
-        let dim_start = origin[d];
-        let dim_len = chunk_shape[d];
-        let coord_chunk_shape =
-            coord_meta.chunk_shape[0];
-        let dim_name = *dim_name;
-        // Use full path from metadata for array access
-        let coord_path = coord_meta.path;
-
-        coord_reads.push(async move {
-            let data = read_coord_range_chunked(
+    path: IStr,
+    spec: ReadSpec,
+) -> BackendResult<(IStr, ColumnData)> {
+    let data = match spec {
+        ReadSpec::Slice1d {
+            coord_chunk_shape,
+            start,
+            len,
+        } => {
+            read_coord_range_chunked(
                 backend,
-                &coord_path,
+                &path,
                 coord_chunk_shape,
-                dim_start,
-                dim_len,
+                start,
+                len,
             )
-            .await;
-            (dim_name, dim_len as usize, data)
-        });
-    }
-
-    let mut coord_slices: std::collections::BTreeMap<
-        IStr,
-        ColumnData,
-    > = Default::default();
-
-    while let Some((name, expected_len, res)) =
-        coord_reads.next().await
-    {
-        let coord = res?;
-        if coord.len() != expected_len {
-            return Err(BackendError::CoordLengthMismatch {
-                name,
-                expected_len: expected_len as u64,
-                coord_len: coord.len() as u64,
-            });
+            .await?
         }
-        coord_slices.insert(name, coord);
-    }
-
-    Ok(coord_slices)
-}
-
-/// Read variable chunks for all requested variables.
-async fn read_var_chunks<
-    B: ChunkedDataBackendAsync,
->(
-    backend: &B,
-    meta: &ZarrMeta,
-    idx: &[u64],
-    chunk_shape: &[u64],
-    dims: &[IStr],
-    vars: &[IStr],
-) -> BackendResult<
-    Vec<(
-        IStr,
-        Arc<ColumnData>,
-        Vec<IStr>,
-        Vec<u64>,
-        Vec<u64>,
-    )>,
-> {
-    let mut var_reads = FuturesUnordered::new();
-
-    for name in vars.iter() {
-        // Dimension columns are always produced via `build_coord_column`.
-        // If a dataset also has 1D coord arrays named the same as dims (e.g. "x", "y", "a"),
-        // they can appear in `vars` (e.g. from `pl.col(["x","y",...])`). Reading them as
-        // "variables" would create duplicate DataFrame columns (two "x" columns, etc.).
-        if dims.iter().any(|d| d == name) {
-            continue;
-        }
-
-        let var_meta =
-            meta.array_by_path(*name).ok_or(
-                BackendError::UnknownDataVar {
-                    name: *name,
-                    available_vars: meta
-                        .all_data_var_paths(),
-                },
-            )?;
-
-        let name = *name;
-        let dims = dims.to_vec();
-        let idx = idx.to_vec();
-        let chunk_shape = chunk_shape.to_vec();
-
-        var_reads.push(async move {
-            let var_dims: Vec<IStr> = var_meta
-                .dims
-                .iter()
-                .cloned()
-                .collect();
-
-            // Compute which chunk to read for this variable
-            let (var_chunk_indices, var_offsets) =
-                compute_var_chunk_indices(
-                    &idx,
-                    &chunk_shape,
-                    &dims,
-                    &var_dims,
-                    &var_meta.chunk_shape,
-                    &var_meta.shape,
-                );
-
-            // Use the regular (metadata) chunk shape for stride
-            // computation: read_chunk_async always returns data
-            // in the full chunk layout, even for edge chunks.
-            let var_chunk_shape =
-                var_meta.chunk_shape.to_vec();
-
-            // Read the chunk using full path from metadata
-            let data = backend
-                .read_chunk_async(
-                    &var_meta.path,
-                    &var_chunk_indices,
-                )
-                .await?;
-
-            Ok::<_, BackendError>((
-                name,
-                data.clone(),
-                var_dims,
-                var_chunk_shape,
-                var_offsets,
-            ))
-        });
-    }
-
-    let mut var_chunks = Vec::new();
-    while let Some(r) = var_reads.next().await {
-        var_chunks.push(r?);
-    }
-
-    Ok(var_chunks)
+        ReadSpec::Chunk { indices } => (*backend
+            .read_chunk_async(&path, &indices)
+            .await?)
+            .clone(),
+    };
+    Ok((path, data))
 }
 
 // =============================================================================
@@ -306,7 +174,7 @@ pub async fn chunk_to_df_from_grid_with_backend<
     sig: &ChunkGridSignature,
     array_shape: &[u64],
     vars: &[IStr],
-    _with_columns: Option<&BTreeSet<IStr>>,
+    with_columns: Option<&BTreeSet<IStr>>,
     chunk_subset: Option<&ChunkSubset>,
     meta: &ZarrMeta,
 ) -> BackendResult<DataFrame> {
@@ -333,74 +201,117 @@ pub async fn chunk_to_df_from_grid_with_backend<
         chunk_subset,
     );
 
-    // Perform both reads concurrently
-    let (coord_slices, var_chunks) = futures::try_join!(
-        read_coord_chunks(
-            backend,
-            meta,
-            dims,
-            &origin,
-            chunk_shape,
-        ),
-        read_var_chunks(
-            backend,
-            meta,
-            &idx,
-            chunk_shape,
-            dims,
-            vars,
-        )
+    let plan = build_chunk_physical_plan(
+        meta,
+        dims,
+        &idx,
+        chunk_shape,
+        &origin,
+        vars,
+        with_columns,
     )?;
+
+    let mut read_futs = FuturesUnordered::new();
+    for (path, spec) in &plan.reads {
+        read_futs.push(execute_read_async(
+            backend,
+            *path,
+            spec.clone(),
+        ));
+    }
+
+    let mut loaded: BTreeMap<
+        IStr,
+        Arc<ColumnData>,
+    > = BTreeMap::new();
+    while let Some(res) = read_futs.next().await {
+        let (path, data) = res?;
+        loaded.insert(path, Arc::new(data));
+    }
 
     // Build DataFrame columns
     let mut cols: Vec<Column> = Vec::new();
     let height = keep.len();
 
-    // Coordinate columns
-    for (d, dim_name) in dims.iter().enumerate() {
+    for dim_step in &plan.dims {
+        let coord_data: Option<&ColumnData> =
+            match &dim_step.mat {
+                DimMaterialization::Synthetic => None,
+                DimMaterialization::FromArray {
+                    path,
+                } => {
+                    let col = loaded
+                        .get(path)
+                        .ok_or_else(|| {
+                            BackendError::Other {
+                                msg: format!(
+                                    "internal: missing read for coord path {}",
+                                    path
+                                ),
+                            }
+                        })?
+                        .as_ref();
+                    let expected_len =
+                        chunk_shape[dim_step.dim_idx]
+                            as usize;
+                    if col.len() != expected_len {
+                        return Err(
+                            BackendError::CoordLengthMismatch {
+                                name: dim_step.dim_name,
+                                expected_len: chunk_shape
+                                    [dim_step.dim_idx],
+                                coord_len: col.len()
+                                    as u64,
+                            },
+                        );
+                    }
+                    Some(col)
+                }
+            };
+
         let encoding = meta
-            .array_by_path(*dim_name)
+            .array_by_path(dim_step.dim_name)
             .and_then(|m| m.encoding.as_ref());
 
-        let col = build_coord_column(
-            dim_name.as_ref(),
-            d,
+        cols.push(build_coord_column(
+            dim_step.dim_name.as_ref(),
+            dim_step.dim_idx,
             &keep,
             &strides,
             chunk_shape,
             &origin,
-            coord_slices.get(dim_name),
+            coord_data,
             encoding,
-        );
-        cols.push(col);
+        ));
     }
 
-    // Variable columns
-    for (
-        name,
-        data,
-        var_dims,
-        var_chunk_shape,
-        var_offsets,
-    ) in var_chunks
-    {
+    for vs in &plan.vars {
+        let data = loaded
+            .get(&vs.path)
+            .ok_or_else(|| BackendError::Other {
+                msg: format!(
+                    "internal: missing read for variable path {}",
+                    vs.path
+                ),
+            })?
+            .clone();
+
         let encoding = meta
-            .array_by_path(name)
+            .array_by_path(vs.name)
             .and_then(|m| m.encoding.as_ref());
 
-        let col = build_var_column(
-            &name,
+        cols.push(build_var_column(
+            &vs.name,
             data,
-            &var_dims,
-            &var_chunk_shape,
-            &var_offsets,
+            &vs.var_dims,
+            &vs.var_chunk_shape,
+            &vs.offsets,
             dims,
             chunk_shape,
             &strides,
             &keep,
             encoding,
-        );
-        cols.push(col);
+        ));
     }
 
     DataFrame::new(height, cols).context(

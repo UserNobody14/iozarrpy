@@ -1,9 +1,5 @@
 use super::expr_walk::walk_expr;
-use super::literals::{
-    literal_to_scalar, reverse_operator,
-    strip_wrappers,
-};
-use crate::chunk_plan::indexing::types::ValueRangePresent;
+use super::literals::strip_wrappers;
 use crate::chunk_plan::prelude::*;
 use crate::{IStr, IntoIStr};
 

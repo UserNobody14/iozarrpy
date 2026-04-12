@@ -4,13 +4,12 @@
 //! 1. Compile expression to `ExprPlan` (no I/O)
 //! 2. Resolve constraints inline via the backend (binary search on cached coordinate chunks)
 //! 3. Convert to `GroupedChunkPlan`
-#![allow(unused_imports)]
 
 mod compile_entry;
 mod prelude;
 
-mod exprs;
-mod indexing;
+pub(crate) mod exprs;
+pub(crate) mod indexing;
 
 mod selection;
 pub use compile_entry::compute_dims_and_lengths_unified;
@@ -18,10 +17,8 @@ pub use exprs::LazyCompileCtx;
 pub(crate) use exprs::apply_time_encoding;
 pub use exprs::compile_expr;
 pub(crate) use exprs::compile_node::collect_column_refs;
-pub use exprs::expr_plan::ExprPlan;
 
 pub use indexing::ChunkSubset;
-pub use indexing::DatasetSelection;
 pub use indexing::GroupedChunkPlan;
 pub(crate) use indexing::lazy_materialize::{
     resolve_expr_plan_async,
@@ -31,3 +28,14 @@ pub(crate) use indexing::plan::ConsolidatedGridGroup;
 pub(crate) use indexing::resolver_traits::ResolutionError;
 pub use indexing::selection_to_chunks::selection_to_grouped_chunk_plan_unified_from_meta;
 pub use indexing::types::ChunkGridSignature;
+
+pub(crate) use indexing::{
+    GridGroupExecutionOpts, OwnedGridGroup,
+    apply_streaming_batch_io_cut,
+    streaming_grid_chunk_read_count,
+};
+pub(crate) use indexing::{
+    ScheduleBuilt, StreamingBatch,
+    build_streaming_schedule,
+    distinct_chunk_slots_in_batches,
+};

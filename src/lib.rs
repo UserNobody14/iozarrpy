@@ -7,6 +7,7 @@ use pyo3::prelude::*;
 
 mod backend;
 mod chunk_plan;
+mod codec_compat;
 mod errors;
 mod meta;
 mod py;
@@ -88,6 +89,8 @@ fn _core(
     py: Python<'_>,
     m: &Bound<PyModule>,
 ) -> PyResult<()> {
+    codec_compat::ensure_zarr_compat_registered();
+
     // Initialize tokio-console subscriber for async profiling (when feature enabled)
     #[cfg(feature = "tokio-console")]
     {

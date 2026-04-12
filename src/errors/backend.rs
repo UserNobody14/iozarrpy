@@ -15,7 +15,6 @@ use crate::{
 };
 /// Error type for backend operations.
 #[derive(Debug, Snafu)]
-#[allow(private_interfaces)] // `ResolutionError` is crate-private but appears in this `pub` enum
 pub enum BackendError {
     #[snafu(display(
         "unsupported polars expression: {expr:?} because {msg}",

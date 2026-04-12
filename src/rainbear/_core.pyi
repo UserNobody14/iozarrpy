@@ -486,6 +486,18 @@ class IcechunkBackend:
         ...
 
 
+def configure_zarr_codecs(aliases: dict[str, str]) -> None:
+    """Configure how non-standard Zarr V3 codec names in metadata are interpreted.
+
+    Args:
+        aliases: Map from codec name as stored on disk to a zarrs canonical name.
+            Supported targets: ``\"numcodecs.bitround\"`` (or ``\"bitround\"``),
+            ``\"numcodecs.fixedscaleoffset\"`` (or ``\"fixedscaleoffset\"``).
+            The fixed-scale-offset target applies NumPy-style ``dtype`` / ``astype``
+            normalization before zarrs parses them.
+    """
+    ...
+
 # Store module - provides ObjectStore builders with full connection pooling
 class store:
     """Object store builders for S3, GCS, Azure, HTTP, and local filesystem.

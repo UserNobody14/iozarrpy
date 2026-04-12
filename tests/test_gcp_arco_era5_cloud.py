@@ -17,6 +17,7 @@ from __future__ import annotations
 import os
 from datetime import datetime
 
+import pandas as pd
 import polars as pl
 import pytest
 import xarray as xr
@@ -40,30 +41,31 @@ def test_arco_era5_specific_humidity_matches_xarray_point() -> None:
     longitude = 28.5
 
     ds = xr.open_zarr(ARCO_ERA5_URL)
-    try:
-        v_xr = float(
-            ds["specific_humidity"]
-            .sel(
-                time=t0,
-                level=level,
-                latitude=latitude,
-                longitude=longitude,
-                method="nearest",
-            )
-            .values
-        )
-    finally:
-        ds.close()
+    p = ds["specific_humidity"].sel(
+        time=t0,
+        level=level,
+        latitude=latitude,
+        longitude=longitude,
+        method="nearest",
+    )
+    v_xr = float(p.values)
+    # Predicate pushdown uses binary search on coordinate arrays. This grid stores
+    # e.g. 16.5°N as 16.499999999999993 in float64, so ``== 16.5`` yields an empty
+    # index range and no rows. Filter using the nearest grid values from xarray.
+    time_sel = pd.Timestamp(p["time"].values.item()).to_pydatetime()
+    level_sel = int(p["level"].values.item())
+    lat_sel = float(p["latitude"].values.item())
+    lon_sel = float(p["longitude"].values.item())
 
     df = (
         rainbear.scan_zarr(ARCO_ERA5_URL)
         .filter(
-            (pl.col("time") == t0)
-            & (pl.col("level") == level)
-            & (pl.col("latitude") == latitude)
-            & (pl.col("longitude") == longitude)
+            (pl.col("time") == time_sel)
+            & (pl.col("level") == level_sel)
+            & (pl.col("latitude") == lat_sel)
+            & (pl.col("longitude") == lon_sel)
         )
-        .select("specific_humidity")
+        .select(["specific_humidity", "latitude", "longitude", "time", "level"])
         .collect()
     )
     assert df.height == 1
