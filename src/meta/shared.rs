@@ -37,37 +37,31 @@ pub(crate) fn build_node_tree(
     };
     let mut node = ZarrNode::new(path_istr);
 
-    if let Some(arrays) =
-        group_arrays.get(path)
-    {
+    if let Some(arrays) = group_arrays.get(path) {
         let mut dims_set: BTreeSet<IStr> =
             BTreeSet::new();
         let mut coord_arrays: BTreeSet<IStr> =
             BTreeSet::new();
 
         for (leaf, arr) in arrays {
-            node.arrays.insert(
-                leaf.clone(),
-                arr.clone(),
-            );
+            node.arrays
+                .insert(*leaf, arr.clone());
 
             for dim in &arr.dims {
-                dims_set.insert(dim.clone());
+                dims_set.insert(*dim);
             }
 
             if arr.shape.len() == 1
                 && arr.dims.len() == 1
                 && *leaf == arr.dims[0]
             {
-                coord_arrays
-                    .insert(leaf.clone());
+                coord_arrays.insert(*leaf);
             }
         }
 
         for aux in aux_coords {
             if node.arrays.contains_key(aux) {
-                coord_arrays
-                    .insert(aux.clone());
+                coord_arrays.insert(*aux);
             }
         }
 
@@ -88,20 +82,16 @@ pub(crate) fn build_node_tree(
     for child_path in group_arrays.keys() {
         if child_path.parent() == *path
             && child_path != path
-        {
-            if let Some(child_leaf) =
+            && let Some(child_leaf) =
                 child_path.leaf()
-            {
-                let child_node = build_node_tree(
-                    child_path,
-                    group_arrays,
-                    aux_coords,
-                );
-                node.children.insert(
-                    child_leaf.clone(),
-                    child_node,
-                );
-            }
+        {
+            let child_node = build_node_tree(
+                child_path,
+                group_arrays,
+                aux_coords,
+            );
+            node.children
+                .insert(*child_leaf, child_node);
         }
     }
 
@@ -182,17 +172,14 @@ pub(crate) fn load_zarr_meta_inner<
 
         if let Some(attrs) =
             array.attributes().get("coordinates")
-        {
-            if let Some(coord_str) =
+            && let Some(coord_str) =
                 attrs.as_str()
+        {
+            for coord_name in
+                coord_str.split_whitespace()
             {
-                for coord_name in
-                    coord_str.split_whitespace()
-                {
-                    aux_coords.insert(
-                        coord_name.istr(),
-                    );
-                }
+                aux_coords
+                    .insert(coord_name.istr());
             }
         }
 

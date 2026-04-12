@@ -64,7 +64,7 @@ impl OwnedGridGroup {
 /// `batch_size` and flush **before** 1D coordinate batches run, so
 /// [`combine_chunk_dataframes`] never sees `latitude` / `station_id` in that batch.
 pub(crate) fn sort_grid_groups_for_streaming_join(
-    groups: &mut Vec<OwnedGridGroup>,
+    groups: &mut [OwnedGridGroup],
 ) {
     groups.sort_by(|a, b| {
         let da = a.sig.dims().len();
@@ -146,8 +146,8 @@ pub(crate) fn output_columns_for_streaming_batch(
             };
             if polars_requested.is_none() {
                 for name in exp {
-                    if seen.insert(name.clone()) {
-                        out.push(name.clone());
+                    if seen.insert(*name) {
+                        out.push(*name);
                     }
                 }
                 return;
@@ -167,8 +167,8 @@ pub(crate) fn output_columns_for_streaming_batch(
                 if vm.shape.len() != 1 {
                     continue;
                 }
-                seen.insert(name.clone());
-                out.push(name.clone());
+                seen.insert(*name);
+                out.push(*name);
             }
         };
 

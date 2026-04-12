@@ -152,7 +152,7 @@ impl ChunkedDataBackendAsync
         .await?;
 
         self.opened_arrays.write().await.insert(
-            var.clone(),
+            *var,
             OpenedArrayAsync {
                 array: array_arc,
                 cache,

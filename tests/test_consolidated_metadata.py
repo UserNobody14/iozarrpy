@@ -5,6 +5,7 @@ import polars as pl
 
 import rainbear
 
+SHRINKING_EXPR = pl.col("time") == pl.col("time").first()
 
 def test_scan_with_consolidated_metadata(baseline_datasets):
     """Test scanning a dataset with consolidated metadata."""
@@ -22,7 +23,7 @@ def test_scan_with_unconsolidated_metadata(baseline_datasets):
     """Test scanning a dataset without consolidated metadata."""
     path = baseline_datasets["grid_constant_unconsolidated"]
     
-    df = rainbear.scan_zarr(path).collect()
+    df = rainbear.scan_zarr(path).filter(SHRINKING_EXPR).collect()
     
     # Should successfully read unconsolidated dataset
     assert df.height > 0
@@ -81,12 +82,15 @@ def test_iterator_with_unconsolidated_metadata(baseline_datasets):
     # Use filter
     df = (
         rainbear.scan_zarr(path)
-        .filter(pl.col("lead_time") >= 0)
+        .select(["lead_time", "time", "2m_temperature", "total_precipitation", "x", "y"])
+        .filter(SHRINKING_EXPR & (
+            (pl.col("x") ==0) & (pl.col("y") == 0)
+        ))
         .collect()
     )
     
     # Should work
-    assert df.height > 0
+    assert df.height == 10
 
 
 def test_column_selection_with_unconsolidated(baseline_datasets):
@@ -96,6 +100,7 @@ def test_column_selection_with_unconsolidated(baseline_datasets):
     df = (
         rainbear.scan_zarr(path)
         .select(["time", "y"])
+        .filter(SHRINKING_EXPR)
         .collect()
     )
     
@@ -125,7 +130,7 @@ def test_complex_predicate_unconsolidated(baseline_datasets):
     df = (
         rainbear.scan_zarr(path)
         .filter(
-            (pl.col("y") >= 5) | (pl.col("x") >= 10)
+            ((pl.col("y") >= 5) | (pl.col("x") >= 10)) & SHRINKING_EXPR
         )
         .collect()
     )
@@ -142,15 +147,15 @@ def test_grid_constant_unconsolidated_basic(baseline_datasets):
         (pl.col("time") > datetime(2024, 1, 1, 0, 0, 0)) &
         (pl.col("time") < datetime(2024, 1, 1, 12, 0, 0)) &
         (pl.col("y") > 50) &
-        (pl.col("y") < 150) &
-        (pl.col("x") > 100) &
-        (pl.col("x") < 200) &
+        (pl.col("y") < 75) &
+        (pl.col("x") > 50) &
+        (pl.col("x") < 100) &
         (pl.col("lead_time") == timedelta(hours=1))
     ).collect()
     
     # Should successfully read the dataset
     assert df.height > 0
     # Should not read the whole dataset, but only the filtered rows
-    assert df.height == 9801
+    assert df.height == 1176
     assert "time" in df.columns
     assert "2m_temperature" in df.columns or "total_precipitation" in df.columns

@@ -169,10 +169,11 @@ impl IcechunkIterator {
                 expanded_with_columns.as_ref(),
             );
 
-        let batch_row_cap = streaming_batch_row_cap(
-            grid_groups.len(),
-            self.batch_size,
-        );
+        let batch_row_cap =
+            streaming_batch_row_cap(
+                grid_groups.len(),
+                self.batch_size,
+            );
 
         self.state = Some(IteratorState {
             grid_groups,
@@ -201,10 +202,9 @@ impl IcechunkIterator {
             .ok_or_else(|| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>("Iterator not initialized"))?;
 
         if let Some(limit) = state.num_rows_limit
+            && state.total_rows_yielded >= limit
         {
-            if state.total_rows_yielded >= limit {
-                return Ok(None);
-            }
+            return Ok(None);
         }
 
         while state.current_group_idx

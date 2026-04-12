@@ -93,8 +93,7 @@ pub(super) fn interpolate_selection_nd_lazy(
             } else {
                 LazyDimConstraint::Unresolved(vr)
             };
-            constraint
-                .insert(dim_name.clone(), c);
+            constraint.insert(*dim_name, c);
         }
         constraints.push(constraint);
     }
@@ -184,21 +183,36 @@ fn extract_coord_names_ordered(
     expr: &Expr,
 ) -> Option<Vec<IStr>> {
     let expr = strip_wrappers(expr);
-    if let Expr::Function { input, function } = expr {
-        if matches!(function, FunctionExpr::AsStruct) {
-            let mut names = Vec::with_capacity(input.len());
-            for e in input {
-                let mut found = None;
-                walk_for_first_column(strip_wrappers(e), &mut found);
-                names.push(found?);
-            }
-            return if names.is_empty() { None } else { Some(names) };
+    if let Expr::Function { input, function } =
+        expr
+        && matches!(
+            function,
+            FunctionExpr::AsStruct
+        )
+    {
+        let mut names =
+            Vec::with_capacity(input.len());
+        for e in input {
+            let mut found = None;
+            walk_for_first_column(
+                strip_wrappers(e),
+                &mut found,
+            );
+            names.push(found?);
         }
+        return if names.is_empty() {
+            None
+        } else {
+            Some(names)
+        };
     }
     None
 }
 
-fn walk_for_first_column(expr: &Expr, out: &mut Option<IStr>) {
+fn walk_for_first_column(
+    expr: &Expr,
+    out: &mut Option<IStr>,
+) {
     if out.is_some() {
         return;
     }
@@ -227,30 +241,36 @@ pub(super) fn interpolate_selection_geospatial_lazy(
     target_values: &Expr,
     ctx: &mut LazyCompileCtx<'_>,
 ) -> LazyResult {
-    let coord_names_ordered = extract_coord_names_ordered(source_coords);
-    let coord_names_flat = coord_names_ordered.as_deref()
-        .or_else(|| {
+    let coord_names_ordered =
+        extract_coord_names_ordered(
+            source_coords,
+        );
+    let coord_names_flat =
+        coord_names_ordered.as_deref().or({
             // Fallback: unordered extraction (can't distinguish lon)
             None
         });
 
-    let coord_names: Vec<IStr> = match coord_names_flat {
-        Some(names) => names.to_vec(),
-        None => {
-            try_extract!(let Some(names) = extract_column_names_lazy(source_coords));
-            names
-        }
-    };
+    let coord_names: Vec<IStr> =
+        match coord_names_flat {
+            Some(names) => names.to_vec(),
+            None => {
+                try_extract!(let Some(names) = extract_column_names_lazy(source_coords));
+                names
+            }
+        };
 
-    let lon_dim: Option<&IStr> = coord_names_ordered
-        .as_ref()
-        .and_then(|names| names.last());
+    let lon_dim: Option<&IStr> =
+        coord_names_ordered
+            .as_ref()
+            .and_then(|names| names.last());
 
     try_extract!(let Some(target_struct) =
         extract_literal_struct_series_lazy(target_values)
     );
     try_extract!(let Ok(target_sc) = target_struct.struct_());
-    let target_fields = target_sc.fields_as_series();
+    let target_fields =
+        target_sc.fields_as_series();
 
     let mut dim_values: std::collections::BTreeMap<IStr, Vec<CoordScalar>> =
         std::collections::BTreeMap::new();
@@ -273,7 +293,10 @@ pub(super) fn interpolate_selection_geospatial_lazy(
     }
 
     let mut constraints: Vec<
-        std::collections::BTreeMap<IStr, LazyDimConstraint>,
+        std::collections::BTreeMap<
+            IStr,
+            LazyDimConstraint,
+        >,
     > = vec![];
 
     let num_rows = dim_values
@@ -282,12 +305,18 @@ pub(super) fn interpolate_selection_geospatial_lazy(
         .map(|v| v.len())
         .unwrap_or(0);
     for i in 0..num_rows {
-        let mut constraint = std::collections::BTreeMap::new();
-        for (dim_name, values) in dim_values.iter() {
+        let mut constraint =
+            std::collections::BTreeMap::new();
+        for (dim_name, values) in
+            dim_values.iter()
+        {
             let value = values[i].clone();
             let vr = ValueRangePresent::from_equal_case(value);
-            let is_interp_dim = coord_names.iter().any(|c| c == dim_name);
-            let is_lon = lon_dim.map_or(false, |l| l == dim_name);
+            let is_interp_dim = coord_names
+                .iter()
+                .any(|c| c == dim_name);
+            let is_lon =
+                lon_dim == Some(dim_name);
             let c = if is_lon {
                 LazyDimConstraint::WrappingInterpolationRange(vr)
             } else if is_interp_dim {
@@ -295,16 +324,21 @@ pub(super) fn interpolate_selection_geospatial_lazy(
             } else {
                 LazyDimConstraint::Unresolved(vr)
             };
-            constraint.insert(dim_name.clone(), c);
+            constraint.insert(*dim_name, c);
         }
         constraints.push(constraint);
     }
 
-    let rects: Vec<LazyHyperRectangle> = constraints
-        .into_iter()
-        .map(|c| LazyHyperRectangle::with_dims(c))
-        .collect();
-    let sel = LazyArraySelection::Rectangles(rects.into());
+    let rects: Vec<LazyHyperRectangle> =
+        constraints
+            .into_iter()
+            .map(|c| {
+                LazyHyperRectangle::with_dims(c)
+            })
+            .collect();
+    let sel = LazyArraySelection::Rectangles(
+        rects.into(),
+    );
 
     let (retrieve_vars, filter_plan) =
         match source_values {
@@ -314,7 +348,9 @@ pub(super) fn interpolate_selection_geospatial_lazy(
             } => match function {
                 FunctionExpr::AsStruct => {
                     let filter_initial =
-                        compile_expr_list(input, ctx)?;
+                        compile_expr_list(
+                            input, ctx,
+                        )?;
                     let vars =
                         collect_refs_from_expr_list(input);
                     (vars, Some(filter_initial))
@@ -354,7 +390,9 @@ pub(super) fn interpolate_selection_geospatial_lazy(
         Some(ExprPlan::Empty) => {
             return Ok(ExprPlan::Empty);
         }
-        Some(ExprPlan::NoConstraint) | None => sel,
+        Some(ExprPlan::NoConstraint) | None => {
+            sel
+        }
     };
 
     if sel.is_empty() {
@@ -370,17 +408,18 @@ pub(super) fn interpolate_selection_geospatial_lazy(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::chunk_plan::exprs::expr_plan::VarSet;
+    use crate::meta::{
+        DimensionAnalysis, ZarrArrayMeta,
+        ZarrMeta, ZarrNode,
+    };
     use polars::prelude::*;
+    use smallvec::SmallVec;
     use std::collections::BTreeMap;
     use std::num::NonZeroU64;
     use std::sync::Arc;
-    use smallvec::SmallVec;
-    use zarrs::array::chunk_grid::regular::RegularChunkGrid;
     use zarrs::array::ChunkGrid;
-    use crate::chunk_plan::exprs::expr_plan::VarSet;
-    use crate::meta::{
-        DimensionAnalysis, ZarrArrayMeta, ZarrMeta, ZarrNode,
-    };
+    use zarrs::array::chunk_grid::regular::RegularChunkGrid;
 
     fn make_chunk_grid(
         shape: &[u64],
@@ -391,7 +430,11 @@ mod tests {
             .map(|&s| NonZeroU64::new(s).unwrap())
             .collect();
         Arc::new(ChunkGrid::new(
-            RegularChunkGrid::new(shape.to_vec(), cs).unwrap(),
+            RegularChunkGrid::new(
+                shape.to_vec(),
+                cs,
+            )
+            .unwrap(),
         ))
     }
 
@@ -401,9 +444,12 @@ mod tests {
         shape: &[u64],
         chunk_shape: &[u64],
     ) -> (IStr, Arc<ZarrArrayMeta>) {
-        let dim_sv: SmallVec<[IStr; 4]> =
-            dims.iter().map(|d| d.istr()).collect();
-        let cg = make_chunk_grid(shape, chunk_shape);
+        let dim_sv: SmallVec<[IStr; 4]> = dims
+            .iter()
+            .map(|d| d.istr())
+            .collect();
+        let cg =
+            make_chunk_grid(shape, chunk_shape);
         let meta = ZarrArrayMeta {
             path: path.istr(),
             shape: shape.into(),
@@ -418,14 +464,21 @@ mod tests {
     }
 
     fn make_geo_meta() -> ZarrMeta {
-        let mut arrays: BTreeMap<IStr, Arc<ZarrArrayMeta>> =
-            BTreeMap::new();
+        let mut arrays: BTreeMap<
+            IStr,
+            Arc<ZarrArrayMeta>,
+        > = BTreeMap::new();
 
-        for (name, len, cs) in
-            [("lat", 180u64, 10u64), ("lon", 360, 10)]
-        {
-            let (key, meta) =
-                make_array_meta(name, &[name], &[len], &[cs]);
+        for (name, len, cs) in [
+            ("lat", 180u64, 10u64),
+            ("lon", 360, 10),
+        ] {
+            let (key, meta) = make_array_meta(
+                name,
+                &[name],
+                &[len],
+                &[cs],
+            );
             arrays.insert(key, meta);
         }
 
@@ -441,16 +494,17 @@ mod tests {
             path: "/".istr(),
             arrays,
             children: BTreeMap::new(),
-            local_dims: vec!["lat".istr(), "lon".istr()],
+            local_dims: vec![
+                "lat".istr(),
+                "lon".istr(),
+            ],
             data_vars: vec!["temperature".istr()],
         };
 
-        let dim_analysis = DimensionAnalysis::compute(&root);
+        let dim_analysis =
+            DimensionAnalysis::compute(&root);
 
-        ZarrMeta {
-            root,
-            dim_analysis,
-        }
+        ZarrMeta { root, dim_analysis }
     }
 
     // =========================================================================
@@ -460,42 +514,65 @@ mod tests {
     #[test]
     fn ordered_names_from_struct() {
         let struct_expr =
-            polars::prelude::as_struct(vec![col("lat"), col("lon")]);
-        let names = extract_coord_names_ordered(&struct_expr);
+            polars::prelude::as_struct(vec![
+                col("lat"),
+                col("lon"),
+            ]);
+        let names = extract_coord_names_ordered(
+            &struct_expr,
+        );
         assert_eq!(
             names,
-            Some(vec!["lat".istr(), "lon".istr()])
+            Some(vec![
+                "lat".istr(),
+                "lon".istr()
+            ])
         );
     }
 
     #[test]
     fn ordered_names_preserves_order() {
         let struct_expr =
-            polars::prelude::as_struct(vec![col("lon"), col("lat")]);
-        let names = extract_coord_names_ordered(&struct_expr);
+            polars::prelude::as_struct(vec![
+                col("lon"),
+                col("lat"),
+            ]);
+        let names = extract_coord_names_ordered(
+            &struct_expr,
+        );
         assert_eq!(
             names,
-            Some(vec!["lon".istr(), "lat".istr()])
+            Some(vec![
+                "lon".istr(),
+                "lat".istr()
+            ])
         );
     }
 
     #[test]
     fn ordered_names_non_struct_returns_none() {
         let expr = col("lat");
-        let names = extract_coord_names_ordered(&expr);
+        let names =
+            extract_coord_names_ordered(&expr);
         assert_eq!(names, None);
     }
 
     #[test]
     fn ordered_names_with_alias() {
-        let struct_expr = polars::prelude::as_struct(vec![
-            col("lat").alias("latitude"),
-            col("lon"),
-        ]);
-        let names = extract_coord_names_ordered(&struct_expr);
+        let struct_expr =
+            polars::prelude::as_struct(vec![
+                col("lat").alias("latitude"),
+                col("lon"),
+            ]);
+        let names = extract_coord_names_ordered(
+            &struct_expr,
+        );
         assert_eq!(
             names,
-            Some(vec!["lat".istr(), "lon".istr()])
+            Some(vec![
+                "lat".istr(),
+                "lon".istr()
+            ])
         );
     }
 
@@ -507,21 +584,29 @@ mod tests {
         lats: &[f64],
         lons: &[f64],
     ) -> Expr {
-        let lat_col = Column::new("lat".into(), lats);
-        let lon_col = Column::new("lon".into(), lons);
-        let target_struct = StructChunked::from_columns(
-            "__interp_target__".into(),
-            lats.len(),
-            &[lat_col, lon_col],
-        )
-        .unwrap()
-        .into_series();
+        let lat_col =
+            Column::new("lat".into(), lats);
+        let lon_col =
+            Column::new("lon".into(), lons);
+        let target_struct =
+            StructChunked::from_columns(
+                "__interp_target__".into(),
+                lats.len(),
+                &[lat_col, lon_col],
+            )
+            .unwrap()
+            .into_series();
         Expr::Literal(LiteralValue::Series(
-            polars::prelude::SpecialEq::new(target_struct),
+            polars::prelude::SpecialEq::new(
+                target_struct,
+            ),
         ))
     }
 
-    fn assert_vars_contain(vars: &VarSet, name: &str) {
+    fn assert_vars_contain(
+        vars: &VarSet,
+        name: &str,
+    ) {
         match vars {
             VarSet::All => {}
             VarSet::Specific(sv) => {
@@ -541,14 +626,18 @@ mod tests {
         let meta = make_geo_meta();
         let dims: Vec<IStr> =
             vec!["lat".istr(), "lon".istr()];
-        let mut ctx = LazyCompileCtx::new(&meta, &dims);
+        let mut ctx =
+            LazyCompileCtx::new(&meta, &dims);
 
-        let coord_struct = polars::prelude::as_struct(vec![
-            col("lat"),
-            col("lon"),
-        ]);
+        let coord_struct =
+            polars::prelude::as_struct(vec![
+                col("lat"),
+                col("lon"),
+            ]);
         let value_struct =
-            polars::prelude::as_struct(vec![col("temperature")]);
+            polars::prelude::as_struct(vec![
+                col("temperature"),
+            ]);
         let target_lit = make_target_struct_lit(
             &[45.0, -30.0],
             &[170.0, -175.0],
@@ -598,17 +687,22 @@ mod tests {
     }
 
     #[test]
-    fn geospatial_no_matching_dims_returns_no_constraint() {
+    fn geospatial_no_matching_dims_returns_no_constraint()
+     {
         let meta = make_geo_meta();
         let dims: Vec<IStr> = vec!["time".istr()];
-        let mut ctx = LazyCompileCtx::new(&meta, &dims);
+        let mut ctx =
+            LazyCompileCtx::new(&meta, &dims);
 
-        let coord_struct = polars::prelude::as_struct(vec![
-            col("lat"),
-            col("lon"),
-        ]);
+        let coord_struct =
+            polars::prelude::as_struct(vec![
+                col("lat"),
+                col("lon"),
+            ]);
         let value_struct =
-            polars::prelude::as_struct(vec![col("temperature")]);
+            polars::prelude::as_struct(vec![
+                col("temperature"),
+            ]);
         let target_lit = make_target_struct_lit(
             &[45.0],
             &[170.0],
@@ -622,7 +716,10 @@ mod tests {
         )
         .unwrap();
 
-        assert!(matches!(plan, ExprPlan::NoConstraint));
+        assert!(matches!(
+            plan,
+            ExprPlan::NoConstraint
+        ));
     }
 
     #[test]
@@ -630,14 +727,18 @@ mod tests {
         let meta = make_geo_meta();
         let dims: Vec<IStr> =
             vec!["lat".istr(), "lon".istr()];
-        let mut ctx = LazyCompileCtx::new(&meta, &dims);
+        let mut ctx =
+            LazyCompileCtx::new(&meta, &dims);
 
-        let coord_struct = polars::prelude::as_struct(vec![
-            col("lat"),
-            col("lon"),
-        ]);
+        let coord_struct =
+            polars::prelude::as_struct(vec![
+                col("lat"),
+                col("lon"),
+            ]);
         let value_struct =
-            polars::prelude::as_struct(vec![col("temperature")]);
+            polars::prelude::as_struct(vec![
+                col("temperature"),
+            ]);
         let target_lit = make_target_struct_lit(
             &[45.0],
             &[170.0],
@@ -653,9 +754,15 @@ mod tests {
 
         match plan {
             ExprPlan::Active { vars, .. } => {
-                assert_vars_contain(&vars, "temperature");
+                assert_vars_contain(
+                    &vars,
+                    "temperature",
+                );
             }
-            other => panic!("expected Active plan, got {:?}", other),
+            other => panic!(
+                "expected Active plan, got {:?}",
+                other
+            ),
         }
     }
 }

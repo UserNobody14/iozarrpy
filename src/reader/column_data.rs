@@ -454,7 +454,8 @@ impl ColumnData {
                         .collect(),
                 )
             }
-            ColumnData::Str(_) | ColumnData::Bin(_) => {
+            ColumnData::Str(_)
+            | ColumnData::Bin(_) => {
                 panic!(
                     "map_i64 is not supported for \
                      string/binary ColumnData"
@@ -737,22 +738,18 @@ impl ColumnData {
             ColumnData::F64(v) => {
                 Series::new(name.into(), v)
             }
-            ColumnData::Str(v) => {
-                Series::new(
-                    name.into(),
-                    v.iter()
-                        .map(|s| s.as_str())
-                        .collect::<Vec<&str>>(),
-                )
-            }
-            ColumnData::Bin(v) => {
-                Series::new(
-                    name.into(),
-                    v.iter()
-                        .map(|b| b.as_slice())
-                        .collect::<Vec<&[u8]>>(),
-                )
-            }
+            ColumnData::Str(v) => Series::new(
+                name.into(),
+                v.iter()
+                    .map(|s| s.as_str())
+                    .collect::<Vec<&str>>(),
+            ),
+            ColumnData::Bin(v) => Series::new(
+                name.into(),
+                v.iter()
+                    .map(|b| b.as_slice())
+                    .collect::<Vec<&[u8]>>(),
+            ),
         }
     }
 
@@ -794,22 +791,18 @@ impl ColumnData {
             ColumnData::F64(v) => {
                 Series::new(name.into(), v)
             }
-            ColumnData::Str(v) => {
-                Series::new(
-                    name.into(),
-                    v.iter()
-                        .map(|s| s.as_str())
-                        .collect::<Vec<&str>>(),
-                )
-            }
-            ColumnData::Bin(v) => {
-                Series::new(
-                    name.into(),
-                    v.iter()
-                        .map(|b| b.as_slice())
-                        .collect::<Vec<&[u8]>>(),
-                )
-            }
+            ColumnData::Str(v) => Series::new(
+                name.into(),
+                v.iter()
+                    .map(|s| s.as_str())
+                    .collect::<Vec<&str>>(),
+            ),
+            ColumnData::Bin(v) => Series::new(
+                name.into(),
+                v.iter()
+                    .map(|b| b.as_slice())
+                    .collect::<Vec<&[u8]>>(),
+            ),
         }
     }
 
@@ -877,7 +870,8 @@ impl ColumnData {
             ColumnData::U64(v) => decode!(v),
             ColumnData::F32(v) => decode!(v),
             ColumnData::F64(v) => decode!(v),
-            ColumnData::Str(_) | ColumnData::Bin(_) => {
+            ColumnData::Str(_)
+            | ColumnData::Bin(_) => {
                 panic!(
                     "to_f64_scaled is not supported \
                      for string/binary ColumnData"

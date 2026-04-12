@@ -108,6 +108,8 @@ pub trait HasAsyncStore {
 
 /// Sync cache for chunked data - delegates metadata and store traits to backend
 #[derive(Delegate)]
+#[allow(clippy::duplicated_attributes)]
+// ambassador: separate `#[delegate]` per trait, same target field
 #[delegate(HasMetadataBackendSync<METADATA>, target = "backend", generics = "METADATA", where = "METADATA: Send + Sync, BACKEND: HasMetadataBackendSync<METADATA>")]
 #[delegate(
     HasStore,
@@ -137,6 +139,8 @@ pub struct ChunkedDataCacheAsync<
 
 /// Sync cache for metadata - delegates chunked data and store traits to backend
 #[derive(Delegate)]
+#[allow(clippy::duplicated_attributes)]
+// ambassador: separate `#[delegate]` per trait, same target field
 #[delegate(
     ChunkedDataBackendSync,
     target = "backend",
@@ -279,8 +283,7 @@ impl<BACKEND: ChunkedDataBackendSync>
         chunk_idx: &[u64],
     ) -> Result<Arc<ColumnData>, BackendError>
     {
-        let key =
-            (var.clone(), chunk_idx.to_vec());
+        let key = (*var, chunk_idx.to_vec());
         let cache = self.chunk_cache.get(&key);
         if let Some(data) = cache {
             return Ok(data.clone());
@@ -306,8 +309,7 @@ impl<BACKEND: ChunkedDataBackendAsync>
         chunk_idx: &[u64],
     ) -> Result<Arc<ColumnData>, BackendError>
     {
-        let key =
-            (var.clone(), chunk_idx.to_vec());
+        let key = (*var, chunk_idx.to_vec());
         let cache =
             self.chunk_cache.get(&key).await;
         if let Some(data) = cache {
@@ -336,10 +338,10 @@ impl<
     fn metadata(
         &self,
     ) -> Result<Arc<METADATA>, BackendError> {
-        if let Ok(g) = self.metadata.read() {
-            if let Some(m) = g.as_ref() {
-                return Ok(m.clone());
-            }
+        if let Ok(g) = self.metadata.read()
+            && let Some(m) = g.as_ref()
+        {
+            return Ok(m.clone());
         }
 
         let metadata = self.backend.metadata()?;

@@ -13,10 +13,9 @@ use super::selection_base::DatasetSelectionBase;
 /// Dataset-level selection: type alias for the generic `DatasetSelectionBase`.
 ///
 /// This groups variables by their dimension signature to avoid duplication.
-pub type DatasetSelection =
-    DatasetSelectionBase<
-        GroupedSelection<DataArraySelection>,
-    >;
+pub type DatasetSelection = DatasetSelectionBase<
+    GroupedSelection<DataArraySelection>,
+>;
 
 /// Selection for a single array, expressed as a disjunction (OR) of hyper-rectangles.
 #[derive(
@@ -51,6 +50,7 @@ pub trait Emptyable {
 }
 
 /// Operations for sets of selections.
+#[allow(dead_code)] // `exclusive_or` is not called on a `SetOperations` trait object yet
 pub trait SetOperations: Emptyable {
     fn union(&self, other: &Self) -> Self;
     fn intersect(&self, other: &Self) -> Self;
@@ -148,15 +148,15 @@ impl SetOperations for DataArraySelection {
         }
     }
 
-    /// Conservative DNF subtraction: returns a disjunction (OR) of hyper-rectangles.
-    ///
-    /// Uses: A \\ B = union_dim ( A with that dim replaced by (A_dim \\ B_dim) ).
-    /// This is exact (though may produce overlapping rectangles).
     // fn difference(&self, other: &HyperRectangleSelection) -> DataArraySelection {
 
     //     DataArraySelection(out)
     // }
 
+    /// Conservative DNF subtraction: returns a disjunction (OR) of hyper-rectangles.
+    ///
+    /// Uses: A \\ B = union_dim ( A with that dim replaced by (A_dim \\ B_dim) ).
+    /// This is exact (though may produce overlapping rectangles).
     fn exclusive_or(
         &self,
         other: &DataArraySelection,
@@ -369,11 +369,10 @@ impl SetOperations for ArraySubsetList {
         for a in &self.0 {
             for b in &other.0 {
                 if let Ok(overlap) = a.overlap(b)
+                    && !overlap.is_empty()
                 {
-                    if !overlap.is_empty() {
-                        out.push(overlap);
-                        // Generate true intersection (?)
-                    }
+                    out.push(overlap);
+                    // Generate true intersection (?)
                 }
             }
         }

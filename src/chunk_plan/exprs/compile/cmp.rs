@@ -55,21 +55,19 @@ pub(super) fn compile_struct_field_cmp(
     lit: &LiteralValue,
     ctx: &mut LazyCompileCtx<'_>,
 ) -> LazyResult {
-    let full_path = ZarrPath::single(
-        struct_col.clone(),
-    );
-    let array_zp = field_path.components().iter().fold(
-        full_path,
-        |acc, c| acc.push(c.clone()),
-    );
+    let full_path = ZarrPath::single(*struct_col);
+    let array_zp = field_path
+        .components()
+        .iter()
+        .fold(full_path, |acc, c| acc.push(*c));
     let array_path = array_zp.to_istr();
 
     let arr_meta_opt =
-        ctx.meta.array_by_path(&array_path);
+        ctx.meta.array_by_path(array_path);
     if arr_meta_opt.is_none() {
         return Err(
             BackendError::StructFieldNotFound {
-                path: array_path.clone(),
+                path: array_path,
             },
         );
     }
@@ -79,28 +77,22 @@ pub(super) fn compile_struct_field_cmp(
         op, scalar,
     )?;
 
-    if let Some(arr_meta) = arr_meta_opt {
-        if arr_meta.dims.len() == 1 {
-            let dim = &arr_meta.dims[0];
-            if ctx.dims.contains(dim) {
-                let constraint =
-                    LazyDimConstraint::Unresolved(
-                        vr.clone(),
-                    );
-                let rect =
-                    LazyHyperRectangle::all()
-                        .with_dim(
-                            dim.clone(),
-                            constraint,
-                        );
-                let sel = LazyArraySelection::from_rectangle(rect);
-                return Ok(
-                    ExprPlan::constrained(
-                        VarSet::All,
-                        sel,
-                    ),
+    if let Some(arr_meta) = arr_meta_opt
+        && arr_meta.dims.len() == 1
+    {
+        let dim = &arr_meta.dims[0];
+        if ctx.dims.contains(dim) {
+            let constraint =
+                LazyDimConstraint::Unresolved(
+                    vr.clone(),
                 );
-            }
+            let rect = LazyHyperRectangle::all()
+                .with_dim(*dim, constraint);
+            let sel = LazyArraySelection::from_rectangle(rect);
+            return Ok(ExprPlan::constrained(
+                VarSet::All,
+                sel,
+            ));
         }
     }
 

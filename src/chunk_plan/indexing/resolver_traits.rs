@@ -43,7 +43,7 @@ impl DimResolutionCtx {
         meta: &crate::meta::ZarrMeta,
     ) -> Option<Self> {
         let coord_meta =
-            meta.array_by_path(dim.clone())?;
+            meta.array_by_path(*dim)?;
         if coord_meta.shape.len() != 1 {
             return None;
         }
@@ -62,7 +62,7 @@ impl DimResolutionCtx {
                 .and_then(|e| {
                     e.as_time_encoding().cloned()
                 }),
-            array_path: coord_meta.path.clone(),
+            array_path: coord_meta.path,
         })
     }
 }

@@ -9,8 +9,8 @@ use criterion::{
 };
 use polars::prelude::*;
 use smallvec::SmallVec;
-use zarrs::array::chunk_grid::regular::RegularChunkGrid;
 use zarrs::array::ChunkGrid;
+use zarrs::array::chunk_grid::regular::RegularChunkGrid;
 
 use _core::bench_internals::*;
 use _core::{IStr, IntoIStr};
@@ -26,15 +26,28 @@ struct MockBackendSync {
 }
 
 impl MockBackendSync {
-    fn new(coord_chunk_len: usize, var_chunk_len: usize, coord_names: &[&str]) -> Self {
+    fn new(
+        coord_chunk_len: usize,
+        var_chunk_len: usize,
+        coord_names: &[&str],
+    ) -> Self {
         Self {
-            coord_chunk: Arc::new(ColumnData::F64(
-                (0..coord_chunk_len).map(|i| i as f64).collect(),
-            )),
+            coord_chunk: Arc::new(
+                ColumnData::F64(
+                    (0..coord_chunk_len)
+                        .map(|i| i as f64)
+                        .collect(),
+                ),
+            ),
             var_chunk: Arc::new(ColumnData::F64(
-                (0..var_chunk_len).map(|i| i as f64 * 0.1).collect(),
+                (0..var_chunk_len)
+                    .map(|i| i as f64 * 0.1)
+                    .collect(),
             )),
-            coord_names: coord_names.iter().map(|s| s.istr()).collect(),
+            coord_names: coord_names
+                .iter()
+                .map(|s| s.istr())
+                .collect(),
         }
     }
 }
@@ -44,7 +57,8 @@ impl ChunkedDataBackendSync for MockBackendSync {
         &self,
         var: &IStr,
         _chunk_idx: &[u64],
-    ) -> Result<Arc<ColumnData>, BackendError> {
+    ) -> Result<Arc<ColumnData>, BackendError>
+    {
         if self.coord_names.contains(var) {
             Ok(self.coord_chunk.clone())
         } else {
@@ -66,7 +80,11 @@ fn make_chunk_grid(
         .map(|&s| NonZeroU64::new(s).unwrap())
         .collect();
     Arc::new(ChunkGrid::new(
-        RegularChunkGrid::new(array_shape.to_vec(), cs).unwrap(),
+        RegularChunkGrid::new(
+            array_shape.to_vec(),
+            cs,
+        )
+        .unwrap(),
     ))
 }
 
@@ -94,8 +112,14 @@ fn make_array_meta(
 }
 
 fn make_test_meta() -> ZarrMeta {
-    let mut arrays: BTreeMap<IStr, Arc<ZarrArrayMeta>> = BTreeMap::new();
-    let mut path_to_array: BTreeMap<IStr, Arc<ZarrArrayMeta>> = BTreeMap::new();
+    let mut arrays: BTreeMap<
+        IStr,
+        Arc<ZarrArrayMeta>,
+    > = BTreeMap::new();
+    let mut path_to_array: BTreeMap<
+        IStr,
+        Arc<ZarrArrayMeta>,
+    > = BTreeMap::new();
 
     // 1D coordinate arrays
     let coords = [
@@ -104,8 +128,13 @@ fn make_test_meta() -> ZarrMeta {
         ("time", 50, 10),
     ];
     for (name, len, cs) in &coords {
-        let (key, meta) =
-            make_array_meta(name, &[name], &[*len], &[*cs], DataType::Float64);
+        let (key, meta) = make_array_meta(
+            name,
+            &[name],
+            &[*len],
+            &[*cs],
+            DataType::Float64,
+        );
         arrays.insert(key.clone(), meta.clone());
         path_to_array.insert(key, meta);
     }
@@ -136,11 +165,19 @@ fn make_test_meta() -> ZarrMeta {
         path: "/".istr(),
         arrays,
         children: BTreeMap::new(),
-        local_dims: vec!["x".istr(), "y".istr(), "time".istr()],
-        data_vars: vec!["temperature".istr(), "pressure".istr()],
+        local_dims: vec![
+            "x".istr(),
+            "y".istr(),
+            "time".istr(),
+        ],
+        data_vars: vec![
+            "temperature".istr(),
+            "pressure".istr(),
+        ],
     };
 
-    let dim_analysis = DimensionAnalysis::compute(&root);
+    let dim_analysis =
+        DimensionAnalysis::compute(&root);
 
     ZarrMeta {
         root,
@@ -154,7 +191,9 @@ fn make_test_meta() -> ZarrMeta {
 // =============================================================================
 
 fn bench_mask(c: &mut Criterion) {
-    let mut group = c.benchmark_group("compute_in_bounds_mask");
+    let mut group = c.benchmark_group(
+        "compute_in_bounds_mask",
+    );
 
     let chunk_shape = [10u64, 10, 10];
     let array_shape = [100u64, 100, 50];
@@ -199,7 +238,8 @@ fn bench_mask(c: &mut Criterion) {
 // =============================================================================
 
 fn bench_coord_column(c: &mut Criterion) {
-    let mut group = c.benchmark_group("build_coord_column");
+    let mut group =
+        c.benchmark_group("build_coord_column");
 
     let chunk_shape = [10u64, 10, 10];
     let strides = compute_strides(&chunk_shape);
@@ -209,58 +249,74 @@ fn bench_coord_column(c: &mut Criterion) {
     let keep_all = KeepMask::All(chunk_len);
 
     // Coord data available
-    let coord_data =
-        ColumnData::F64((0..10).map(|i| 20.0 + i as f64).collect());
+    let coord_data = ColumnData::F64(
+        (0..10)
+            .map(|i| 20.0 + i as f64)
+            .collect(),
+    );
 
-    group.bench_function("all_with_coord_data", |b| {
-        b.iter(|| {
-            build_coord_column(
-                black_box("x"),
-                black_box(0),
-                black_box(&keep_all),
-                black_box(&strides),
-                black_box(&chunk_shape),
-                black_box(&origin),
-                black_box(Some(&coord_data)),
-                black_box(None),
-            )
-        })
-    });
+    group.bench_function(
+        "all_with_coord_data",
+        |b| {
+            b.iter(|| {
+                build_coord_column(
+                    black_box("x"),
+                    black_box(0),
+                    black_box(&keep_all),
+                    black_box(&strides),
+                    black_box(&chunk_shape),
+                    black_box(&origin),
+                    black_box(Some(&coord_data)),
+                    black_box(None),
+                )
+            })
+        },
+    );
 
     // Sparse keep mask with coord data
-    let sparse_indices: Vec<usize> = (0..chunk_len).filter(|i| i % 3 == 0).collect();
-    let keep_sparse = KeepMask::Sparse(sparse_indices);
+    let sparse_indices: Vec<usize> = (0
+        ..chunk_len)
+        .filter(|i| i % 3 == 0)
+        .collect();
+    let keep_sparse =
+        KeepMask::Sparse(sparse_indices);
 
-    group.bench_function("sparse_with_coord_data", |b| {
-        b.iter(|| {
-            build_coord_column(
-                black_box("x"),
-                black_box(0),
-                black_box(&keep_sparse),
-                black_box(&strides),
-                black_box(&chunk_shape),
-                black_box(&origin),
-                black_box(Some(&coord_data)),
-                black_box(None),
-            )
-        })
-    });
+    group.bench_function(
+        "sparse_with_coord_data",
+        |b| {
+            b.iter(|| {
+                build_coord_column(
+                    black_box("x"),
+                    black_box(0),
+                    black_box(&keep_sparse),
+                    black_box(&strides),
+                    black_box(&chunk_shape),
+                    black_box(&origin),
+                    black_box(Some(&coord_data)),
+                    black_box(None),
+                )
+            })
+        },
+    );
 
     // No coord data (integer fallback)
-    group.bench_function("all_no_coord_data", |b| {
-        b.iter(|| {
-            build_coord_column(
-                black_box("x"),
-                black_box(0),
-                black_box(&keep_all),
-                black_box(&strides),
-                black_box(&chunk_shape),
-                black_box(&origin),
-                black_box(None),
-                black_box(None),
-            )
-        })
-    });
+    group.bench_function(
+        "all_no_coord_data",
+        |b| {
+            b.iter(|| {
+                build_coord_column(
+                    black_box("x"),
+                    black_box(0),
+                    black_box(&keep_all),
+                    black_box(&strides),
+                    black_box(&chunk_shape),
+                    black_box(&origin),
+                    black_box(None),
+                    black_box(None),
+                )
+            })
+        },
+    );
 
     group.finish();
 }
@@ -270,7 +326,8 @@ fn bench_coord_column(c: &mut Criterion) {
 // =============================================================================
 
 fn bench_var_column(c: &mut Criterion) {
-    let mut group = c.benchmark_group("build_var_column");
+    let mut group =
+        c.benchmark_group("build_var_column");
 
     let chunk_shape = [10u64, 10, 10];
     let strides = compute_strides(&chunk_shape);
@@ -278,53 +335,78 @@ fn bench_var_column(c: &mut Criterion) {
     let keep_all = KeepMask::All(chunk_len);
 
     let var_data: Arc<ColumnData> =
-        Arc::new(ColumnData::F64((0..chunk_len).map(|i| i as f64 * 0.1).collect()));
+        Arc::new(ColumnData::F64(
+            (0..chunk_len)
+                .map(|i| i as f64 * 0.1)
+                .collect(),
+        ));
 
-    let dims: Vec<IStr> = vec!["x".istr(), "y".istr(), "time".istr()];
+    let dims: Vec<IStr> = vec![
+        "x".istr(),
+        "y".istr(),
+        "time".istr(),
+    ];
     let var_dims_same = dims.clone();
     let offsets_zero = vec![0u64; 3];
 
     // Same dims fast path (zero-copy when All)
-    group.bench_function("same_dims_fast_path", |b| {
-        b.iter(|| {
-            build_var_column(
-                black_box(&"temperature".istr()),
-                black_box(var_data.clone()),
-                black_box(&var_dims_same),
-                black_box(&chunk_shape),
-                black_box(&offsets_zero),
-                black_box(&dims),
-                black_box(&chunk_shape),
-                black_box(&strides),
-                black_box(&keep_all),
-                black_box(None),
-            )
-        })
-    });
+    group.bench_function(
+        "same_dims_fast_path",
+        |b| {
+            b.iter(|| {
+                build_var_column(
+                    black_box(
+                        &"temperature".istr(),
+                    ),
+                    black_box(var_data.clone()),
+                    black_box(&var_dims_same),
+                    black_box(&chunk_shape),
+                    black_box(&offsets_zero),
+                    black_box(&dims),
+                    black_box(&chunk_shape),
+                    black_box(&strides),
+                    black_box(&keep_all),
+                    black_box(None),
+                )
+            })
+        },
+    );
 
     // Different dims slow path (gather_by)
-    let var_dims_diff: Vec<IStr> = vec!["x".istr(), "y".istr()];
+    let var_dims_diff: Vec<IStr> =
+        vec!["x".istr(), "y".istr()];
     let var_chunk_shape_diff = [20u64, 20];
     let var_data_diff: Arc<ColumnData> =
-        Arc::new(ColumnData::F64((0..400).map(|i| i as f64 * 0.01).collect()));
+        Arc::new(ColumnData::F64(
+            (0..400)
+                .map(|i| i as f64 * 0.01)
+                .collect(),
+        ));
     let var_offsets_diff = vec![5u64, 3];
 
-    group.bench_function("diff_dims_slow_path", |b| {
-        b.iter(|| {
-            build_var_column(
-                black_box(&"pressure".istr()),
-                black_box(var_data_diff.clone()),
-                black_box(&var_dims_diff),
-                black_box(&var_chunk_shape_diff),
-                black_box(&var_offsets_diff),
-                black_box(&dims),
-                black_box(&chunk_shape),
-                black_box(&strides),
-                black_box(&keep_all),
-                black_box(None),
-            )
-        })
-    });
+    group.bench_function(
+        "diff_dims_slow_path",
+        |b| {
+            b.iter(|| {
+                build_var_column(
+                    black_box(&"pressure".istr()),
+                    black_box(
+                        var_data_diff.clone(),
+                    ),
+                    black_box(&var_dims_diff),
+                    black_box(
+                        &var_chunk_shape_diff,
+                    ),
+                    black_box(&var_offsets_diff),
+                    black_box(&dims),
+                    black_box(&chunk_shape),
+                    black_box(&strides),
+                    black_box(&keep_all),
+                    black_box(None),
+                )
+            })
+        },
+    );
 
     group.finish();
 }
@@ -334,11 +416,17 @@ fn bench_var_column(c: &mut Criterion) {
 // =============================================================================
 
 fn bench_var_indices(c: &mut Criterion) {
-    let mut group = c.benchmark_group("compute_var_chunk_indices");
+    let mut group = c.benchmark_group(
+        "compute_var_chunk_indices",
+    );
 
     let primary_idx = [5u64, 3, 2];
     let primary_chunk_shape = [10u64, 10, 10];
-    let primary_dims: Vec<IStr> = vec!["x".istr(), "y".istr(), "time".istr()];
+    let primary_dims: Vec<IStr> = vec![
+        "x".istr(),
+        "y".istr(),
+        "time".istr(),
+    ];
 
     // Same dimensions
     let var_dims_same = primary_dims.clone();
@@ -359,7 +447,8 @@ fn bench_var_indices(c: &mut Criterion) {
     });
 
     // Different dimensions
-    let var_dims_diff: Vec<IStr> = vec!["x".istr(), "time".istr()];
+    let var_dims_diff: Vec<IStr> =
+        vec!["x".istr(), "time".istr()];
     let var_chunk_shape_diff = [20u64, 5];
     let var_shape_diff = [100u64, 50];
 
@@ -384,17 +473,29 @@ fn bench_var_indices(c: &mut Criterion) {
 // =============================================================================
 
 fn bench_chunk_to_df(c: &mut Criterion) {
-    let mut group = c.benchmark_group("chunk_to_df_sync");
+    let mut group =
+        c.benchmark_group("chunk_to_df_sync");
 
     let meta = make_test_meta();
-    let backend = MockBackendSync::new(10, 1000, &["x", "y", "time"]);
+    let backend = MockBackendSync::new(
+        10,
+        1000,
+        &["x", "y", "time"],
+    );
 
-    let dims_sv: SmallVec<[IStr; 4]> =
-        vec!["x".istr(), "y".istr(), "time".istr()].into();
-    let cs_sv: SmallVec<[u64; 4]> = vec![10u64, 10, 10].into();
-    let sig = ChunkGridSignature::new(dims_sv, cs_sv);
+    let dims_sv: SmallVec<[IStr; 4]> = vec![
+        "x".istr(),
+        "y".istr(),
+        "time".istr(),
+    ]
+    .into();
+    let cs_sv: SmallVec<[u64; 4]> =
+        vec![10u64, 10, 10].into();
+    let sig =
+        ChunkGridSignature::new(dims_sv, cs_sv);
     let array_shape = [100u64, 100, 50];
-    let vars: Vec<IStr> = vec!["temperature".istr()];
+    let vars: Vec<IStr> =
+        vec!["temperature".istr()];
 
     // Interior chunk
     group.bench_function("interior_chunk", |b| {
@@ -438,17 +539,24 @@ fn bench_chunk_to_df(c: &mut Criterion) {
 // =============================================================================
 
 fn bench_compile_expr(c: &mut Criterion) {
-    let mut group = c.benchmark_group("compile_expr");
+    let mut group =
+        c.benchmark_group("compile_expr");
 
     let meta = make_test_meta();
-    let (dims, _) = compute_dims_and_lengths_unified(&meta);
+    let (dims, _) =
+        compute_dims_and_lengths_unified(&meta);
 
     // Simple column reference
     let simple_expr = col("temperature");
     group.bench_function("column_ref", |b| {
         b.iter(|| {
-            let mut ctx = LazyCompileCtx::new(&meta, &dims);
-            compile_expr(black_box(&simple_expr), black_box(&mut ctx)).unwrap()
+            let mut ctx =
+                LazyCompileCtx::new(&meta, &dims);
+            compile_expr(
+                black_box(&simple_expr),
+                black_box(&mut ctx),
+            )
+            .unwrap()
         })
     });
 
@@ -456,17 +564,29 @@ fn bench_compile_expr(c: &mut Criterion) {
     let range_expr = col("x").gt(lit(10i64));
     group.bench_function("range_cmp", |b| {
         b.iter(|| {
-            let mut ctx = LazyCompileCtx::new(&meta, &dims);
-            compile_expr(black_box(&range_expr), black_box(&mut ctx)).unwrap()
+            let mut ctx =
+                LazyCompileCtx::new(&meta, &dims);
+            compile_expr(
+                black_box(&range_expr),
+                black_box(&mut ctx),
+            )
+            .unwrap()
         })
     });
 
     // Compound: x > 10 & y < 50
-    let compound_expr = col("x").gt(lit(10i64)).and(col("y").lt(lit(50i64)));
+    let compound_expr = col("x")
+        .gt(lit(10i64))
+        .and(col("y").lt(lit(50i64)));
     group.bench_function("compound_and", |b| {
         b.iter(|| {
-            let mut ctx = LazyCompileCtx::new(&meta, &dims);
-            compile_expr(black_box(&compound_expr), black_box(&mut ctx)).unwrap()
+            let mut ctx =
+                LazyCompileCtx::new(&meta, &dims);
+            compile_expr(
+                black_box(&compound_expr),
+                black_box(&mut ctx),
+            )
+            .unwrap()
         })
     });
 
@@ -477,8 +597,13 @@ fn bench_compile_expr(c: &mut Criterion) {
         .or(col("time").gt_eq(lit(20i64)));
     group.bench_function("complex_or", |b| {
         b.iter(|| {
-            let mut ctx = LazyCompileCtx::new(&meta, &dims);
-            compile_expr(black_box(&complex_expr), black_box(&mut ctx)).unwrap()
+            let mut ctx =
+                LazyCompileCtx::new(&meta, &dims);
+            compile_expr(
+                black_box(&complex_expr),
+                black_box(&mut ctx),
+            )
+            .unwrap()
         })
     });
 
@@ -490,12 +615,14 @@ fn bench_compile_expr(c: &mut Criterion) {
 // =============================================================================
 
 fn bench_selection_to_plan(c: &mut Criterion) {
-    let mut group = c.benchmark_group("selection_to_plan");
+    let mut group =
+        c.benchmark_group("selection_to_plan");
 
     let meta = make_test_meta();
 
     // NoSelectionMade — creates plans covering all chunks
-    let no_selection = DatasetSelection::NoSelectionMade;
+    let no_selection =
+        DatasetSelection::NoSelectionMade;
     group.bench_function("no_selection_made", |b| {
         b.iter(|| {
             selection_to_grouped_chunk_plan_unified_from_meta(

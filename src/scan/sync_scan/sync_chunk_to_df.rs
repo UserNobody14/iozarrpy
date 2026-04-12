@@ -25,7 +25,6 @@ use crate::scan::shared::{
     build_coord_column, build_var_column,
     compute_in_bounds_mask,
     compute_var_chunk_indices,
-    should_include_column,
 };
 
 // =============================================================================
@@ -130,7 +129,7 @@ fn read_coord_chunks<
     for (d, dim_name) in dims.iter().enumerate() {
         // Check if this dimension has a coordinate array
         let Some(coord_meta) =
-            meta.array_by_path(dim_name.clone())
+            meta.array_by_path(*dim_name)
         else {
             continue;
         };
@@ -157,13 +156,12 @@ fn read_coord_chunks<
 
         if data.len() != dim_len as usize {
             return Err(BackendError::CoordLengthMismatch {
-                name: dim_name.clone(),
+                name: *dim_name,
                 expected_len: dim_len,
                 coord_len: data.len() as u64,
             });
         }
-        coord_slices
-            .insert(dim_name.clone(), data);
+        coord_slices.insert(*dim_name, data);
     }
 
     Ok(coord_slices)
@@ -200,7 +198,7 @@ fn read_var_chunks<B: ChunkedDataBackendSync>(
         let var_meta =
             meta.array_by_path(name).ok_or(
                 BackendError::UnknownDataVar {
-                    name: name.clone(),
+                    name: *name,
                     available_vars: meta
                         .all_data_var_paths(),
                 },
@@ -231,12 +229,12 @@ fn read_var_chunks<B: ChunkedDataBackendSync>(
 
         // Read the chunk using the full path from metadata
         let data = backend.read_chunk_sync(
-            &name,
+            name,
             &var_chunk_indices,
         )?;
 
         var_chunks.push((
-            name.clone(),
+            *name,
             data.clone(),
             var_dims,
             var_chunk_shape,
@@ -263,7 +261,7 @@ pub fn chunk_to_df_from_grid_with_backend<
     sig: &ChunkGridSignature,
     array_shape: &[u64],
     vars: &[IStr],
-    with_columns: Option<&BTreeSet<IStr>>,
+    _with_columns: Option<&BTreeSet<IStr>>,
     chunk_subset: Option<&ChunkSubset>,
     meta: &ZarrMeta,
 ) -> BackendResult<DataFrame> {
@@ -316,7 +314,7 @@ pub fn chunk_to_df_from_grid_with_backend<
     // Coordinate columns
     for (d, dim_name) in dims.iter().enumerate() {
         let encoding = meta
-            .array_by_path(dim_name.clone())
+            .array_by_path(*dim_name)
             .and_then(|m| m.encoding.as_ref());
 
         let col = build_coord_column(
@@ -342,7 +340,7 @@ pub fn chunk_to_df_from_grid_with_backend<
     ) in var_chunks
     {
         let encoding = meta
-            .array_by_path(name.clone())
+            .array_by_path(name)
             .and_then(|m| m.encoding.as_ref());
 
         let col = build_var_column(
@@ -360,10 +358,10 @@ pub fn chunk_to_df_from_grid_with_backend<
         cols.push(col);
     }
 
-    Ok(DataFrame::new(height, cols).context(
+    DataFrame::new(height, cols).context(
         PolarsSnafu {
             message: "Error creating DataFrame"
                 .to_string(),
         },
-    )?)
+    )
 }

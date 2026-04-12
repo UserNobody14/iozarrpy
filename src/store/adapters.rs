@@ -22,18 +22,16 @@ pub(crate) struct TokioSpawnBlocking;
 impl SyncToAsyncSpawnBlocking
     for TokioSpawnBlocking
 {
-    fn spawn_blocking<F, R>(
+    async fn spawn_blocking<F, R>(
         &self,
         f: F,
-    ) -> impl core::future::Future<Output = R> + Send
+    ) -> R
     where
         F: FnOnce() -> R + Send + 'static,
         R: Send + 'static,
     {
-        async move {
-            tokio::task::spawn_blocking(f)
-                .await
-                .expect("spawn_blocking failed")
-        }
+        tokio::task::spawn_blocking(f)
+            .await
+            .expect("spawn_blocking failed")
     }
 }

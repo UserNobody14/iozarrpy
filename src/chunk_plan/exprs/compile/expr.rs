@@ -6,20 +6,17 @@ use super::super::compile_node::{
     extract_struct_field_path,
 };
 use super::super::expr_plan::{ExprPlan, VarSet};
-use super::super::expr_utils::try_expr_to_value_range_lazy;
 use super::super::literals::{
     col_lit, literal_anyvalue, reverse_operator,
     strip_wrappers,
 };
 use super::boolean::compile_boolean_function_lazy;
 use super::cmp::{
-    compile_cmp_to_plan,
-    compile_struct_field_cmp,
-    compile_value_range_to_plan,
+    compile_cmp_to_plan, compile_struct_field_cmp,
 };
 use super::interpolate::{
-    interpolate_selection_nd_lazy,
     interpolate_selection_geospatial_lazy,
+    interpolate_selection_nd_lazy,
 };
 use super::selector::compile_selector_lazy;
 use super::utils::{
@@ -122,7 +119,7 @@ pub fn compile_expr(
                 .into_iter()
                 .filter(|r| {
                     ctx.meta
-                        .array_by_path(r.clone())
+                        .array_by_path(*r)
                         .is_some()
                 })
                 .collect();
@@ -230,13 +227,12 @@ pub fn compile_expr(
                                 left.as_ref(),
                             ),
                         )
+                        && let Expr::Literal(lit) =
+                            strip_wrappers(
+                                right.as_ref(),
+                            )
                     {
-                        if let Expr::Literal(
-                            lit,
-                        ) = strip_wrappers(
-                            right.as_ref(),
-                        ) {
-                            return compile_struct_field_cmp(
+                        return compile_struct_field_cmp(
                                 &struct_col,
                                 &field_name,
                                 *op,
@@ -244,7 +240,6 @@ pub fn compile_expr(
                                 ctx,
                             )
                             .or_else(|_| Ok(ExprPlan::NoConstraint));
-                        }
                     }
                     if let Some((
                         struct_col,
@@ -255,13 +250,12 @@ pub fn compile_expr(
                                 right.as_ref(),
                             ),
                         )
+                        && let Expr::Literal(lit) =
+                            strip_wrappers(
+                                left.as_ref(),
+                            )
                     {
-                        if let Expr::Literal(
-                            lit,
-                        ) = strip_wrappers(
-                            left.as_ref(),
-                        ) {
-                            return compile_struct_field_cmp(
+                        return compile_struct_field_cmp(
                                 &struct_col,
                                 &field_name,
                                 reverse_operator(*op),
@@ -269,7 +263,6 @@ pub fn compile_expr(
                                 ctx,
                             )
                             .or_else(|_| Ok(ExprPlan::NoConstraint));
-                        }
                     }
 
                     // Regular column comparison
@@ -331,25 +324,25 @@ pub fn compile_expr(
             ) = (
                 strip_wrappers(truthy.as_ref()),
                 strip_wrappers(falsy.as_ref()),
+            ) && let (
+                Some(AnyValue::Boolean(t)),
+                Some(AnyValue::Boolean(f)),
+            ) = (
+                literal_anyvalue(t),
+                literal_anyvalue(f),
             ) {
-                if let (
-                    Some(AnyValue::Boolean(t)),
-                    Some(AnyValue::Boolean(f)),
-                ) = (
-                    literal_anyvalue(t),
-                    literal_anyvalue(f),
-                ) {
-                    if t && !f {
-                        return compile_expr(
-                            predicate.as_ref(),
-                            ctx,
-                        );
-                    }
-                    if f {
-                        return Ok(ExprPlan::NoConstraint);
-                    }
-                    return Ok(ExprPlan::Empty);
+                if t && !f {
+                    return compile_expr(
+                        predicate.as_ref(),
+                        ctx,
+                    );
                 }
+                if f {
+                    return Ok(
+                        ExprPlan::NoConstraint,
+                    );
+                }
+                return Ok(ExprPlan::Empty);
             }
 
             let all_refs =
@@ -396,7 +389,8 @@ pub fn compile_expr(
                             return Ok(ExprPlan::NoConstraint);
                         }
                         interpolate_selection_nd_lazy(&input[0], &input[1], &input[2], ctx)
-                    } else if symbol == "interpolate_geospatial"
+                    } else if symbol
+                        == "interpolate_geospatial"
                     {
                         if input.len() < 3 {
                             return Ok(ExprPlan::NoConstraint);

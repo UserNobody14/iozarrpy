@@ -49,35 +49,25 @@ fn extract_session_bytes(
     // Try 2: icechunk-python Session - access `._session.as_bytes()`
     if let Ok(inner_session) =
         session.getattr("_session")
-    {
-        if let Ok(as_bytes_method) =
+        && let Ok(as_bytes_method) =
             inner_session.getattr("as_bytes")
-        {
-            if let Ok(bytes_obj) =
-                as_bytes_method.call0()
-            {
-                if let Ok(bytes) =
-                    bytes_obj.extract::<Vec<u8>>()
-                {
-                    return Ok(bytes);
-                }
-            }
-        }
+        && let Ok(bytes_obj) =
+            as_bytes_method.call0()
+        && let Ok(bytes) =
+            bytes_obj.extract::<Vec<u8>>()
+    {
+        return Ok(bytes);
     }
 
     // Try 3: Object has .as_bytes() method directly (e.g., PySession from icechunk internal)
     if let Ok(as_bytes_method) =
         session.getattr("as_bytes")
-    {
-        if let Ok(bytes_obj) =
+        && let Ok(bytes_obj) =
             as_bytes_method.call0()
-        {
-            if let Ok(bytes) =
-                bytes_obj.extract::<Vec<u8>>()
-            {
-                return Ok(bytes);
-            }
-        }
+        && let Ok(bytes) =
+            bytes_obj.extract::<Vec<u8>>()
+    {
+        return Ok(bytes);
     }
 
     Err(PyErr::new::<

@@ -454,33 +454,6 @@ impl From<(CoordBound, CoordBound)>
     }
 }
 
-pub(crate) trait HasCoordBound {
-    fn get_scalar(&self) -> Option<CoordScalar>;
-    fn is_exclusive(&self) -> bool;
-}
-
-impl HasCoordBound for CoordBound {
-    fn get_scalar(&self) -> Option<CoordScalar> {
-        match self {
-            CoordBound::Included(scalar) => {
-                Some(scalar.clone())
-            }
-            CoordBound::Excluded(scalar) => {
-                Some(scalar.clone())
-            }
-            CoordBound::Unbounded => None,
-        }
-    }
-
-    fn is_exclusive(&self) -> bool {
-        match self {
-            CoordBound::Included(_) => false,
-            CoordBound::Excluded(_) => true,
-            CoordBound::Unbounded => false,
-        }
-    }
-}
-
 impl ValueRangePresent {
     /// Point equality: `value == eq`.
     pub(crate) fn from_equal_case(
@@ -733,29 +706,4 @@ fn pick_tighter_max_bound(
         }
         None => None,
     }
-}
-
-/// Compute (start, end) bounds from a ValueRangePresent using provided lower/upper bound functions.
-pub(crate) fn compute_bounds_from_value_range<
-    FL,
-    FU,
->(
-    vr: &ValueRangePresent,
-    n: u64,
-    lower: FL,
-    upper: FU,
-) -> Option<(u64, u64)>
-where
-    FL: Fn(&CoordBound) -> Option<u64>,
-    FU: Fn(&CoordBound) -> Option<u64>,
-{
-    let mut start = 0u64;
-    let mut end = n;
-    if !matches!(vr.0, Bound::Unbounded) {
-        start = lower(&vr.0)?;
-    }
-    if !matches!(vr.1, Bound::Unbounded) {
-        end = upper(&vr.1)?;
-    }
-    Some((start, end))
 }

@@ -201,15 +201,14 @@ impl GroupedChunkPlan {
         chunk_grid: Arc<ChunkGrid>,
     ) {
         let var = var.istr();
-        self.var_to_grid
-            .insert(var.clone(), sig.clone());
+        self.var_to_grid.insert(var, sig.clone());
         self.by_grid
             .entry(sig.clone())
             .or_insert(plan);
         self.vars_by_grid
             .entry(sig.clone())
             .or_insert(vec![])
-            .push(var.clone());
+            .push(var);
         self.chunk_grid
             .entry(sig.clone())
             .or_insert(chunk_grid);
@@ -228,11 +227,12 @@ impl GroupedChunkPlan {
         meta: &ZarrMeta,
     ) -> BackendResult<()> {
         for path in extra {
-            if self.var_to_grid.contains_key(path) {
+            if self.var_to_grid.contains_key(path)
+            {
                 continue;
             }
             let Some(var_meta) =
-                meta.array_by_path(path.clone())
+                meta.array_by_path(*path)
             else {
                 continue;
             };
@@ -263,27 +263,29 @@ impl GroupedChunkPlan {
                     })?
                     .clone();
                 self.insert(
-                    path.clone(),
+                    *path,
                     sig_arc,
                     ArraySubsetList::new(),
                     chunk_grid,
                 );
             } else {
-                let ranges: Vec<std::ops::Range<u64>> =
-                    var_meta
-                        .shape
-                        .iter()
-                        .map(|&s| 0..s)
-                        .collect();
+                let ranges: Vec<
+                    std::ops::Range<u64>,
+                > = var_meta
+                    .shape
+                    .iter()
+                    .map(|&s| 0..s)
+                    .collect();
                 let subset =
                     ArraySubset::new_with_ranges(
                         &ranges,
                     );
-                let mut list = ArraySubsetList::new();
+                let mut list =
+                    ArraySubsetList::new();
                 list.push(subset);
                 let sig_arc = Arc::new(sig);
                 self.insert(
-                    path.clone(),
+                    *path,
                     sig_arc,
                     list,
                     var_meta.chunk_grid.clone(),
@@ -308,7 +310,7 @@ impl GroupedChunkPlan {
     ) -> Vec<IStr> {
         self.vars_by_grid
             .get(sig)
-            .map(|vars| vars.clone())
+            .cloned()
             .unwrap_or_default()
     }
 
@@ -365,11 +367,7 @@ impl GroupedChunkPlan {
                         crate::errors::backend::IncompatibleDimensionalitySnafu {
                             dims: sig.dims().to_vec(),
                             shape: chunkgrid.array_shape().to_vec(),
-                            paths: vars.iter().map(
-                                |v| -> IStr {
-                                    v.clone()
-                                }
-                            ).collect::<Vec<IStr>>(),
+                            paths: vars.to_vec(),
                         }
                     )?;
                 if let Some(indices) = indices {
@@ -424,11 +422,7 @@ impl GroupedChunkPlan {
                             crate::errors::backend::IncompatibleDimensionalitySnafu {
                                 dims: sig.dims().to_vec(),
                                 shape: chunkgrid.array_shape().to_vec(),
-                                paths: vars.iter().map(
-                                    |v| -> IStr {
-                                        v.clone()
-                                    }
-                                ).collect::<Vec<IStr>>(),
+                                paths: vars.to_vec(),
                             }
                         )?;
                     if let Some(indices) = indices

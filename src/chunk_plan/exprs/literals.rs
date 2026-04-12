@@ -78,7 +78,7 @@ pub(super) fn literal_anyvalue<'a>(
             }
             None
         }
-        LiteralValue::Range(range) => {
+        LiteralValue::Range(_range) => {
             todo!()
         }
     }

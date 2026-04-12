@@ -5,7 +5,7 @@
 //! Coordinate chunk I/O is already cached by the Moka layer in the backend.
 
 use std::collections::BTreeMap;
-use std::ops::{Bound, Range};
+use std::ops::Range;
 use std::sync::Arc;
 
 use smallvec::SmallVec;
@@ -185,13 +185,13 @@ fn check_monotonic_from_samples(
     };
     let mut prev = None;
     for v in samples {
-        if let Some(p) = prev {
-            if !monotonic_ord_matches(
+        if let Some(p) = prev
+            && !monotonic_ord_matches(
                 dir,
                 CoordScalar::partial_cmp(p, v),
-            ) {
-                return None;
-            }
+            )
+        {
+            return None;
         }
         prev = Some(v);
     }
@@ -380,19 +380,27 @@ fn wrapping_ghost_ranges(
     primary: Range<u64>,
     n: u64,
 ) -> Vec<Range<u64>> {
-    let start = primary.start.saturating_sub(GHOST_EXPANSION);
-    let end = (primary.end + GHOST_EXPANSION).min(n);
+    let start = primary
+        .start
+        .saturating_sub(GHOST_EXPANSION);
+    let end =
+        (primary.end + GHOST_EXPANSION).min(n);
     let mut ranges = Vec::with_capacity(3);
     if start < end {
         ranges.push(start..end);
     }
-    if start < GHOST_EXPANSION && n > GHOST_EXPANSION {
-        let ghost_start = n.saturating_sub(GHOST_EXPANSION);
+    if start < GHOST_EXPANSION
+        && n > GHOST_EXPANSION
+    {
+        let ghost_start =
+            n.saturating_sub(GHOST_EXPANSION);
         if ghost_start < n {
             ranges.push(ghost_start..n);
         }
     }
-    if end > n.saturating_sub(GHOST_EXPANSION) && n > GHOST_EXPANSION {
+    if end > n.saturating_sub(GHOST_EXPANSION)
+        && n > GHOST_EXPANSION
+    {
         let ghost_end = GHOST_EXPANSION.min(n);
         if ghost_end > 0 {
             ranges.push(0..ghost_end);
@@ -416,22 +424,30 @@ fn resolve_wrapping_interpolation_sync<
         dim_range.end,
         vr,
     ) {
-        return Ok(wrapping_ghost_ranges(r, dim_range.end));
+        return Ok(wrapping_ghost_ranges(
+            r,
+            dim_range.end,
+        ));
     }
     let Some(ctx) =
         DimResolutionCtx::from_meta(dim, meta)
     else {
-        return Err(ResolutionError::Unresolvable(
-            "dimension not found in metadata"
-                .to_string(),
-        ));
+        return Err(
+            ResolutionError::Unresolvable(
+                "dimension not found in metadata"
+                    .to_string(),
+            ),
+        );
     };
     let Some(dir) =
         check_monotonicity_sync(backend, &ctx)
     else {
-        return Err(ResolutionError::Unresolvable(
-            "dimension not monotonic".to_string(),
-        ));
+        return Err(
+            ResolutionError::Unresolvable(
+                "dimension not monotonic"
+                    .to_string(),
+            ),
+        );
     };
     let r = resolve_value_range_sync(
         backend, &ctx, vr, dir,
@@ -460,23 +476,31 @@ async fn resolve_wrapping_interpolation_async<
         dim_range.end,
         vr,
     ) {
-        return Ok(wrapping_ghost_ranges(r, dim_range.end));
+        return Ok(wrapping_ghost_ranges(
+            r,
+            dim_range.end,
+        ));
     }
     let Some(ctx) =
         DimResolutionCtx::from_meta(dim, meta)
     else {
-        return Err(ResolutionError::Unresolvable(
-            "dimension not found in metadata"
-                .to_string(),
-        ));
+        return Err(
+            ResolutionError::Unresolvable(
+                "dimension not found in metadata"
+                    .to_string(),
+            ),
+        );
     };
     let Some(dir) =
         check_monotonicity_async(backend, &ctx)
             .await
     else {
-        return Err(ResolutionError::Unresolvable(
-            "dimension not monotonic".to_string(),
-        ));
+        return Err(
+            ResolutionError::Unresolvable(
+                "dimension not monotonic"
+                    .to_string(),
+            ),
+        );
     };
     let r = resolve_value_range_async(
         backend, &ctx, vr, dir,
@@ -589,8 +613,7 @@ fn resolve_constraint_sync<
                 .start
                 .saturating_sub(
                     dim_expansion_size,
-                )
-                .max(0);
+                );
             let end = r
                 .end
                 .saturating_add(
@@ -1039,8 +1062,7 @@ async fn resolve_constraint_async<
                 .start
                 .saturating_sub(
                     dim_expansion_size,
-                )
-                .max(0);
+                );
             let end = r
                 .end
                 .saturating_add(
@@ -1333,7 +1355,7 @@ fn build_var_grouping(
 
     for var in &var_list {
         let sig = if let Some(array_meta) =
-            meta.array_by_path(var.clone())
+            meta.array_by_path(*var)
         {
             DimSignature::from_dims_only(
                 array_meta.dims.clone(),
@@ -1347,12 +1369,11 @@ fn build_var_grouping(
             .entry(sig.clone())
             .or_insert_with(|| Arc::new(sig))
             .clone();
-        var_to_sig
-            .insert(var.clone(), sig_arc.clone());
+        var_to_sig.insert(*var, sig_arc.clone());
         by_sig
             .entry(sig_arc)
             .or_default()
-            .push(var.clone());
+            .push(*var);
     }
 
     Some((var_list, by_sig, var_to_sig))
@@ -1393,9 +1414,7 @@ pub(crate) fn resolve_expr_plan_sync<
                 DataArraySelection,
             > = BTreeMap::new();
 
-            for (sig_arc, _vars_for_sig) in
-                &by_sig
-            {
+            for sig_arc in by_sig.keys() {
                 let dims = sig_arc.dims();
                 let shape =
                     dims_to_shape(dims, meta)?;
@@ -1467,9 +1486,7 @@ pub(crate) async fn resolve_expr_plan_async<
                 DataArraySelection,
             > = BTreeMap::new();
 
-            for (sig_arc, _vars_for_sig) in
-                &by_sig
-            {
+            for sig_arc in by_sig.keys() {
                 let dims = sig_arc.dims();
                 let shape =
                     dims_to_shape(dims, meta)?;
@@ -1530,13 +1547,15 @@ mod tests {
 
     #[test]
     fn ghost_ranges_interior_single_range() {
-        let ranges = wrapping_ghost_ranges(50..55, 360);
+        let ranges =
+            wrapping_ghost_ranges(50..55, 360);
         assert_eq!(ranges, vec![47..58]);
     }
 
     #[test]
     fn ghost_ranges_near_start_adds_end_ghost() {
-        let ranges = wrapping_ghost_ranges(1..5, 360);
+        let ranges =
+            wrapping_ghost_ranges(1..5, 360);
         assert_eq!(ranges.len(), 2);
         assert_eq!(ranges[0], 0..8);
         assert_eq!(ranges[1], 357..360);
@@ -1544,7 +1563,8 @@ mod tests {
 
     #[test]
     fn ghost_ranges_at_start_adds_end_ghost() {
-        let ranges = wrapping_ghost_ranges(0..3, 360);
+        let ranges =
+            wrapping_ghost_ranges(0..3, 360);
         assert_eq!(ranges.len(), 2);
         assert_eq!(ranges[0], 0..6);
         assert_eq!(ranges[1], 357..360);
@@ -1552,7 +1572,8 @@ mod tests {
 
     #[test]
     fn ghost_ranges_near_end_adds_start_ghost() {
-        let ranges = wrapping_ghost_ranges(356..360, 360);
+        let ranges =
+            wrapping_ghost_ranges(356..360, 360);
         assert_eq!(ranges.len(), 2);
         assert_eq!(ranges[0], 353..360);
         assert_eq!(ranges[1], 0..3);
@@ -1560,16 +1581,19 @@ mod tests {
 
     #[test]
     fn ghost_ranges_at_end_adds_start_ghost() {
-        let ranges = wrapping_ghost_ranges(358..360, 360);
+        let ranges =
+            wrapping_ghost_ranges(358..360, 360);
         assert_eq!(ranges.len(), 2);
         assert_eq!(ranges[0], 355..360);
         assert_eq!(ranges[1], 0..3);
     }
 
     #[test]
-    fn ghost_ranges_small_dimension_both_ghosts() {
+    fn ghost_ranges_small_dimension_both_ghosts()
+    {
         // Dimension with only 5 indices: range touches both boundaries
-        let ranges = wrapping_ghost_ranges(2..4, 5);
+        let ranges =
+            wrapping_ghost_ranges(2..4, 5);
         assert_eq!(ranges.len(), 3);
         assert_eq!(ranges[0], 0..5);
         assert_eq!(ranges[1], 2..5);
@@ -1579,19 +1603,22 @@ mod tests {
     #[test]
     fn ghost_ranges_very_small_dimension() {
         // Dimension ≤ GHOST_EXPANSION: no ghost ranges added
-        let ranges = wrapping_ghost_ranges(0..2, 3);
+        let ranges =
+            wrapping_ghost_ranges(0..2, 3);
         assert_eq!(ranges, vec![0..3]);
     }
 
     #[test]
     fn ghost_ranges_exact_ghost_expansion_size() {
         // n == GHOST_EXPANSION: no extra ghost ranges
-        let ranges = wrapping_ghost_ranges(1..2, 3);
+        let ranges =
+            wrapping_ghost_ranges(1..2, 3);
         assert_eq!(ranges, vec![0..3]);
     }
 
     #[test]
-    fn ghost_expansion_constant_matches_interpolars() {
+    fn ghost_expansion_constant_matches_interpolars()
+     {
         assert_eq!(GHOST_EXPANSION, 3);
     }
 }

@@ -14,9 +14,7 @@ use snafu::ResultExt;
 
 use crate::IntoIStr;
 use crate::backend::implementation::scan_zarr_with_backend_sync;
-use crate::backend::py::debug::{
-    extract_grids, extract_grids_sync,
-};
+use crate::backend::py::debug::extract_grids_sync;
 use crate::errors::PolarsSnafu;
 use crate::py::expr_extract::extract_expr;
 use crate::shared::{
@@ -246,7 +244,7 @@ impl PyZarrBackendSync {
 
     // / Get the store root path.
     fn root(&self) -> String {
-        return '/'.to_string();
+        '/'.to_string()
     }
 
     /// Clear the coordinate cache.

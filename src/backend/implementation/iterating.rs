@@ -144,10 +144,11 @@ impl ZarrIteratorInner {
         if let Some(ref superset) =
             expanded_with_columns
         {
-            grouped_plan.augment_with_physical_vars(
-                superset,
-                meta.as_ref(),
-            )?;
+            grouped_plan
+                .augment_with_physical_vars(
+                    superset,
+                    meta.as_ref(),
+                )?;
         }
 
         // Collect all grid groups upfront and convert to owned data
@@ -163,10 +164,11 @@ impl ZarrIteratorInner {
         sort_grid_groups_for_streaming_join(
             &mut grid_groups,
         );
-        let batch_row_cap = streaming_batch_row_cap(
-            grid_groups.len(),
-            self.batch_size,
-        );
+        let batch_row_cap =
+            streaming_batch_row_cap(
+                grid_groups.len(),
+                self.batch_size,
+            );
 
         let output_columns =
             output_columns_for_streaming_batch(
@@ -213,10 +215,9 @@ impl ZarrIteratorInner {
 
         // Check if we've reached the row limit
         if let Some(limit) = state.num_rows_limit
+            && state.total_rows_yielded >= limit
         {
-            if state.total_rows_yielded >= limit {
-                return Ok(None);
-            }
+            return Ok(None);
         }
 
         // Accumulate chunks until we have enough rows for a batch

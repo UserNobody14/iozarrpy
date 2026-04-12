@@ -64,7 +64,7 @@ pub fn scan_zarr_with_backend_sync(
         );
     }
 
-    if let Some(ref superset) =
+    if let Some(superset) =
         enrich_policy.physical_superset()
     {
         grouped_plan.augment_with_physical_vars(
@@ -72,8 +72,9 @@ pub fn scan_zarr_with_backend_sync(
         )?;
     }
 
-    let chunk_read_superset =
-        enrich_policy.physical_superset().cloned();
+    let chunk_read_superset = enrich_policy
+        .physical_superset()
+        .cloned();
 
     // Read chunks using consolidated (deduplicated) iteration
     let mut dfs = Vec::new();
@@ -91,7 +92,7 @@ pub fn scan_zarr_with_backend_sync(
             let df =
                 chunk_to_df_from_grid_with_backend(
                     backend,
-                    idx.into(),
+                    idx,
                     group.sig,
                     &group.array_shape,
                     &vars,

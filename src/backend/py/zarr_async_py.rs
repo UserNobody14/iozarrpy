@@ -203,7 +203,7 @@ impl PyZarrBackend {
 
     // / Get the store root path.
     fn root(&self) -> String {
-        return '/'.to_string();
+        '/'.to_string()
     }
 
     /// Clear the coordinate cache.

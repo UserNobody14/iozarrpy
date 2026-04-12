@@ -26,7 +26,7 @@ pub async fn load_zarr_meta_from_opened_async(
     load_zarr_meta_inner(
         &store,
         &nodes,
-        &root_path_str,
+        root_path_str,
     )
 }
 
