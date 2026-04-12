@@ -40,8 +40,8 @@ def _xr_interp_single_point(
     coords: dict[str, float],
 ) -> float:
     """Return the scalar result of xarray linear interpolation at one point."""
-    kw = {k: [v] for k, v in coords.items()}
-    result = ds.interp(**kw).compute()
+    interp_coords: dict[str, list[float]] = {k: [v] for k, v in coords.items()}
+    result = ds.interp(coords=interp_coords).compute()
     return float(result[var].values.flat[0])
 
 

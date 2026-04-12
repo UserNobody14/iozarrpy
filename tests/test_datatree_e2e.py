@@ -82,6 +82,7 @@ def test_nested_groups_as_structs(datatree_datasets: dict[str, str]) -> None:
     # model_b should have temperature and humidity (different from model_a)
     model_b_type = schema.get("model_b")
     assert model_b_type is not None, "model_b should be in schema"
+    assert isinstance(model_b_type, pl.Struct), f"Expected Struct, got {model_b_type}"
     model_b_fields = {f.name: f.dtype for f in model_b_type.fields}
     assert "temperature" in model_b_fields
     assert "humidity" in model_b_fields

@@ -281,9 +281,10 @@ def write_datasets_to_zarr_v2(output_dir):
     )
     for var in ds1.data_vars:
         # If the variable is in the list of variables (starts with "wind_"), update the encoding and endianness
-        if var.startswith("wind_"):
-            encoding = var.split("_")[1]
-            endianness = var.split("_")[2]
+        name = str(var)
+        if name.startswith("wind_"):
+            encoding = name.split("_")[1]
+            endianness = name.split("_")[2]
             if encoding == "zlib":
                 ds1[var].encoding.update(
                     compressors=[

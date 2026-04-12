@@ -10,7 +10,7 @@ import pytest
 from rainbear import ZarrBackend
 
 if TYPE_CHECKING:
-    from conftest import MultiVarDatasetInfo
+    from tests.conftest import MultiVarDatasetInfo
 
     from rainbear._core import SelectedChunksDebugReturn
 

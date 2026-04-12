@@ -81,6 +81,8 @@ build = [
 extraPaths = ["."]
 
 [tool.pyrefly]
+# Include repo root so `tests.*` and relative imports under `tests/` resolve (src-layout heuristic alone only adds `src/`).
+search_path = [".", "src"]
 site_package_path = ["."]
 
 [tool.pytest.ini_options]

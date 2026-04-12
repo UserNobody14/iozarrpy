@@ -410,7 +410,7 @@ class TestZlibVsBloscEquivalence:
         blosc_vals = df_blosc["temperature"].to_numpy()
 
         # Handle NaN comparison
-        mask = ~(np.isnan(zlib_vals) | np.isnan(blosc_vals))
+        mask = np.logical_not(np.isnan(zlib_vals) | np.isnan(blosc_vals))
         np.testing.assert_allclose(
             zlib_vals[mask],
             blosc_vals[mask],
@@ -685,7 +685,7 @@ class TestZlibStreamingDtype:
 
         actual_async = df_async["temperature"].to_numpy()
         actual_stream = df_streaming["temperature"].to_numpy()
-        mask = ~(np.isnan(actual_async) | np.isnan(actual_stream))
+        mask = np.logical_not(np.isnan(actual_async) | np.isnan(actual_stream))
         np.testing.assert_allclose(
             actual_async[mask],
             actual_stream[mask],
@@ -712,7 +712,7 @@ class TestZlibStreamingDtype:
         assert df_async["temperature"].dtype == df_streaming["temperature"].dtype
         actual_async = df_async["temperature"].to_numpy()
         actual_stream = df_streaming["temperature"].to_numpy()
-        mask = ~(np.isnan(actual_async) | np.isnan(actual_stream))
+        mask = np.logical_not(np.isnan(actual_async) | np.isnan(actual_stream))
         np.testing.assert_allclose(
             actual_async[mask],
             actual_stream[mask],
