@@ -21,6 +21,7 @@ pub enum KeepMask {
 }
 
 impl KeepMask {
+    #[allow(clippy::len_without_is_empty)]
     pub fn len(&self) -> usize {
         match self {
             KeepMask::All(n) => *n,

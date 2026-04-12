@@ -180,6 +180,7 @@ pub struct GroupedChunkPlan {
     >,
 }
 
+#[allow(private_interfaces)]
 impl GroupedChunkPlan {
     /// Create a new empty grouped chunk plan.
     pub fn new() -> Self {

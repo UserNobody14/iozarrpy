@@ -8,8 +8,8 @@
 mod compile_entry;
 mod prelude;
 
-mod exprs;
-mod indexing;
+pub(crate) mod exprs;
+pub(crate) mod indexing;
 
 mod selection;
 pub use compile_entry::compute_dims_and_lengths_unified;
@@ -28,6 +28,7 @@ pub(crate) use indexing::plan::ConsolidatedGridGroup;
 pub(crate) use indexing::resolver_traits::ResolutionError;
 pub use indexing::selection_to_chunks::selection_to_grouped_chunk_plan_unified_from_meta;
 pub use indexing::types::ChunkGridSignature;
+
 pub(crate) use indexing::{
     GridGroupExecutionOpts, OwnedGridGroup,
     apply_streaming_batch_io_cut,

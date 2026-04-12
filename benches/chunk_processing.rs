@@ -116,10 +116,6 @@ fn make_test_meta() -> ZarrMeta {
         IStr,
         Arc<ZarrArrayMeta>,
     > = BTreeMap::new();
-    let mut path_to_array: BTreeMap<
-        IStr,
-        Arc<ZarrArrayMeta>,
-    > = BTreeMap::new();
 
     // 1D coordinate arrays
     let coords = [
@@ -135,8 +131,7 @@ fn make_test_meta() -> ZarrMeta {
             &[*cs],
             DataType::Float64,
         );
-        arrays.insert(key.clone(), meta.clone());
-        path_to_array.insert(key, meta);
+        arrays.insert(key, meta);
     }
 
     // 3D data variable — same chunk shape as primary grid
@@ -147,8 +142,7 @@ fn make_test_meta() -> ZarrMeta {
         &[10, 10, 10],
         DataType::Float64,
     );
-    arrays.insert(key.clone(), meta.clone());
-    path_to_array.insert(key, meta);
+    arrays.insert(key, meta);
 
     // 3D data variable — different chunk shape
     let (key, meta) = make_array_meta(
@@ -158,8 +152,7 @@ fn make_test_meta() -> ZarrMeta {
         &[20, 20, 5],
         DataType::Float64,
     );
-    arrays.insert(key.clone(), meta.clone());
-    path_to_array.insert(key, meta);
+    arrays.insert(key, meta);
 
     let root = ZarrNode {
         path: "/".istr(),
@@ -182,7 +175,6 @@ fn make_test_meta() -> ZarrMeta {
     ZarrMeta {
         root,
         dim_analysis,
-        path_to_array,
     }
 }
 
