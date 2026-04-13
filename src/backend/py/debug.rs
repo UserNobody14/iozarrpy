@@ -189,6 +189,11 @@ pub(crate) async fn extract_grids<
                             shape,
                         });
                     } else {
+                        if !seen_outer.insert(
+                            inner_idx.clone(),
+                        ) {
+                            continue;
+                        }
                         let chunk_shape =
                             sig.chunk_shape();
                         let origin = chunkgrid
@@ -378,6 +383,11 @@ pub(crate) fn extract_grids_sync<
                             shape,
                         });
                     } else {
+                        if !seen_outer.insert(
+                            inner_idx.clone(),
+                        ) {
+                            continue;
+                        }
                         let chunk_shape =
                             sig.chunk_shape();
                         let origin = chunkgrid
