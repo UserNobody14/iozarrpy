@@ -234,22 +234,22 @@ def test_alt_realistic_chunks_debug(nz_style_point_zarr: str) -> None:
         {
             "dims": ["lead_time"],
             "variables": ["lead_time"],
-            "chunks": [{"indices": [0], "origin": [0], "shape": [3]}],
+            "chunks": [{"indices": [0], "origin": [0], "shape": [3], "shards": []}],
         },
         {
             "dims": ["point"],
             "variables": ["latitude", "longitude", "station_id"],
-            "chunks": [{"indices": [0], "origin": [0], "shape": [4]}],
+            "chunks": [{"indices": [0], "origin": [0], "shape": [4], "shards": []}],
         },
         {
             "dims": ["time"],
             "variables": ["time"],
-            "chunks": [{"indices": [0], "origin": [0], "shape": [2]}],
+            "chunks": [{"indices": [0], "origin": [0], "shape": [2], "shards": []}],
         },
         {
             "dims": ["time", "lead_time", "point"],
             "variables": ["rime_ice_probability_1hr"],
-            "chunks": [{"indices": [0, 0, 0], "origin": [0, 0, 0], "shape": [2, 3, 4]}],
+            "chunks": [{"indices": [0, 0, 0], "origin": [0, 0, 0], "shape": [2, 3, 4], "shards": []}],
         },
     ]
     assert scdb["coord_reads"] == 0

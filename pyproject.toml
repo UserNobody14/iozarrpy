@@ -33,7 +33,7 @@ include = [
 # For "editable" builds, use the specified Cargo profile,
 # e.g. to use "dev" builds for local development
 # (uses `profile` if this key is not set)
-editable-profile = "dev"
+editable-profile = "maturin-dev"
 # Require Cargo.lock and cache are up to date
 frozen = false
 # Require Cargo.lock is up to date

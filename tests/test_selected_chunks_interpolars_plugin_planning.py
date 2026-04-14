@@ -312,6 +312,7 @@ def test_interpolate_nd_date_coords_plan_and_clamp_low_only(tmp_path: Path) -> N
                     "indices": [0],
                     "origin": [0],
                     "shape": [10],
+                    "shards": []
                 }
             ],
             "dims": ["d"],
