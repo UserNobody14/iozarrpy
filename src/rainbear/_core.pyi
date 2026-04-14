@@ -141,12 +141,12 @@ class ZarrBackend:
     """
     
     @staticmethod
-    def from_url(url: str, max_cache_entries: int = 0) -> ZarrBackend:
+    def from_url(url: str, max_cache_entries: int = 30) -> ZarrBackend:
         """Create a backend from a URL string.
         
         Args:
             url: URL to the zarr store (e.g., "s3://bucket/path.zarr")
-            max_cache_entries: Maximum cached coord chunks (0 = unlimited)
+            max_cache_entries: Max cached chunks (coordinates and variables); 0 = unbounded
         """
         ...
     
@@ -154,14 +154,14 @@ class ZarrBackend:
     def from_store(
         store: ObjectStore,
         prefix: str | None = None,
-        max_cache_entries: int = 0,
+        max_cache_entries: int = 30,
     ) -> ZarrBackend:
         """Create a backend from an ObjectStore instance.
         
         Args:
             store: ObjectStore instance (from rainbear.store or obstore)
             prefix: Optional path prefix within the store
-            max_cache_entries: Maximum cached coord chunks (0 = unlimited)
+            max_cache_entries: Max cached chunks (coordinates and variables); 0 = unbounded
         """
         ...
     
@@ -238,12 +238,12 @@ class ZarrBackendSync:
     """
     
     @staticmethod
-    def from_url(url: str, max_cache_entries: int = 0) -> ZarrBackendSync:
+    def from_url(url: str, max_cache_entries: int = 30) -> ZarrBackendSync:
         """Create a backend from a URL string.
         
         Args:
             url: URL to the zarr store (e.g., "s3://bucket/path.zarr")
-            max_cache_entries: Maximum cached coord chunks (0 = unlimited)
+            max_cache_entries: Max cached chunks (coordinates and variables); 0 = unbounded
         """
         ...
     
@@ -251,14 +251,14 @@ class ZarrBackendSync:
     def from_store(
         store: ObjectStore,
         prefix: str | None = None,
-        max_cache_entries: int = 0,
+        max_cache_entries: int = 30,
     ) -> ZarrBackendSync:
         """Create a backend from an ObjectStore instance.
         
         Args:
             store: ObjectStore instance (from rainbear.store or obstore)
             prefix: Optional path prefix within the store
-            max_cache_entries: Maximum cached coord chunks (0 = unlimited)
+            max_cache_entries: Max cached chunks (coordinates and variables); 0 = unbounded
         """
         ...
     

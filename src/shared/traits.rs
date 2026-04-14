@@ -182,15 +182,21 @@ pub struct HasMetadataBackendCacheAsync<
 impl<BACKEND: ChunkedDataBackendSync>
     ChunkedDataCacheSync<BACKEND>
 {
+    /// `max_entries == 0` builds an **unbounded** cache (no entry-count eviction).
+    /// Non-zero values bound the number of cached `(zarr path, chunk index)` entries
+    /// for both coordinate and variable chunk reads.
     pub fn new(
         backend: BACKEND,
         max_entries: u64,
     ) -> Self {
+        let chunk_cache = if max_entries == 0 {
+            MokaCache::builder().build()
+        } else {
+            MokaCache::new(max_entries)
+        };
         Self {
             backend,
-            chunk_cache: MokaCache::new(
-                max_entries,
-            ),
+            chunk_cache,
         }
     }
 }
@@ -198,15 +204,21 @@ impl<BACKEND: ChunkedDataBackendSync>
 impl<BACKEND: ChunkedDataBackendAsync>
     ChunkedDataCacheAsync<BACKEND>
 {
+    /// `max_entries == 0` builds an **unbounded** cache (no entry-count eviction).
+    /// Non-zero values bound the number of cached `(zarr path, chunk index)` entries
+    /// for both coordinate and variable chunk reads.
     pub fn new(
         backend: BACKEND,
         max_entries: u64,
     ) -> Self {
+        let chunk_cache = if max_entries == 0 {
+            MokaFutureCache::builder().build()
+        } else {
+            MokaFutureCache::new(max_entries)
+        };
         Self {
             backend,
-            chunk_cache: MokaFutureCache::new(
-                max_entries,
-            ),
+            chunk_cache,
         }
     }
 }
