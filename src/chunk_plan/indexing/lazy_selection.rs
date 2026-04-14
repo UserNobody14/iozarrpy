@@ -23,8 +23,9 @@ pub(crate) enum LazyDimConstraint {
     Empty,
     /// Needs resolution from value-space to index-space.
     Unresolved(ValueRangePresent),
-    /// Needs resolution with interpolation expansion (expand to chunk boundaries, or across 2 chunks if at boundary).
-    /// Used for interpolation operations that need bracketing indices.
+    /// Needs resolution with interpolation expansion (±1 index neighbors) when the target lies
+    /// strictly between grid points. A point target that maps to a single index cell is pinned
+    /// without neighbor expansion (exact coordinate match).
     InterpolationRange(ValueRangePresent),
     /// Like InterpolationRange but with periodic wrapping (ghost-point expansion).
     /// Expands by +/-3 indices and includes boundary ranges for longitude wrapping.
