@@ -41,7 +41,7 @@ locked = false
 
 [tool.uv]
 cache-keys = [{ file = "pyproject.toml" }, { file = "src/**/*.rs" }, { file = "Cargo.toml" }, { file = "Cargo.lock" }]
-extra-build-variables = { rainbear = { RUST_MIN_STACK = "33554432" } }
+required-version = ">=0.11.6"
 
 [build-system]
 requires = ["maturin>=1.0,<2.0"]

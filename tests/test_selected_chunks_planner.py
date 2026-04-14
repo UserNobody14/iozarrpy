@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 import polars as pl
@@ -8,8 +9,10 @@ import xarray as xr
 
 from rainbear import ZarrBackend
 
+if TYPE_CHECKING:
+    from rainbear._core import SelectedChunksDebugReturn
 
-def _chunk_index_list(chunks_result: dict, variable: str) -> list[tuple[int, ...]]:
+def _chunk_index_list(chunks_result: SelectedChunksDebugReturn, variable: str) -> list[tuple[int, ...]]:
     """Return the raw (possibly duplicate) list of chunk indices for a variable."""
     for grid in chunks_result["grids"]:
         if variable in grid["variables"]:
