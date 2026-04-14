@@ -34,23 +34,22 @@ def _assert_grid_x_selection(
     assert len(idxs) == expected_total
 
 
+# Baseline grid_chunked / grid_sharded share the same inner chunk grid: chunks=(1,2,100,100)
+# on dims (time, lead_time, y, x). Sharded stores only add per-chunk `shards` in debug output.
+_GRID_INNER_ALL_CHUNKS = 3 * 5 * 4 * 4
+_GRID_INNER_CHUNKS_PER_X = 3 * 5 * 4 * 1
+
+
 @pytest.fixture(params=["grid_chunked", "grid_sharded"])
 def _grid_dataset(
     baseline_datasets: dict[str, str], request: pytest.FixtureRequest
 ) -> tuple[str, int, int]:
-    """Return (zarr_url, all_chunks_total, chunks_per_x_chunk) for stable assertions."""
-    key = str(request.param)
-    zarr_url = baseline_datasets[key]
-    if key == "grid_chunked":
-        all_total = 3 * 5 * 4 * 4  # (time, lead_time, y, x) chunk grid with chunks=(1,2,100,100)
-        per_x = 3 * 5 * 4 * 1
-        return (zarr_url, all_total, per_x)
-    if key == "grid_sharded":
-        # With shards=(1,4,200,200), zarrs treats the shard grid as the "chunk grid" here.
-        all_total = 3 * 3 * 2 * 2
-        per_x = 3 * 3 * 2 * 1
-        return (zarr_url, all_total, per_x)
-    raise AssertionError(f"unexpected dataset key: {key}")
+    """Return (zarr_url, all_chunks_total, chunks_per_x_slice) — identical counts for both baselines."""
+    return (
+        baseline_datasets[str(request.param)],
+        _GRID_INNER_ALL_CHUNKS,
+        _GRID_INNER_CHUNKS_PER_X,
+    )
 
 
 def test_is_between_pushdown_narrows_chunks(_grid_dataset: tuple[str, int, int]) -> None:
@@ -69,8 +68,7 @@ def test_is_in_pushdown_narrows_chunks(_grid_dataset: tuple[str, int, int]) -> N
     pred = (pl.col("x") == 0) | (pl.col("x") == 200)
     chunks = ZarrBackend.from_url(zarr_url).selected_chunks_debug( pred)
     idxs = _chunk_indices(chunks)
-    expected_x = {0, 2} if per_x == 3 * 5 * 4 * 1 else {0, 1}
-    _assert_grid_x_selection(idxs, expected_x_chunks=expected_x, expected_total=2 * per_x)
+    _assert_grid_x_selection(idxs, expected_x_chunks={0, 2}, expected_total=2 * per_x)
 
 
 def test_wrappers_alias_cast_preserve_pushdown(_grid_dataset: tuple[str, int, int]) -> None:

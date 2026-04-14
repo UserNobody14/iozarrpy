@@ -164,10 +164,18 @@ required-features = ["bench"]
 
 [profile.release]
 lto = false
-codegen-units = 16
+codegen-units = 256
+opt-level = "s"
 
 # Profile to build a minimally sized binary
 [profile.minimal-size]
 inherits = "release"
 opt-level = "z"
 codegen-units = 1
+
+# PEP 660 / maturin editable installs: prioritize rustc time and memory over rich debuginfo.
+# (Full `dev` debug=2 is very expensive for large dependency graphs like Polars.)
+[profile.maturin-dev]
+inherits = "dev"
+debug = "line-tables-only"
+codegen-units = 256

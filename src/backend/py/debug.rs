@@ -8,11 +8,8 @@ use std::sync::Arc;
 use pyo3::prelude::*;
 use pyo3::types::PyAny;
 
-use snafu::ResultExt;
-use std::collections::BTreeSet;
 use zarrs::array::Array;
 
-use crate::errors::IncompatibleDimensionalitySnafu;
 use crate::shared::ChunkedExpressionCompilerAsync;
 use crate::shared::{
     ChunkedDataBackendSync, HasAsyncStore,
@@ -21,10 +18,18 @@ use crate::shared::{
 };
 
 #[derive(Clone)]
+pub(crate) struct ShardInfo {
+    indices: Vec<u64>,
+    origin: Vec<u64>,
+    shape: Vec<u64>,
+}
+
+#[derive(Clone)]
 pub(crate) struct ChunkInfo {
     indices: Vec<u64>,
     origin: Vec<u64>,
     shape: Vec<u64>,
+    shards: Vec<ShardInfo>,
 }
 
 #[derive(Clone)]
@@ -32,6 +37,121 @@ pub(crate) struct GridInfo {
     dims: Vec<String>,
     variables: Vec<String>,
     chunks: Vec<ChunkInfo>,
+}
+
+fn shard_info_from_outer_grid(
+    outer_idx: &[u64],
+    outer_shape: &[u64],
+    array_shape: Option<&Vec<u64>>,
+) -> ShardInfo {
+    let indices = outer_idx.to_vec();
+    let origin: Vec<u64> = outer_idx
+        .iter()
+        .zip(outer_shape.iter())
+        .map(|(&i, &sz)| i.saturating_mul(sz))
+        .collect();
+    let shape: Vec<u64> = match array_shape {
+        Some(a_shape)
+            if a_shape.len()
+                == outer_shape.len() =>
+        {
+            origin
+                .iter()
+                .zip(a_shape.iter())
+                .zip(outer_shape.iter())
+                .map(|((&o, &a), &s)| {
+                    if o >= a {
+                        0
+                    } else {
+                        (a - o).min(s)
+                    }
+                })
+                .collect()
+        }
+        _ => outer_shape.to_vec(),
+    };
+    ShardInfo {
+        indices,
+        origin,
+        shape,
+    }
+}
+
+/// Build per–inner-chunk debug entries. When sharded, each chunk lists the
+/// containing shard in `shards` (one element for typical Zarr shard layouts).
+fn build_group_chunks(
+    inner_chunk_indices: &[Vec<u64>],
+    inner_chunk_shape: &[u64],
+    outer_chunk_shape: &Option<Vec<u64>>,
+    array_shape: &Option<Vec<u64>>,
+) -> Vec<ChunkInfo> {
+    let mut chunks: Vec<ChunkInfo> = Vec::new();
+    let is_sharded =
+        outer_chunk_shape.as_ref().is_some_and(
+            |outer| outer != inner_chunk_shape,
+        );
+
+    for inner_idx in inner_chunk_indices {
+        if is_sharded {
+            let Some(outer_shape) =
+                outer_chunk_shape.as_ref()
+            else {
+                continue;
+            };
+            let outer_idx: Vec<u64> = inner_idx
+                .iter()
+                .zip(inner_chunk_shape.iter())
+                .zip(outer_shape.iter())
+                .map(
+                    |(
+                        (&i, &inner_sz),
+                        &outer_sz,
+                    )| {
+                        if outer_sz == 0 {
+                            0
+                        } else {
+                            i.saturating_mul(
+                                inner_sz,
+                            ) / outer_sz
+                        }
+                    },
+                )
+                .collect();
+
+            let shard =
+                shard_info_from_outer_grid(
+                    &outer_idx,
+                    outer_shape,
+                    array_shape.as_ref(),
+                );
+
+            let origin: Vec<u64> = inner_idx
+                .iter()
+                .zip(inner_chunk_shape.iter())
+                .map(|(&i, &s)| i * s)
+                .collect();
+
+            chunks.push(ChunkInfo {
+                indices: inner_idx.clone(),
+                origin,
+                shape: inner_chunk_shape.to_vec(),
+                shards: vec![shard],
+            });
+        } else {
+            let origin: Vec<u64> = inner_idx
+                .iter()
+                .zip(inner_chunk_shape.iter())
+                .map(|(&i, &s)| i * s)
+                .collect();
+            chunks.push(ChunkInfo {
+                indices: inner_idx.clone(),
+                origin,
+                shape: inner_chunk_shape.to_vec(),
+                shards: vec![],
+            });
+        }
+    }
+    chunks
 }
 
 // Helper for async grid extraction logic
@@ -51,9 +171,24 @@ pub(crate) async fn extract_grids<
 
     let mut grids: Vec<GridInfo> = Vec::new();
 
-    for (sig, vars, subsets, chunkgrid) in
-        grouped_plan.iter_grids()
+    // Use iter_consolidated_chunks() to mirror the actual I/O path exactly.
+    // This function already deduplicates chunk indices across overlapping subsets
+    // using the same BTreeSet logic as the real chunk readers.
+    for result in
+        grouped_plan.iter_consolidated_chunks()
     {
+        let group = result.map_err(|e| {
+            PyErr::new::<
+                pyo3::exceptions::PyValueError,
+                _,
+            >(e.to_string())
+        })?;
+        let sig = group.sig;
+        let vars = group.vars;
+        // chunk_indices are already deduplicated by iter_consolidated_chunks()
+        let inner_chunk_indices =
+            group.chunk_indices;
+
         let dims: Vec<String> = sig
             .dims()
             .iter()
@@ -98,124 +233,13 @@ pub(crate) async fn extract_grids<
                     Some(arr.shape().to_vec());
             }
         }
-        let is_sharded = outer_chunk_shape
-            .as_ref()
-            .is_some_and(|outer| {
-                outer != &inner_chunk_shape
-            });
 
-        let mut chunks: Vec<ChunkInfo> =
-            Vec::new();
-        let mut seen_outer: BTreeSet<Vec<u64>> =
-            BTreeSet::new();
-
-        for subset in subsets.subsets_iter() {
-            let chunk_indices = chunkgrid.chunks_in_array_subset(subset).context(
-                IncompatibleDimensionalitySnafu {
-                    dims: sig.dims().to_vec(),
-                    shape: chunkgrid.array_shape().to_vec(),
-                    paths: vars.to_vec(),
-                }
-            )?;
-
-            if let Some(indices) = chunk_indices {
-                for idx in indices.indices() {
-                    let inner_idx = idx.to_vec();
-
-                    if is_sharded {
-                        let Some(outer_shape) =
-                            outer_chunk_shape
-                                .as_ref()
-                        else {
-                            continue;
-                        };
-                        // Map inner chunk index -> shard index
-                        let outer_idx: Vec<u64> =
-                            inner_idx
-                                .iter()
-                                .zip(inner_chunk_shape.iter())
-                                .zip(outer_shape.iter())
-                                .map(|((&i, &inner_sz), &outer_sz)| {
-                                    if outer_sz == 0 {
-                                        0
-                                    } else {
-                                        i.saturating_mul(inner_sz) / outer_sz
-                                    }
-                                })
-                                .collect();
-
-                        if !seen_outer.insert(
-                            outer_idx.clone(),
-                        ) {
-                            continue;
-                        }
-
-                        let origin: Vec<u64> =
-                        outer_idx
-                            .iter()
-                            .zip(
-                                outer_shape
-                                    .iter(),
-                            )
-                            .map(|(&i, &sz)| {
-                                i.saturating_mul(
-                                    sz,
-                                )
-                            })
-                            .collect();
-
-                        // Compute actual shard shape at boundaries
-                        let shape: Vec<u64> = match array_shape.as_ref() {
-                            Some(a_shape) if a_shape.len() == outer_shape.len() => {
-                                origin
-                                    .iter()
-                                    .zip(a_shape.iter())
-                                    .zip(outer_shape.iter())
-                                    .map(|((&o, &a), &s)| {
-                                        if o >= a {
-                                            0
-                                        } else {
-                                            (a - o).min(s)
-                                        }
-                                    })
-                                    .collect()
-                            }
-                            _ => outer_shape.clone(),
-                        };
-
-                        chunks.push(ChunkInfo {
-                            indices: outer_idx,
-                            origin,
-                            shape,
-                        });
-                    } else {
-                        let chunk_shape =
-                            sig.chunk_shape();
-                        let origin = chunkgrid
-                        .chunk_origin(&idx)
-                        .map_err(|e| {
-                            PyErr::new::<
-                                pyo3::exceptions::PyValueError,
-                                _,
-                            >(e.to_string())
-                        })?
-                        .unwrap_or_else(|| {
-                            vec![
-                                0;
-                                chunk_shape.len()
-                            ]
-                        });
-
-                        chunks.push(ChunkInfo {
-                            indices: inner_idx,
-                            origin,
-                            shape: chunk_shape
-                                .to_vec(),
-                        });
-                    }
-                }
-            }
-        }
+        let chunks = build_group_chunks(
+            &inner_chunk_indices,
+            &inner_chunk_shape,
+            &outer_chunk_shape,
+            &array_shape,
+        );
 
         grids.push(GridInfo {
             dims,
@@ -227,7 +251,7 @@ pub(crate) async fn extract_grids<
     Ok((grids, stats.coord_reads))
 }
 
-// Helper for async grid extraction logic
+// Helper for sync grid extraction logic
 pub(crate) fn extract_grids_sync<
     B: HasMetadataBackendSync<ZarrMeta>
         + ChunkedDataBackendSync
@@ -243,9 +267,24 @@ pub(crate) fn extract_grids_sync<
 
     let mut grids: Vec<GridInfo> = Vec::new();
 
-    for (sig, vars, subsets, chunkgrid) in
-        grouped_plan.iter_grids()
+    // Use iter_consolidated_chunks() to mirror the actual I/O path exactly.
+    // This function already deduplicates chunk indices across overlapping subsets
+    // using the same BTreeSet logic as the real chunk readers.
+    for result in
+        grouped_plan.iter_consolidated_chunks()
     {
+        let group = result.map_err(|e| {
+            PyErr::new::<
+                pyo3::exceptions::PyValueError,
+                _,
+            >(e.to_string())
+        })?;
+        let sig = group.sig;
+        let vars = group.vars;
+        // chunk_indices are already deduplicated by iter_consolidated_chunks()
+        let inner_chunk_indices =
+            group.chunk_indices;
+
         let dims: Vec<String> = sig
             .dims()
             .iter()
@@ -287,124 +326,13 @@ pub(crate) fn extract_grids_sync<
                     Some(arr.shape().to_vec());
             }
         }
-        let is_sharded = outer_chunk_shape
-            .as_ref()
-            .is_some_and(|outer| {
-                outer != &inner_chunk_shape
-            });
 
-        let mut chunks: Vec<ChunkInfo> =
-            Vec::new();
-        let mut seen_outer: BTreeSet<Vec<u64>> =
-            BTreeSet::new();
-
-        for subset in subsets.subsets_iter() {
-            let chunk_indices = chunkgrid.chunks_in_array_subset(subset).context(
-                IncompatibleDimensionalitySnafu {
-                    dims: sig.dims().to_vec(),
-                    shape: chunkgrid.array_shape().to_vec(),
-                    paths: vars.to_vec(),
-                }
-            )?;
-
-            if let Some(indices) = chunk_indices {
-                for idx in indices.indices() {
-                    let inner_idx = idx.to_vec();
-
-                    if is_sharded {
-                        let Some(outer_shape) =
-                            outer_chunk_shape
-                                .as_ref()
-                        else {
-                            continue;
-                        };
-                        // Map inner chunk index -> shard index
-                        let outer_idx: Vec<u64> =
-                            inner_idx
-                                .iter()
-                                .zip(inner_chunk_shape.iter())
-                                .zip(outer_shape.iter())
-                                .map(|((&i, &inner_sz), &outer_sz)| {
-                                    if outer_sz == 0 {
-                                        0
-                                    } else {
-                                        i.saturating_mul(inner_sz) / outer_sz
-                                    }
-                                })
-                                .collect();
-
-                        if !seen_outer.insert(
-                            outer_idx.clone(),
-                        ) {
-                            continue;
-                        }
-
-                        let origin: Vec<u64> =
-                        outer_idx
-                            .iter()
-                            .zip(
-                                outer_shape
-                                    .iter(),
-                            )
-                            .map(|(&i, &sz)| {
-                                i.saturating_mul(
-                                    sz,
-                                )
-                            })
-                            .collect();
-
-                        // Compute actual shard shape at boundaries
-                        let shape: Vec<u64> = match array_shape.as_ref() {
-                            Some(a_shape) if a_shape.len() == outer_shape.len() => {
-                                origin
-                                    .iter()
-                                    .zip(a_shape.iter())
-                                    .zip(outer_shape.iter())
-                                    .map(|((&o, &a), &s)| {
-                                        if o >= a {
-                                            0
-                                        } else {
-                                            (a - o).min(s)
-                                        }
-                                    })
-                                    .collect()
-                            }
-                            _ => outer_shape.clone(),
-                        };
-
-                        chunks.push(ChunkInfo {
-                            indices: outer_idx,
-                            origin,
-                            shape,
-                        });
-                    } else {
-                        let chunk_shape =
-                            sig.chunk_shape();
-                        let origin = chunkgrid
-                        .chunk_origin(&idx)
-                        .map_err(|e| {
-                            PyErr::new::<
-                                pyo3::exceptions::PyValueError,
-                                _,
-                            >(e.to_string())
-                        })?
-                        .unwrap_or_else(|| {
-                            vec![
-                                0;
-                                chunk_shape.len()
-                            ]
-                        });
-
-                        chunks.push(ChunkInfo {
-                            indices: inner_idx,
-                            origin,
-                            shape: chunk_shape
-                                .to_vec(),
-                        });
-                    }
-                }
-            }
-        }
+        let chunks = build_group_chunks(
+            &inner_chunk_indices,
+            &inner_chunk_shape,
+            &outer_chunk_shape,
+            &array_shape,
+        );
 
         grids.push(GridInfo {
             dims,
@@ -449,6 +377,31 @@ pub(crate) fn grids_to_python<'py>(
                 "shape",
                 &chunk.shape,
             )?;
+
+            let shards_list =
+                pyo3::types::PyList::empty(py);
+            for shard in chunk.shards {
+                let shard_dict =
+                    pyo3::types::PyDict::new(py);
+                shard_dict.set_item(
+                    "indices",
+                    &shard.indices,
+                )?;
+                shard_dict.set_item(
+                    "origin",
+                    &shard.origin,
+                )?;
+                shard_dict.set_item(
+                    "shape",
+                    &shard.shape,
+                )?;
+                shards_list.append(shard_dict)?;
+            }
+            chunk_dict.set_item(
+                "shards",
+                shards_list,
+            )?;
+
             chunks_list.append(chunk_dict)?;
         }
         grid_dict

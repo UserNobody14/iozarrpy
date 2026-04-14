@@ -27,17 +27,10 @@ def _chunk_indices(chunks: SelectedChunksDebugReturn, variable: str = "2m_temper
     raise ValueError(f"No grid found for variable '{variable}' in {chunks}")
 
 def _grid_expected(zarr_key: str) -> tuple[int, int, set[int]]:
-    """Return (all_total, per_x, expected_x_chunks_for_0_and_200)."""
-    if zarr_key == "grid_chunked":
-        all_total = 3 * 5 * 4 * 4  # chunks=(1,2,100,100)
-        per_x = 3 * 5 * 4 * 1
-        return (all_total, per_x, {0, 2})
-    if zarr_key == "grid_sharded":
-        # With shards=(1,4,200,200), zarrs treats shard grid as chunk grid.
-        all_total = 3 * 3 * 2 * 2
-        per_x = 3 * 3 * 2 * 1
-        return (all_total, per_x, {0, 1})
-    raise AssertionError(f"unexpected dataset key: {zarr_key}")
+    """Return (all_total, per_x, expected_x_chunks for x in (0, 200))."""
+    if zarr_key not in ("grid_chunked", "grid_sharded"):
+        raise AssertionError(f"unexpected dataset key: {zarr_key}")
+    return (3 * 5 * 4 * 4, 3 * 5 * 4 * 1, {0, 2})
 
 
 @pytest.mark.parametrize("zarr_key", ["grid_chunked", "grid_sharded"])

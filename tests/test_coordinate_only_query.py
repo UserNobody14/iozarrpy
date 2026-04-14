@@ -114,6 +114,7 @@ def _assert_valid_chunks(grid: "GridInfo") -> None:
     assert len(grid["chunks"]) > 0, "Grid should have at least one chunk"
     for chunk in grid["chunks"]:
         assert "indices" in chunk, "Chunk should have indices"
+        assert "shards" in chunk and chunk["shards"] == [], "Coordinate-only grid uses no sharded arrays"
         assert len(chunk["indices"]) == len(grid["dims"]), (
             f"Chunk indices length {len(chunk['indices'])} should match dims {len(grid['dims'])}"
         )

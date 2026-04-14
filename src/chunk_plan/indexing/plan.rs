@@ -233,38 +233,6 @@ impl GroupedChunkPlan {
             .unwrap_or_default()
     }
 
-    /// Iterate over (grid_signature, variables, chunk_plan, chunk_grid) tuples.
-    ///
-    /// This yields the *raw* array subsets without deduplication.
-    /// For reading, prefer [`iter_consolidated_chunks`] which deduplicates
-    /// chunk indices across potentially overlapping subsets.
-    pub fn iter_grids(
-        &self,
-    ) -> impl Iterator<
-        Item = (
-            &ChunkGridSignature,
-            Vec<IStr>,
-            &ArraySubsetList,
-            &Arc<ChunkGrid>,
-        ),
-    > {
-        self.by_grid.iter().map(
-            move |(sig, plan)| {
-                let vars = self
-                    .vars_for_grid(sig.as_ref());
-                (
-                    sig.as_ref(),
-                    vars,
-                    plan,
-                    self.get_chunk_grid(
-                        sig.as_ref(),
-                    )
-                    .unwrap(),
-                )
-            },
-        )
-    }
-
     /// Iterate over grid groups with deduplicated chunk indices.
     ///
     /// Each group yields its signature, associated variables,

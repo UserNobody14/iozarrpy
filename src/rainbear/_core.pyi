@@ -99,10 +99,16 @@ StoreInput = str | ObjectStore
 #             'dims': ['c'],
 #             'variables': ['c']}]}
 
+class ShardInfo(TypedDict):
+    indices: list[int]
+    origin: list[int]
+    shape: list[int]
+
 class ChunkInfo(TypedDict):
     indices: list[int]
     origin: list[int]
     shape: list[int]
+    shards: list[ShardInfo]
 
 class GridInfo(TypedDict):
     dims: list[str]

@@ -26,18 +26,15 @@ def _chunk_indices(chunks: SelectedChunksDebugReturn, variable: str = "2m_temper
     raise ValueError(f"No grid found for variable '2m_temperature' in {chunks}")
 
 
+# grid_chunked and grid_sharded baselines use the same inner chunk grid; see conftest / zarr_generators.
+_BASELINE_GRID_ALL_CHUNKS = 3 * 5 * 4 * 4
+_BASELINE_GRID_PER_X = 3 * 5 * 4 * 1
+
+
 def _grid_meta(zarr_key: str) -> tuple[int, int]:
-    """Return (all_total, per_x_chunk) for stable assertions on baseline datasets."""
-    if zarr_key == "grid_chunked":
-        all_total = 3 * 5 * 4 * 4  # (time, lead_time, y, x) with chunks=(1,2,100,100)
-        per_x = 3 * 5 * 4 * 1
-        return all_total, per_x
-    if zarr_key == "grid_sharded":
-        # With shards=(1,4,200,200), zarrs treats the shard grid as the "chunk grid".
-        all_total = 3 * 3 * 2 * 2
-        per_x = 3 * 3 * 2 * 1
-        return all_total, per_x
-    raise AssertionError(f"unexpected dataset key: {zarr_key}")
+    if zarr_key not in ("grid_chunked", "grid_sharded"):
+        raise AssertionError(f"unexpected dataset key: {zarr_key}")
+    return _BASELINE_GRID_ALL_CHUNKS, _BASELINE_GRID_PER_X
 
 
 @pytest.mark.parametrize("zarr_key", ["grid_chunked", "grid_sharded"])
@@ -46,16 +43,16 @@ def test_xor_narrows_chunks(baseline_datasets: dict[str, str], zarr_key: str) ->
     all_total, per_x = _grid_meta(zarr_key)
 
     # Pick indices that don't accidentally cover *all* x-chunks.
-    rhs_x = 200 if zarr_key == "grid_chunked" else 50
+    rhs_x = 200
     pred = (pl.col("x") == 0) ^ (pl.col("x") == rhs_x)
     chunks = ZarrBackend.from_url(zarr_url).selected_chunks_debug( pred)
     idxs = _chunk_indices(chunks)
 
-    expected_count = 2 * per_x if zarr_key == "grid_chunked" else per_x
+    expected_count = 2 * per_x
     assert len(idxs) == expected_count
     assert len(idxs) < all_total
     # x is last dim here (time, lead_time, y, x)
-    assert {t[3] for t in idxs} == ({0, 2} if zarr_key == "grid_chunked" else {0})
+    assert {t[3] for t in idxs} == {0, 2}
 
 
 @pytest.mark.parametrize("zarr_key", ["grid_chunked", "grid_sharded"])
@@ -63,11 +60,11 @@ def test_any_all_horizontal_narrow(baseline_datasets: dict[str, str], zarr_key: 
     zarr_url = baseline_datasets[zarr_key]
     all_total, per_x = _grid_meta(zarr_key)
 
-    rhs_x = 200 if zarr_key == "grid_chunked" else 50
+    rhs_x = 200
     any_pred = pl.any_horizontal([pl.col("x") == 0, pl.col("x") == rhs_x])
     chunks = ZarrBackend.from_url(zarr_url).selected_chunks_debug( any_pred)
     idxs = _chunk_indices(chunks)
-    expected_count = 2 * per_x if zarr_key == "grid_chunked" else per_x
+    expected_count = 2 * per_x
     assert len(idxs) == expected_count
     assert len(idxs) < all_total
 
