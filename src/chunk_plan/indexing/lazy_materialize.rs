@@ -328,6 +328,19 @@ fn sync_binary_search<
     Some(lo)
 }
 
+/// Interpolation only needs ±1 neighbor indices when the target lies strictly between
+/// grid points. A point target that resolves to a single index cell (`i..i+1`) sits on
+/// the coordinate grid and should stay pinned (same as selection), regardless of whether
+/// the dimension is listed in the interpolation coord list.
+#[inline]
+fn pin_interpolation_without_neighbor_cells(
+    vr: &ValueRangePresent,
+    r: &Range<u64>,
+) -> bool {
+    vr.is_point_included_equal()
+        && r.end.saturating_sub(r.start) == 1
+}
+
 fn resolve_value_range_sync<
     B: ChunkedDataBackendSync,
 >(
@@ -573,6 +586,11 @@ fn resolve_constraint_sync<
                     vr,
                 )
             {
+                if pin_interpolation_without_neighbor_cells(
+                    vr, &r,
+                ) {
+                    return Ok(vec![r]);
+                }
                 let start =
                     r.start.saturating_sub(1);
                 let end = r.end.saturating_add(1);
@@ -609,6 +627,11 @@ fn resolve_constraint_sync<
                 backend, &ctx, vr, dir,
             )
             .unwrap_or(dim_range.clone());
+            if pin_interpolation_without_neighbor_cells(
+                vr, &r,
+            ) {
+                return Ok(vec![r]);
+            }
             let start = r
                 .start
                 .saturating_sub(
@@ -1019,6 +1042,11 @@ async fn resolve_constraint_async<
                     vr,
                 )
             {
+                if pin_interpolation_without_neighbor_cells(
+                    vr, &r,
+                ) {
+                    return Ok(vec![r]);
+                }
                 let start =
                     r.start.saturating_sub(1);
                 let end = r.end.saturating_add(1);
@@ -1055,6 +1083,12 @@ async fn resolve_constraint_async<
             )
             .await
             .unwrap_or(dim_range.clone());
+
+            if pin_interpolation_without_neighbor_cells(
+                vr, &r,
+            ) {
+                return Ok(vec![r]);
+            }
 
             let dim_expansion_size = 1u64;
 

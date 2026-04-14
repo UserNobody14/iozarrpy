@@ -465,6 +465,19 @@ impl ValueRangePresent {
         )
     }
 
+    /// Single scalar target: both bounds are `Included` and equal (typical for `interpolate_nd` rows).
+    pub(crate) fn is_point_included_equal(
+        &self,
+    ) -> bool {
+        matches!(
+            (&self.0, &self.1),
+            (
+                Bound::Included(a),
+                Bound::Included(b),
+            ) if a == b
+        )
+    }
+
     /// Build from optional start/end bounds.
     /// Returns `None` only when both bounds are `None`
     /// (i.e. no constraint could be determined).

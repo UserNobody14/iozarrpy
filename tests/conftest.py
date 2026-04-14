@@ -353,6 +353,43 @@ def _generate_baseline_datasets(output_dir: Path) -> dict[str, str]:
     arr[:] = np.arange(16, dtype=np.float64).reshape(4, 4)
     paths["index_only_dims"] = path
 
+    # =========================================================================
+    # 4D (time, lead_time, lat, lon) for interpolate_nd planning: spatial dims are
+    # interpolated; time and lead_time in the target should narrow to a single
+    # chunk each (no ±1 neighbor expansion on selection-only axes).
+    # =========================================================================
+    nt, nl, nlat, nlon = 3, 4, 16, 20
+    t4 = np.arange(
+        nt * nl * nlat * nlon,
+        dtype=np.float64,
+    ).reshape(nt, nl, nlat, nlon)
+    ds_interp_tl = xr.Dataset(
+        data_vars={
+            "temperature": (
+                ["time", "lead_time", "lat", "lon"],
+                t4,
+            )
+        },
+        coords={
+            "time": np.arange(nt, dtype=np.int64),
+            "lead_time": np.arange(nl, dtype=np.int64),
+            "lat": np.linspace(-15.0, 15.0, nlat),
+            "lon": np.linspace(0.0, 40.0, nlon),
+        },
+    )
+    path = make_path("interp_4d_time_lead_latlon")
+    ds_interp_tl.to_zarr(
+        path,
+        zarr_format=3,
+        encoding={
+            "temperature": {
+                "chunks": (1, 1, 10, 10),
+                "compressors": [BLOSC_ZSTD],
+            }
+        },
+    )
+    paths["interp_4d_time_lead_latlon"] = path
+
     return paths
 
 
