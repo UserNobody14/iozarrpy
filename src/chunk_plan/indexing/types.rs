@@ -466,7 +466,9 @@ impl ValueRangePresent {
     }
 
     /// Single scalar target: both bounds are `Included` and equal (typical for `interpolate_nd` rows).
-    pub(crate) fn is_point_included_equal(&self) -> bool {
+    pub(crate) fn is_point_included_equal(
+        &self,
+    ) -> bool {
         matches!(
             (&self.0, &self.1),
             (
