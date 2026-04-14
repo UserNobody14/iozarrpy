@@ -343,8 +343,8 @@ class IcechunkBackend:
     """Icechunk backend with persistent caching across scans (async-only).
     
     Provides access to Icechunk-backed Zarr stores with version control support.
-    The backend owns the Icechunk session and caches coordinate array chunks
-    and metadata across multiple scan operations.
+    The backend owns the Icechunk session and caches decoded Zarr chunks
+    (coordinates and variables) and metadata across multiple scan operations.
     
     Examples:
         >>> # Create a backend from filesystem path (async)
@@ -364,6 +364,7 @@ class IcechunkBackend:
         path: str,
         branch: str | None = None,
         root: str | None = None,
+        max_cache_entries: int = 30,
     ) -> Any:
         """Create a backend from a filesystem path to an Icechunk repository.
         
@@ -373,6 +374,7 @@ class IcechunkBackend:
             path: Path to the Icechunk repository
             branch: Branch name to read from (default: "main")
             root: Optional root path within the store (default: "/")
+            max_cache_entries: Max cached chunks (coordinates and variables); 0 = unbounded
         
         Returns:
             An awaitable that resolves to an IcechunkBackend
@@ -383,6 +385,7 @@ class IcechunkBackend:
     def from_session(
         session: Any,  # icechunk.Session, rainbear.Session, or bytes
         root: str | None = None,
+        max_cache_entries: int = 30,
     ) -> Any:
         """Create a backend from an Icechunk Session.
         
@@ -393,6 +396,7 @@ class IcechunkBackend:
             session: An icechunk Session (from icechunk-python), rainbear Session,
                      or raw serialized bytes
             root: Optional root path within the store (default: "/")
+            max_cache_entries: Max cached chunks (coordinates and variables); 0 = unbounded
         
         Returns:
             An awaitable that resolves to an IcechunkBackend
