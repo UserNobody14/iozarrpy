@@ -164,7 +164,8 @@ required-features = ["bench"]
 
 [profile.release]
 lto = false
-codegen-units = 16
+codegen-units = 256
+opt-level = "s"
 
 # Profile to build a minimally sized binary
 [profile.minimal-size]

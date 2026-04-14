@@ -48,27 +48,32 @@ requires = ["maturin>=1.0,<2.0"]
 build-backend = "maturin"
 
 [dependency-groups]
-dev = [
-    "cartopy>=0.25.0",
-    "fsspec>=2026.1.0",
-    "xarray[complete]>=2025.12.0",
+# CI and anyone who only needs pytest + pyrefly + maturin (see .github/workflows/ci.yaml).
+# Heavier optional tooling lives in `dev`.
+test = [
     "maturin>=1.10.2",
     "pytest>=8.0",
     "pytest-asyncio>=0.23.0",
     "pytest-cov>=7.0.0",
+    "pytest-benchmark>=5.2.3",
     "numpy>=1.26",
     "pandas>=2.2.0",
-    "xarray>=2024.10.0",
+    "fsspec>=2026.1.0",
+    "xarray>=2025.12.0",
+    "scipy>=1.11.0",
     "zarr>=3.0.0",
     "numcodecs>=0.13.0",
-    "pytest-benchmark>=5.2.3",
-    # Needed for FFI-plugin planning tests and for real-world Expr shapes.
-    "interpolars>=2.0.2",
     "gcsfs>=2026.1.0",
     "obstore>=0.8.2",
-    "py-spy>=0.4.1",
     "icechunk>=1.1.18",
     "pyrefly>=0.50.1",
+]
+
+dev = [
+    { include-group = "test" },
+    # Optional: realistic lon/lat in fixtures (tests fall back when absent).
+    "cartopy>=0.25.0",
+    "py-spy>=0.4.1",
     "marimo>=0.20.2",
 ]
 

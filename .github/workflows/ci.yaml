@@ -86,7 +86,8 @@ jobs:
           key: python-maturin
           cache-targets: "false"
       - name: Sync dependencies
-        run: uv sync --all-groups
+        # Skip `dev` (cartopy, marimo, py-spy, …); `test` has everything for pytest + pyrefly.
+        run: uv sync --no-dev --group test --group build
       - name: Build extension (maturin develop)
         run: uv run maturin develop --uv
       - name: pyrefly
