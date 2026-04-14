@@ -28,6 +28,18 @@ def _chunk_indices(chunks: SelectedChunksDebugReturn, variable: str = "geopotent
     raise ValueError(f"No grid found for variable '{variable}' in {chunks}")
 
 
+def _chunk_indices_with_dims(
+    chunks: SelectedChunksDebugReturn, variable: str = "geopotential_height"
+) -> tuple[list[str], set[tuple[int, ...]]]:
+    """Like `_chunk_indices` but also return this grid's dimension order."""
+    for grid in chunks["grids"]:
+        if variable in grid["variables"]:
+            dims = [str(d) for d in grid["dims"]]
+            idxs = {tuple(int(x) for x in c["indices"]) for c in grid["chunks"]}
+            return dims, idxs
+    raise ValueError(f"No grid found for variable '{variable}' in {chunks}")
+
+
 def test_interpolate_nd_plans_single_chunk(baseline_datasets: dict[str, str], tmp_path: Path) -> None:
     zarr_url = baseline_datasets["orography_chunked_10x10"]
 
@@ -572,4 +584,111 @@ def test_interpolate_nd_sparse_2d_coords_bracket_spans_chunk_boundaries(tmp_path
     idxs = _chunk_indices(chunks, variable="value")
 
     assert idxs == {(0, 0), (0, 1), (1, 0), (1, 1)}
+
+
+def test_interpolate_nd_target_time_lead_exact_single_chunk_each_spatial_interp(
+    baseline_datasets: dict[str, str],
+) -> None:
+    """Only ``lat``/``lon`` are interpolation axes; ``time`` and ``lead_time`` select a slice.
+
+    If those selection dims incorrectly used interpolation-style ±1 index expansion (chunk
+    grid chunk size 1 along time and lead_time), we would pull in neighbor time chunks (0 and 2)
+    and neighbor lead chunks instead of exactly ``time == 1`` and ``lead_time == 2``.
+    """
+    zarr_url = baseline_datasets["interp_4d_time_lead_latlon"]
+
+    # Interior lat; lon in second x-chunk (chunks are 10 wide). One hyper-rectangle expected.
+    target = pl.DataFrame(
+        {
+            "time": [1],
+            "lead_time": [2],
+            "lat": [1.0],
+            "lon": [25.0],
+        }
+    )
+    expr = interpolate_nd(["lat", "lon"], ["temperature"], target)
+    chunks = ZarrBackend.from_url(zarr_url).selected_chunks_debug(expr)
+    dims, idxs = _chunk_indices_with_dims(chunks, variable="temperature")
+
+    assert dims == ["time", "lead_time", "lat", "lon"]
+    # time chunk 1, lead_time chunk 2, lat chunk 0, lon chunk 1
+    assert idxs == {(1, 2, 0, 1)}
+
+
+def test_interpolate_nd_target_time_lead_exact_unions_spatial_chunks_only(
+    baseline_datasets: dict[str, str],
+) -> None:
+    """Two target rows share the same time and lead; spatial interpolation may union lon chunks."""
+    zarr_url = baseline_datasets["interp_4d_time_lead_latlon"]
+
+    target = pl.DataFrame(
+        {
+            "time": [1, 1],
+            "lead_time": [2, 2],
+            "lat": [1.0, 1.0],
+            "lon": [5.0, 35.0],
+        }
+    )
+    expr = interpolate_nd(["lat", "lon"], ["temperature"], target)
+    chunks = ZarrBackend.from_url(zarr_url).selected_chunks_debug(expr)
+    dims, idxs = _chunk_indices_with_dims(chunks, variable="temperature")
+
+    assert dims == ["time", "lead_time", "lat", "lon"]
+    # lon 5 -> chunk 0; lon 35 -> chunk 1; same time/lead/lat chunks for both points
+    assert idxs == {(1, 2, 0, 0), (1, 2, 0, 1)}
+    for t_i, l_i, _, _ in idxs:
+        assert t_i == 1
+        assert l_i == 2
+
+
+def test_interpolate_nd_exact_coord_on_grid_pins_spatial_dim(
+    baseline_datasets: dict[str, str],
+) -> None:
+    """Target sits on coordinate grid: no ±1 neighbor expansion on interpolation axes.
+
+    ``lat == 3.0`` is grid index 9 (``np.linspace(-15, 15, 16)``). Lat chunks are width 10,
+    so expanding around index 9 would pull in lat chunk 1; pinning keeps only chunk 0.
+    """
+    zarr_url = baseline_datasets["interp_4d_time_lead_latlon"]
+
+    target = pl.DataFrame(
+        {
+            "time": [1],
+            "lead_time": [2],
+            "lat": [3.0],
+            "lon": [0.0],
+        }
+    )
+    expr = interpolate_nd(["lat", "lon"], ["temperature"], target)
+    chunks = ZarrBackend.from_url(zarr_url).selected_chunks_debug(expr)
+    _, idxs = _chunk_indices_with_dims(chunks, variable="temperature")
+
+    assert idxs == {(1, 2, 0, 0)}
+
+
+def test_interpolate_nd_dim_in_coord_list_but_exact_grid_value_stays_single_chunk(
+    baseline_datasets: dict[str, str],
+) -> None:
+    """Listing ``time`` in the interpolation coord list must not ±1-expand when ``time`` is on-grid."""
+    zarr_url = baseline_datasets["interp_4d_time_lead_latlon"]
+
+    target = pl.DataFrame(
+        {
+            "time": [1],
+            "lead_time": [2],
+            "lat": [3.0],
+            "lon": [0.0],
+        }
+    )
+    expr = interpolate_nd(
+        ["time", "lat", "lon"],
+        ["temperature"],
+        target,
+    )
+    chunks = ZarrBackend.from_url(zarr_url).selected_chunks_debug(expr)
+    _, idxs = _chunk_indices_with_dims(chunks, variable="temperature")
+
+    assert idxs == {(1, 2, 0, 0)}
+    for t_i, _, _, _ in idxs:
+        assert t_i == 1
 
