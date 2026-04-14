@@ -256,6 +256,9 @@ impl HasMetadataBackendAsync<ZarrMeta>
 impl ChunkedDataBackendAsync
     for ZarrBackendAsync
 {
+    /// Uncached read: concurrent callers for the same chunk each run storage I/O.
+    /// [`crate::shared::ChunkedDataCacheAsync`] (see [`to_fully_cached_async`])
+    /// wraps this backend and coalesces in-flight loads per `(path, chunk index)`.
     async fn read_chunk_async(
         &self,
         var: &IStr,

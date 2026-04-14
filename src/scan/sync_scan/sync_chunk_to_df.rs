@@ -115,24 +115,21 @@ fn execute_read_sync<
     backend: &B,
     path: &IStr,
     spec: &ReadSpec,
-) -> BackendResult<ColumnData> {
+) -> BackendResult<Arc<ColumnData>> {
     match spec {
         ReadSpec::Slice1d {
             coord_chunk_shape,
             start,
             len,
-        } => read_coord_range_chunked(
+        } => Ok(Arc::new(read_coord_range_chunked(
             backend,
             path,
             *coord_chunk_shape,
             *start,
             *len,
-        ),
+        )?)),
         ReadSpec::Chunk { indices } => {
-            Ok((*backend.read_chunk_sync(
-                path, indices,
-            )?)
-            .clone())
+            backend.read_chunk_sync(path, indices)
         }
     }
 }
@@ -198,7 +195,7 @@ pub fn chunk_to_df_from_grid_with_backend<
         let data = execute_read_sync(
             backend, path, spec,
         )?;
-        loaded.insert(*path, Arc::new(data));
+        loaded.insert(*path, data);
     }
 
     // Build DataFrame columns
