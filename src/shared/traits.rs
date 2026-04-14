@@ -298,7 +298,9 @@ impl<BACKEND: ChunkedDataBackendSync>
                 )
             })
             .map_err(|arc| {
-                BackendError::other(arc.to_string())
+                BackendError::other(
+                    arc.to_string(),
+                )
             })
     }
 }
@@ -318,12 +320,16 @@ impl<BACKEND: ChunkedDataBackendAsync>
         self.chunk_cache
             .try_get_with(key, async {
                 self.backend
-                    .read_chunk_async(var, chunk_idx)
+                    .read_chunk_async(
+                        var, chunk_idx,
+                    )
                     .await
             })
             .await
             .map_err(|arc| {
-                BackendError::other(arc.to_string())
+                BackendError::other(
+                    arc.to_string(),
+                )
             })
     }
 }

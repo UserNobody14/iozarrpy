@@ -148,9 +148,11 @@ async fn execute_read_async<
             )
             .await?,
         ),
-        ReadSpec::Chunk { indices } => backend
-            .read_chunk_async(&path, &indices)
-            .await?,
+        ReadSpec::Chunk { indices } => {
+            backend
+                .read_chunk_async(&path, &indices)
+                .await?
+        }
     };
     Ok((path, data))
 }

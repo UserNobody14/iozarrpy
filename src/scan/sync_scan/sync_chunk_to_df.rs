@@ -121,13 +121,15 @@ fn execute_read_sync<
             coord_chunk_shape,
             start,
             len,
-        } => Ok(Arc::new(read_coord_range_chunked(
-            backend,
-            path,
-            *coord_chunk_shape,
-            *start,
-            *len,
-        )?)),
+        } => Ok(Arc::new(
+            read_coord_range_chunked(
+                backend,
+                path,
+                *coord_chunk_shape,
+                *start,
+                *len,
+            )?,
+        )),
         ReadSpec::Chunk { indices } => {
             backend.read_chunk_sync(path, indices)
         }
