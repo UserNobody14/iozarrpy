@@ -9,6 +9,11 @@ Compares:
 - rainbear.scan_zarr (LazyFrame, reopens each query)
 - rainbear.scan_zarr_async (reopens each query)
 - rainbear.ZarrBackend.scan_zarr_async (caches coords across queries)
+
+Multi-variable benchmarks (``baseline_datasets["grid_default"]``) request all
+18 data variables on the shared 4D grid (dims ``time``, ``lead_time``, ``y``,
+``x``) in one query. Run with ``pytest -m benchmark`` (default CI excludes
+``benchmark``-marked tests via ``-m "not benchmark"``).
 """
 
 from __future__ import annotations
@@ -22,6 +27,8 @@ import pytest
 import xarray as xr
 
 import rainbear
+
+from tests.zarr_generators import get_list_of_variables
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -55,6 +62,26 @@ def zarr_backend(bench_dataset_path: str) -> rainbear.ZarrBackend:
     return rainbear.ZarrBackend.from_url(bench_dataset_path)
 
 
+@pytest.fixture(scope="module")
+def multivar_grid_path(baseline_datasets: dict[str, str]) -> str:
+    """4D grid dataset with 18 variables on the same chunk grid (baseline ``grid_default``)."""
+    return baseline_datasets["grid_default"]
+
+
+@pytest.fixture(scope="module")
+def multivar_xarray_dataset(multivar_grid_path: str):
+    """Pre-opened xarray handle for the multi-variable grid."""
+    ds = xr.open_zarr(multivar_grid_path, chunks=None)
+    yield ds
+    ds.close()
+
+
+@pytest.fixture(scope="module")
+def multivar_zarr_backend(multivar_grid_path: str) -> rainbear.ZarrBackend:
+    """Caching backend for the multi-variable grid."""
+    return rainbear.ZarrBackend.from_url(multivar_grid_path)
+
+
 # ---------------------------------------------------------------------------
 # Query predicates
 # ---------------------------------------------------------------------------
@@ -68,6 +95,26 @@ def _pred_subset() -> pl.Expr:
         & (pl.col("y") <= 8)
         & (pl.col("x") >= 4)
         & (pl.col("x") <= 10)
+    )
+
+
+# ``grid_default``: 2 temperature/precip fields + 16 ``wind_*`` variables (same grid).
+_MULTIVAR_DIMS = ["time", "lead_time", "y", "x"]
+_MULTIVAR_DATA_VARS: list[str] = [
+    "2m_temperature",
+    "total_precipitation",
+    *sorted(get_list_of_variables()),
+]
+_MULTIVAR_COLUMNS: list[str] = _MULTIVAR_DIMS + _MULTIVAR_DATA_VARS
+
+
+def _multivar_pred() -> pl.Expr:
+    """Small index window on the 400×400 grid (same style as other bench predicates)."""
+    return (
+        (pl.col("y") >= 50)
+        & (pl.col("y") <= 60)
+        & (pl.col("x") >= 100)
+        & (pl.col("x") <= 110)
     )
 
 
@@ -138,6 +185,71 @@ def impl_backend_cached(backend: rainbear.ZarrBackend) -> pl.DataFrame:
     return asyncio.run(_run())
 
 
+def impl_multivar_xarray_reused(ds: xr.Dataset) -> pl.DataFrame:
+    """Multi-variable query with pre-opened xarray."""
+    pred = _multivar_pred()
+    pdf = (
+        ds.sel(y=slice(50, 60), x=slice(100, 110))[_MULTIVAR_DATA_VARS]
+        .to_dataframe()
+        .reset_index()
+    )
+    df = pl.from_pandas(pdf)
+    return df.filter(pred).select(_MULTIVAR_COLUMNS)
+
+
+def impl_multivar_xarray_fresh(path: str) -> pl.DataFrame:
+    """Multi-variable query opening fresh xarray each time."""
+    ds = xr.open_zarr(path, consolidated=False)
+    try:
+        pdf = (
+            ds.sel(y=slice(50, 60), x=slice(100, 110))[_MULTIVAR_DATA_VARS]
+            .to_dataframe()
+            .reset_index()
+        )
+    finally:
+        ds.close()
+    df = pl.from_pandas(pdf)
+    return df.filter(_multivar_pred()).select(_MULTIVAR_COLUMNS)
+
+
+def impl_multivar_scan_zarr(path: str) -> pl.DataFrame:
+    """Multi-variable query via ``scan_zarr``."""
+    pred = _multivar_pred()
+    return (
+        rainbear.scan_zarr(path)
+        .filter(pred)
+        .select(_MULTIVAR_COLUMNS)
+        .collect()
+    )
+
+
+def impl_multivar_scan_zarr_async(path: str) -> pl.DataFrame:
+    """Multi-variable query via ``scan_zarr_async`` (no backend cache)."""
+    pred = _multivar_pred()
+
+    async def _run() -> pl.DataFrame:
+        return await rainbear.scan_zarr_async(
+            path,
+            pl.col(_MULTIVAR_COLUMNS).filter(pred),
+            max_concurrency=16,
+        )
+
+    return asyncio.run(_run())
+
+
+def impl_multivar_backend_cached(backend: rainbear.ZarrBackend) -> pl.DataFrame:
+    """Multi-variable query via caching ``ZarrBackend``."""
+    pred = _multivar_pred()
+
+    async def _run() -> pl.DataFrame:
+        return await backend.scan_zarr_async(
+            pl.col(_MULTIVAR_COLUMNS).filter(pred),
+            max_concurrency=16,
+        )
+
+    return asyncio.run(_run())
+
+
 # ---------------------------------------------------------------------------
 # Single-query benchmarks (baseline)
 # ---------------------------------------------------------------------------
@@ -176,6 +288,50 @@ def test_bench_single_backend_cached(benchmark, zarr_backend: rainbear.ZarrBacke
     """Single query using caching backend."""
     out = benchmark(impl_backend_cached, zarr_backend)
     assert "geopotential_height" in out.columns
+
+
+# ---------------------------------------------------------------------------
+# Single-query benchmarks — many variables (grid_default, ~18 fields)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.benchmark(group="multivar_single")
+def test_bench_multivar_single_xarray_reused(
+    benchmark, multivar_xarray_dataset: xr.Dataset) -> None:
+    """Single multi-variable query with pre-opened xarray."""
+    out = benchmark(impl_multivar_xarray_reused, multivar_xarray_dataset)
+    assert len(out.columns) == len(_MULTIVAR_COLUMNS)
+    assert "wind_zstd_little" in out.columns
+
+
+@pytest.mark.benchmark(group="multivar_single")
+def test_bench_multivar_single_xarray_fresh(benchmark, multivar_grid_path: str) -> None:
+    """Single multi-variable query opening fresh xarray each time."""
+    out = benchmark(impl_multivar_xarray_fresh, multivar_grid_path)
+    assert len(out.columns) == len(_MULTIVAR_COLUMNS)
+
+
+@pytest.mark.benchmark(group="multivar_single")
+def test_bench_multivar_single_scan_zarr(benchmark, multivar_grid_path: str) -> None:
+    """Single multi-variable query using ``scan_zarr``."""
+    out = benchmark(impl_multivar_scan_zarr, multivar_grid_path)
+    assert len(out.columns) == len(_MULTIVAR_COLUMNS)
+
+
+@pytest.mark.benchmark(group="multivar_single")
+def test_bench_multivar_single_scan_zarr_async(benchmark, multivar_grid_path: str) -> None:
+    """Single multi-variable query using ``scan_zarr_async``."""
+    out = benchmark(impl_multivar_scan_zarr_async, multivar_grid_path)
+    assert len(out.columns) == len(_MULTIVAR_COLUMNS)
+
+
+@pytest.mark.benchmark(group="multivar_single")
+def test_bench_multivar_single_backend_cached(
+    benchmark, multivar_zarr_backend: rainbear.ZarrBackend
+) -> None:
+    """Single multi-variable query using caching backend."""
+    out = benchmark(impl_multivar_backend_cached, multivar_zarr_backend)
+    assert len(out.columns) == len(_MULTIVAR_COLUMNS)
 
 
 # ---------------------------------------------------------------------------
@@ -241,6 +397,99 @@ def test_bench_multi_backend_cached(benchmark, zarr_backend: rainbear.ZarrBacken
     """5 queries using caching backend - should show speedup from caching."""
     out = benchmark(_multi_query_backend_cached, zarr_backend)
     assert len(out) == 5
+
+
+def _multi_query_multivar_xarray_reused(
+    ds: xr.Dataset, n: int = 5
+) -> list[pl.DataFrame]:
+    results = []
+    for _ in range(n):
+        results.append(impl_multivar_xarray_reused(ds))
+    return results
+
+
+def _multi_query_multivar_scan_zarr(path: str, n: int = 5) -> list[pl.DataFrame]:
+    results = []
+    for _ in range(n):
+        results.append(impl_multivar_scan_zarr(path))
+    return results
+
+
+def _multi_query_multivar_scan_zarr_async(path: str, n: int = 5) -> list[pl.DataFrame]:
+    results = []
+    for _ in range(n):
+        results.append(impl_multivar_scan_zarr_async(path))
+    return results
+
+
+def _multi_query_multivar_backend_cached(
+    backend: rainbear.ZarrBackend, n: int = 5
+) -> list[pl.DataFrame]:
+    results = []
+    for _ in range(n):
+        results.append(impl_multivar_backend_cached(backend))
+    return results
+
+
+@pytest.mark.benchmark(group="multivar_multi_5x")
+def test_bench_multivar_multi_xarray_reused(
+    benchmark, multivar_xarray_dataset: xr.Dataset
+) -> None:
+    """5 sequential multi-variable queries with pre-opened xarray."""
+    out = benchmark(_multi_query_multivar_xarray_reused, multivar_xarray_dataset)
+    assert len(out) == 5
+    assert len(out[0].columns) == len(_MULTIVAR_COLUMNS)
+
+
+@pytest.mark.benchmark(group="multivar_multi_5x")
+def test_bench_multivar_multi_scan_zarr(benchmark, multivar_grid_path: str) -> None:
+    """5 sequential multi-variable queries using ``scan_zarr``."""
+    out = benchmark(_multi_query_multivar_scan_zarr, multivar_grid_path)
+    assert len(out) == 5
+
+
+@pytest.mark.benchmark(group="multivar_multi_5x")
+def test_bench_multivar_multi_scan_zarr_async(benchmark, multivar_grid_path: str) -> None:
+    """5 sequential multi-variable queries using ``scan_zarr_async``."""
+    out = benchmark(_multi_query_multivar_scan_zarr_async, multivar_grid_path)
+    assert len(out) == 5
+
+
+@pytest.mark.benchmark(group="multivar_multi_5x")
+def test_bench_multivar_multi_backend_cached(
+    benchmark, multivar_zarr_backend: rainbear.ZarrBackend
+) -> None:
+    """5 sequential multi-variable queries using caching backend."""
+    out = benchmark(_multi_query_multivar_backend_cached, multivar_zarr_backend)
+    assert len(out) == 5
+
+
+def _concurrent_multivar_queries_backend(
+    backend: rainbear.ZarrBackend, n: int = 5
+) -> list[pl.DataFrame]:
+    pred = _multivar_pred()
+
+    async def _run() -> list[pl.DataFrame]:
+        async def one() -> pl.DataFrame:
+            return await backend.scan_zarr_async(
+                pl.col(_MULTIVAR_COLUMNS).filter(pred),
+                max_concurrency=16,
+            )
+
+        return await asyncio.gather(*[one() for _ in range(n)])
+
+    return asyncio.run(_run())
+
+
+@pytest.mark.benchmark(group="multivar_concurrent_5x")
+def test_bench_multivar_concurrent_backend_cached(
+    benchmark, multivar_zarr_backend: rainbear.ZarrBackend
+) -> None:
+    """5 concurrent multi-variable queries on caching backend (stress in-flight coalescing)."""
+    out = benchmark(_concurrent_multivar_queries_backend, multivar_zarr_backend)
+    assert len(out) == 5
+    for df in out:
+        assert len(df.columns) == len(_MULTIVAR_COLUMNS)
 
 
 # ---------------------------------------------------------------------------

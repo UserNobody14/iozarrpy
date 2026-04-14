@@ -132,13 +132,13 @@ async fn execute_read_async<
     backend: &B,
     path: IStr,
     spec: ReadSpec,
-) -> BackendResult<(IStr, ColumnData)> {
-    let data = match spec {
+) -> BackendResult<(IStr, Arc<ColumnData>)> {
+    let data: Arc<ColumnData> = match spec {
         ReadSpec::Slice1d {
             coord_chunk_shape,
             start,
             len,
-        } => {
+        } => Arc::new(
             read_coord_range_chunked(
                 backend,
                 &path,
@@ -146,12 +146,13 @@ async fn execute_read_async<
                 start,
                 len,
             )
-            .await?
+            .await?,
+        ),
+        ReadSpec::Chunk { indices } => {
+            backend
+                .read_chunk_async(&path, &indices)
+                .await?
         }
-        ReadSpec::Chunk { indices } => (*backend
-            .read_chunk_async(&path, &indices)
-            .await?)
-            .clone(),
     };
     Ok((path, data))
 }
@@ -226,7 +227,7 @@ pub async fn chunk_to_df_from_grid_with_backend<
     > = BTreeMap::new();
     while let Some(res) = read_futs.next().await {
         let (path, data) = res?;
-        loaded.insert(path, Arc::new(data));
+        loaded.insert(path, data);
     }
 
     // Build DataFrame columns

@@ -44,9 +44,9 @@ impl PyZarrBackendSync {
     ///
     /// # Arguments
     /// * `url` - URL to the zarr store (e.g., "s3://bucket/path.zarr")
-    /// * `max_cache_entries` - Maximum cached coord chunks (0 = unlimited)
+    /// * `max_cache_entries` - Max cached chunks (coords + variables); `0` = unbounded
     #[staticmethod]
-    #[pyo3(signature = (url, max_cache_entries=5))]
+    #[pyo3(signature = (url, max_cache_entries=30))]
     fn from_url(
         url: String,
         max_cache_entries: u64,
@@ -69,9 +69,9 @@ impl PyZarrBackendSync {
     /// # Arguments
     /// * `store` - ObjectStore instance (from rainbear.store or obstore)
     /// * `prefix` - Optional path prefix within the store
-    /// * `max_cache_entries` - Maximum cached coord chunks (0 = unlimited)
+    /// * `max_cache_entries` - Max cached chunks (coords + variables); `0` = unbounded
     #[staticmethod]
-    #[pyo3(signature = (store, prefix=None, max_cache_entries=5))]
+    #[pyo3(signature = (store, prefix=None, max_cache_entries=30))]
     fn from_store(
         store: &Bound<'_, PyAny>,
         prefix: Option<String>,

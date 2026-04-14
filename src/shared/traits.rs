@@ -116,6 +116,8 @@ pub trait HasAsyncStore {
     target = "backend",
     where = "BACKEND: HasStore"
 )]
+/// Sync in-memory chunk cache with the same **in-flight coalescing** behavior as
+/// [`ChunkedDataCacheAsync`] (via [`moka::sync::Cache::try_get_with`]).
 pub struct ChunkedDataCacheSync<
     BACKEND: ChunkedDataBackendSync,
 > {
@@ -126,7 +128,12 @@ pub struct ChunkedDataCacheSync<
     >,
 }
 
-/// Async cache for chunked data
+/// Async cache for chunked data.
+///
+/// Chunk loads use Moka's [`moka::future::Cache::try_get_with`], which **coalesces**
+/// concurrent requests for the same `(zarr path, chunk index)`: only one underlying
+/// read runs; other waiters await the same result. This avoids duplicate I/O when many
+/// tasks request the same coordinate chunk or variable chunk before the first load finishes.
 pub struct ChunkedDataCacheAsync<
     BACKEND: ChunkedDataBackendAsync,
 > {
@@ -175,15 +182,21 @@ pub struct HasMetadataBackendCacheAsync<
 impl<BACKEND: ChunkedDataBackendSync>
     ChunkedDataCacheSync<BACKEND>
 {
+    /// `max_entries == 0` builds an **unbounded** cache (no entry-count eviction).
+    /// Non-zero values bound the number of cached `(zarr path, chunk index)` entries
+    /// for both coordinate and variable chunk reads.
     pub fn new(
         backend: BACKEND,
         max_entries: u64,
     ) -> Self {
+        let chunk_cache = if max_entries == 0 {
+            MokaCache::builder().build()
+        } else {
+            MokaCache::new(max_entries)
+        };
         Self {
             backend,
-            chunk_cache: MokaCache::new(
-                max_entries,
-            ),
+            chunk_cache,
         }
     }
 }
@@ -191,15 +204,21 @@ impl<BACKEND: ChunkedDataBackendSync>
 impl<BACKEND: ChunkedDataBackendAsync>
     ChunkedDataCacheAsync<BACKEND>
 {
+    /// `max_entries == 0` builds an **unbounded** cache (no entry-count eviction).
+    /// Non-zero values bound the number of cached `(zarr path, chunk index)` entries
+    /// for both coordinate and variable chunk reads.
     pub fn new(
         backend: BACKEND,
         max_entries: u64,
     ) -> Self {
+        let chunk_cache = if max_entries == 0 {
+            MokaFutureCache::builder().build()
+        } else {
+            MokaFutureCache::new(max_entries)
+        };
         Self {
             backend,
-            chunk_cache: MokaFutureCache::new(
-                max_entries,
-            ),
+            chunk_cache,
         }
     }
 }
@@ -284,17 +303,17 @@ impl<BACKEND: ChunkedDataBackendSync>
     ) -> Result<Arc<ColumnData>, BackendError>
     {
         let key = (*var, chunk_idx.to_vec());
-        let cache = self.chunk_cache.get(&key);
-        if let Some(data) = cache {
-            return Ok(data.clone());
-        }
-        drop(cache);
-        let data = self
-            .backend
-            .read_chunk_sync(var, chunk_idx)?;
         self.chunk_cache
-            .insert(key, data.clone());
-        Ok(data)
+            .try_get_with(key, || {
+                self.backend.read_chunk_sync(
+                    var, chunk_idx,
+                )
+            })
+            .map_err(|arc| {
+                BackendError::other(
+                    arc.to_string(),
+                )
+            })
     }
 }
 
@@ -310,19 +329,20 @@ impl<BACKEND: ChunkedDataBackendAsync>
     ) -> Result<Arc<ColumnData>, BackendError>
     {
         let key = (*var, chunk_idx.to_vec());
-        let cache =
-            self.chunk_cache.get(&key).await;
-        if let Some(data) = cache {
-            return Ok(data);
-        }
-        let data = self
-            .backend
-            .read_chunk_async(var, chunk_idx)
-            .await?;
         self.chunk_cache
-            .insert(key, data.clone())
-            .await;
-        Ok(data)
+            .try_get_with(key, async {
+                self.backend
+                    .read_chunk_async(
+                        var, chunk_idx,
+                    )
+                    .await
+            })
+            .await
+            .map_err(|arc| {
+                BackendError::other(
+                    arc.to_string(),
+                )
+            })
     }
 }
 

@@ -23,12 +23,14 @@ use crate::backend::implementation::{
 };
 use crate::backend::py::debug::extract_grids;
 use crate::backend::py::debug::grids_to_python;
+use crate::errors::PolarsSnafu;
 use crate::py::expr_extract::extract_expr;
 use crate::shared::{
     EvictableChunkCacheAsync,
     HasMetadataBackendAsync,
 };
 use crate::{IStr, IntoIStr};
+use snafu::ResultExt;
 
 /// Extract session bytes from a Python session object.
 ///
@@ -81,8 +83,8 @@ fn extract_session_bytes(
 
 /// Python-exposed Icechunk backend with caching and scan methods.
 ///
-/// The backend owns the Icechunk session and caches coordinate array chunks
-/// and metadata across multiple scan operations.
+/// The backend owns the Icechunk session and caches decoded Zarr chunks
+/// (coordinates and variables) and metadata across multiple scan operations.
 #[pyclass(name = "IcechunkBackend")]
 pub struct PyIcechunkBackend {
     inner: Arc<FullyCachedIcechunkBackendAsync>,
@@ -98,18 +100,20 @@ impl PyIcechunkBackend {
     /// * `path` - Path to the Icechunk repository
     /// * `branch` - Branch name to read from (default: "main")
     /// * `root` - Optional root path within the store (default: "/")
+    /// * `max_cache_entries` - Max cached chunks (coords + variables); `0` = unbounded
     ///
     /// # Example
     /// ```python
     /// backend = await IcechunkBackend.from_filesystem("/path/to/icechunk/repo")
     /// ```
     #[staticmethod]
-    #[pyo3(signature = (path, branch=None, root=None))]
+    #[pyo3(signature = (path, branch=None, root=None, max_cache_entries=30))]
     fn from_filesystem<'py>(
         py: Python<'py>,
         path: String,
         branch: Option<String>,
         root: Option<String>,
+        max_cache_entries: u64,
     ) -> PyResult<Bound<'py, PyAny>> {
         let branch =
             branch.unwrap_or_else(|| {
@@ -155,10 +159,10 @@ impl PyIcechunkBackend {
 
             let backend =
                 IcechunkBackendAsync::from_session(session, root_clone);
-            let backend =
-                to_fully_cached_icechunk_async(
-                    backend, 20,
-                )?;
+            let backend = to_fully_cached_icechunk_async(
+                backend,
+                max_cache_entries,
+            )?;
 
             Python::attach(|py| {
                 let py_backend =
@@ -181,6 +185,7 @@ impl PyIcechunkBackend {
     /// # Arguments
     /// * `session` - An icechunk Session object (from icechunk-python or rainbear)
     /// * `root` - Optional root path within the store (default: "/")
+    /// * `max_cache_entries` - Max cached chunks (coords + variables); `0` = unbounded
     ///
     /// # Example
     /// ```python
@@ -196,11 +201,12 @@ impl PyIcechunkBackend {
     /// backend = await rainbear.IcechunkBackend.from_session(session)
     /// ```
     #[staticmethod]
-    #[pyo3(signature = (session, root=None))]
+    #[pyo3(signature = (session, root=None, max_cache_entries=30))]
     fn from_session<'py>(
         py: Python<'py>,
         session: &Bound<'py, PyAny>,
         root: Option<String>,
+        max_cache_entries: u64,
     ) -> PyResult<Bound<'py, PyAny>> {
         let root_clone = root.clone();
 
@@ -219,10 +225,10 @@ impl PyIcechunkBackend {
         future_into_py(py, async move {
             let backend =
                 IcechunkBackendAsync::from_session(inner_session, root_clone);
-            let backend =
-                to_fully_cached_icechunk_async(
-                    backend, 20,
-                )?;
+            let backend = to_fully_cached_icechunk_async(
+                backend,
+                max_cache_entries,
+            )?;
 
             Python::attach(|py| {
                 let py_backend =
@@ -271,15 +277,14 @@ impl PyIcechunkBackend {
             // `predicate` is used for chunk planning but may also include projection,
             // e.g. `pl.col(["y","x","var"]).filter(pred)`.
             let lf = df.lazy();
-            let filtered =                         lf
-                            .select([expr2])
-                            .collect()
-                            .map_err(|e| {
-                                PyErr::new::<
-                                    pyo3::exceptions::PyRuntimeError,
-                                    _,
-                                >(e.to_string())
-                            })?;
+            let filtered = lf
+                .select([expr2])
+                .collect()
+                .context(PolarsSnafu {
+                    message:
+                        "Error filtering batch"
+                            .to_string(),
+                })?;
 
             Python::attach(|py| {
                 Ok(PyDataFrame(filtered)

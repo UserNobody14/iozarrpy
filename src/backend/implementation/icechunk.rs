@@ -188,6 +188,8 @@ pub type FullyCachedIcechunkBackendAsync =
     >;
 
 /// Convert an `IcechunkBackendAsync` to a fully cached version.
+///
+/// `max_entries == 0` uses an unbounded chunk cache (see [`ChunkedDataCacheAsync::new`]).
 pub fn to_fully_cached_icechunk_async(
     backend: IcechunkBackendAsync,
     max_entries: u64,
