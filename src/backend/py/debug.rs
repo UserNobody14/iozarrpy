@@ -52,7 +52,9 @@ pub(crate) async fn extract_grids<
     // Use iter_consolidated_chunks() to mirror the actual I/O path exactly.
     // This function already deduplicates chunk indices across overlapping subsets
     // using the same BTreeSet logic as the real chunk readers.
-    for result in grouped_plan.iter_consolidated_chunks() {
+    for result in
+        grouped_plan.iter_consolidated_chunks()
+    {
         let group = result.map_err(|e| {
             PyErr::new::<
                 pyo3::exceptions::PyValueError,
@@ -252,7 +254,9 @@ pub(crate) fn extract_grids_sync<
     // Use iter_consolidated_chunks() to mirror the actual I/O path exactly.
     // This function already deduplicates chunk indices across overlapping subsets
     // using the same BTreeSet logic as the real chunk readers.
-    for result in grouped_plan.iter_consolidated_chunks() {
+    for result in
+        grouped_plan.iter_consolidated_chunks()
+    {
         let group = result.map_err(|e| {
             PyErr::new::<
                 pyo3::exceptions::PyValueError,
@@ -477,4 +481,3 @@ pub(crate) fn grids_to_python<'py>(
         .set_item("coord_reads", coord_reads)?;
     Ok(result.into_any().unbind())
 }
-
