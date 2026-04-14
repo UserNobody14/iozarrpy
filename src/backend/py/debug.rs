@@ -52,21 +52,20 @@ fn shard_info_from_outer_grid(
         .collect();
     let shape: Vec<u64> = match array_shape {
         Some(a_shape)
-            if a_shape.len() == outer_shape.len() =>
+            if a_shape.len()
+                == outer_shape.len() =>
         {
             origin
                 .iter()
                 .zip(a_shape.iter())
                 .zip(outer_shape.iter())
-                .map(
-                    |((&o, &a), &s)| {
-                        if o >= a {
-                            0
-                        } else {
-                            (a - o).min(s)
-                        }
-                    },
-                )
+                .map(|((&o, &a), &s)| {
+                    if o >= a {
+                        0
+                    } else {
+                        (a - o).min(s)
+                    }
+                })
                 .collect()
         }
         _ => outer_shape.to_vec(),
@@ -87,9 +86,10 @@ fn build_group_chunks(
     array_shape: &Option<Vec<u64>>,
 ) -> Vec<ChunkInfo> {
     let mut chunks: Vec<ChunkInfo> = Vec::new();
-    let is_sharded = outer_chunk_shape
-        .as_ref()
-        .is_some_and(|outer| outer != inner_chunk_shape);
+    let is_sharded =
+        outer_chunk_shape.as_ref().is_some_and(
+            |outer| outer != inner_chunk_shape,
+        );
 
     for inner_idx in inner_chunk_indices {
         if is_sharded {
@@ -110,18 +110,20 @@ fn build_group_chunks(
                         if outer_sz == 0 {
                             0
                         } else {
-                            i.saturating_mul(inner_sz)
-                                / outer_sz
+                            i.saturating_mul(
+                                inner_sz,
+                            ) / outer_sz
                         }
                     },
                 )
                 .collect();
 
-            let shard = shard_info_from_outer_grid(
-                &outer_idx,
-                outer_shape,
-                array_shape.as_ref(),
-            );
+            let shard =
+                shard_info_from_outer_grid(
+                    &outer_idx,
+                    outer_shape,
+                    array_shape.as_ref(),
+                );
 
             let origin: Vec<u64> = inner_idx
                 .iter()
@@ -395,8 +397,10 @@ pub(crate) fn grids_to_python<'py>(
                 )?;
                 shards_list.append(shard_dict)?;
             }
-            chunk_dict
-                .set_item("shards", shards_list)?;
+            chunk_dict.set_item(
+                "shards",
+                shards_list,
+            )?;
 
             chunks_list.append(chunk_dict)?;
         }
