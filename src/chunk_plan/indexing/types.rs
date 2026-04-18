@@ -15,7 +15,7 @@ use polars::prelude::{
 /// Chunk grid signature - dimensions + chunk shape for grouping.
 ///
 /// Variables with the same chunk grid signature can share chunk iteration.
-/// This extends the old DimSignature by also including chunk shape,
+/// This extends the old ChunkGridSignature by also including chunk shape,
 /// so variables with same dims but different chunking are handled separately.
 #[derive(
     Debug,
@@ -92,10 +92,6 @@ impl Display for ChunkGridSignature {
         write!(f, ")")
     }
 }
-
-/// Type alias for backwards compatibility during transition.
-/// DimSignature is now ChunkGridSignature (with optional chunk_shape).
-pub type DimSignature = ChunkGridSignature;
 
 #[derive(Debug, Clone)]
 pub(crate) enum CoordScalar {

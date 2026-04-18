@@ -9,7 +9,7 @@ use std::sync::Arc;
 use crate::IStr;
 
 use super::selection::Emptyable;
-use super::types::DimSignature;
+use super::types::ChunkGridSignature;
 
 /// Trait for array-level selection types (lazy or concrete).
 pub trait ArraySelectionType:
@@ -23,8 +23,10 @@ pub trait ArraySelectionType:
 /// unique dimension signature. Variables are mapped to their signature for lookup.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GroupedSelection<Sel> {
-    by_dims: BTreeMap<Arc<DimSignature>, Sel>,
-    var_to_sig: BTreeMap<IStr, Arc<DimSignature>>,
+    by_dims:
+        BTreeMap<Arc<ChunkGridSignature>, Sel>,
+    var_to_sig:
+        BTreeMap<IStr, Arc<ChunkGridSignature>>,
 }
 
 impl<Sel: ArraySelectionType>
@@ -52,10 +54,13 @@ impl<Sel: ArraySelectionType>
 
     /// Create a GroupedSelection from raw parts.
     pub(crate) fn from_parts(
-        by_dims: BTreeMap<Arc<DimSignature>, Sel>,
+        by_dims: BTreeMap<
+            Arc<ChunkGridSignature>,
+            Sel,
+        >,
         var_to_sig: BTreeMap<
             IStr,
-            Arc<DimSignature>,
+            Arc<ChunkGridSignature>,
         >,
     ) -> Self {
         Self {

@@ -24,7 +24,7 @@ use super::selection::{
     Emptyable, SetOperations,
 };
 use super::types::{
-    DimSignature, ValueRangePresent,
+    ChunkGridSignature, ValueRangePresent,
 };
 use crate::IStr;
 use crate::chunk_plan::exprs::expr_plan::{
@@ -1361,8 +1361,8 @@ fn build_var_grouping(
     meta: &ZarrMeta,
 ) -> Option<(
     Vec<IStr>,
-    BTreeMap<Arc<DimSignature>, Vec<IStr>>,
-    BTreeMap<IStr, Arc<DimSignature>>,
+    BTreeMap<Arc<ChunkGridSignature>, Vec<IStr>>,
+    BTreeMap<IStr, Arc<ChunkGridSignature>>,
 )> {
     let var_list: Vec<IStr> = match vars {
         VarSet::Specific(v) if v.is_empty() => {
@@ -1375,27 +1375,27 @@ fn build_var_grouping(
     };
 
     let mut sig_cache: BTreeMap<
-        DimSignature,
-        Arc<DimSignature>,
+        ChunkGridSignature,
+        Arc<ChunkGridSignature>,
     > = BTreeMap::new();
     let mut by_sig: BTreeMap<
-        Arc<DimSignature>,
+        Arc<ChunkGridSignature>,
         Vec<IStr>,
     > = BTreeMap::new();
     let mut var_to_sig: BTreeMap<
         IStr,
-        Arc<DimSignature>,
+        Arc<ChunkGridSignature>,
     > = BTreeMap::new();
 
     for var in &var_list {
         let sig = if let Some(array_meta) =
             meta.array_by_path(*var)
         {
-            DimSignature::from_dims_only(
+            ChunkGridSignature::from_dims_only(
                 array_meta.dims.clone(),
             )
         } else {
-            DimSignature::from_dims_only(
+            ChunkGridSignature::from_dims_only(
                 SmallVec::new(),
             )
         };
@@ -1444,7 +1444,7 @@ pub(crate) fn resolve_expr_plan_sync<
             };
 
             let mut by_dims: BTreeMap<
-                Arc<DimSignature>,
+                Arc<ChunkGridSignature>,
                 DataArraySelection,
             > = BTreeMap::new();
 
@@ -1516,7 +1516,7 @@ pub(crate) async fn resolve_expr_plan_async<
             };
 
             let mut by_dims: BTreeMap<
-                Arc<DimSignature>,
+                Arc<ChunkGridSignature>,
                 DataArraySelection,
             > = BTreeMap::new();
 
