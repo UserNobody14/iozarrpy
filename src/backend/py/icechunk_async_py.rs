@@ -21,6 +21,7 @@ use crate::backend::implementation::{
     scan_with_backend_async,
     to_fully_cached_icechunk_async,
 };
+use crate::backend::py::PyBackendOptions;
 use crate::backend::py::debug::extract_grids;
 use crate::backend::py::debug::grids_to_python;
 use crate::errors::PolarsSnafu;
@@ -100,26 +101,30 @@ impl PyIcechunkBackend {
     /// * `path` - Path to the Icechunk repository
     /// * `branch` - Branch name to read from (default: "main")
     /// * `root` - Optional root path within the store (default: "/")
-    /// * `max_cache_entries` - Max cached chunks (coords + variables); `0` = unbounded
+    /// * `options` - Optional [`BackendOptions`] (per-cache capacities, ...)
     ///
     /// # Example
     /// ```python
     /// backend = await IcechunkBackend.from_filesystem("/path/to/icechunk/repo")
     /// ```
     #[staticmethod]
-    #[pyo3(signature = (path, branch=None, root=None, max_cache_entries=30))]
+    #[pyo3(signature = (path, branch=None, root=None, options=None))]
     fn from_filesystem<'py>(
         py: Python<'py>,
         path: String,
         branch: Option<String>,
         root: Option<String>,
-        max_cache_entries: u64,
+        options: Option<PyBackendOptions>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let branch =
             branch.unwrap_or_else(|| {
                 "main".to_string()
             });
         let root_clone = root.clone();
+        let resolved_opts =
+            PyBackendOptions::resolve(
+                options.as_ref(),
+            );
 
         future_into_py(py, async move {
             // Create filesystem storage
@@ -159,10 +164,11 @@ impl PyIcechunkBackend {
 
             let backend =
                 IcechunkBackendAsync::from_session(session, root_clone);
-            let backend = to_fully_cached_icechunk_async(
-                backend,
-                max_cache_entries,
-            )?;
+            let backend =
+                to_fully_cached_icechunk_async(
+                    backend,
+                    resolved_opts,
+                )?;
 
             Python::attach(|py| {
                 let py_backend =
@@ -185,7 +191,7 @@ impl PyIcechunkBackend {
     /// # Arguments
     /// * `session` - An icechunk Session object (from icechunk-python or rainbear)
     /// * `root` - Optional root path within the store (default: "/")
-    /// * `max_cache_entries` - Max cached chunks (coords + variables); `0` = unbounded
+    /// * `options` - Optional [`BackendOptions`] (per-cache capacities, ...)
     ///
     /// # Example
     /// ```python
@@ -201,14 +207,18 @@ impl PyIcechunkBackend {
     /// backend = await rainbear.IcechunkBackend.from_session(session)
     /// ```
     #[staticmethod]
-    #[pyo3(signature = (session, root=None, max_cache_entries=30))]
+    #[pyo3(signature = (session, root=None, options=None))]
     fn from_session<'py>(
         py: Python<'py>,
         session: &Bound<'py, PyAny>,
         root: Option<String>,
-        max_cache_entries: u64,
+        options: Option<PyBackendOptions>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let root_clone = root.clone();
+        let resolved_opts =
+            PyBackendOptions::resolve(
+                options.as_ref(),
+            );
 
         // Extract session bytes from the Python object
         let session_bytes =
@@ -225,10 +235,11 @@ impl PyIcechunkBackend {
         future_into_py(py, async move {
             let backend =
                 IcechunkBackendAsync::from_session(inner_session, root_clone);
-            let backend = to_fully_cached_icechunk_async(
-                backend,
-                max_cache_entries,
-            )?;
+            let backend =
+                to_fully_cached_icechunk_async(
+                    backend,
+                    resolved_opts,
+                )?;
 
             Python::attach(|py| {
                 let py_backend =
@@ -452,7 +463,11 @@ impl PyIcechunkBackend {
                     pyo3::types::PyDict::new(py);
                 dict.set_item(
                     "coord_entries",
-                    stats.chunk_entries,
+                    stats.coord_entries,
+                )?;
+                dict.set_item(
+                    "var_entries",
+                    stats.var_entries,
                 )?;
                 dict.set_item(
                     "has_metadata",

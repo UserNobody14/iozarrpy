@@ -17,14 +17,26 @@ class TestZarrBackendCreation:
         backend = rainbear.ZarrBackend.from_url(zarr_url)
         assert backend is not None
 
-    def test_from_url_with_max_cache(self, baseline_datasets: dict[str, str]):
-        """Test creating a backend with cache limit."""
+    def test_from_url_with_options(self, baseline_datasets: dict[str, str]):
+        """Test creating a backend with explicit BackendOptions."""
         zarr_url = baseline_datasets["orography_chunked_10x10"]
         backend = rainbear.ZarrBackend.from_url(
             zarr_url,
-            max_cache_entries=100,
+            options=rainbear.BackendOptions(
+                coord_cache_max_entries=512,
+                var_cache_max_entries=100,
+            ),
         )
         assert backend is not None
+
+    def test_backend_options_defaults_and_repr(self) -> None:
+        """BackendOptions should have sensible defaults and a useful repr."""
+        opts = rainbear.BackendOptions()
+        assert opts.coord_cache_max_entries == 256
+        assert opts.var_cache_max_entries == 30
+        assert "BackendOptions" in repr(opts)
+        assert "coord_cache_max_entries=256" in repr(opts)
+        assert "var_cache_max_entries=30" in repr(opts)
 
     def test_backend_repr(self, baseline_datasets: dict[str, str]):
         """Test backend string representation."""
@@ -46,7 +58,6 @@ class TestZarrBackendSchema:
         assert schema is not None
         # Should have dimensions and data variables
         assert len(schema) > 0
-
 
 
 class TestZarrBackendAsyncScan:
@@ -103,7 +114,6 @@ class TestZarrBackendAsyncScan:
         # Metadata should be cached after first scan
         assert stats1["has_metadata"] == True
         assert stats2["has_metadata"] == True
-
 
 
 class TestZarrBackendCacheManagement:
@@ -214,6 +224,57 @@ class TestZarrBackendConcurrency:
 
         # All should have same length
         assert all(len(df) == len(results[0]) for df in results)
+
+
+class TestCoordCacheIsolation:
+    """Variable-chunk loads must NOT evict coordinate chunks."""
+
+    @pytest.mark.asyncio
+    async def test_var_loads_do_not_evict_coords(
+        self, baseline_datasets: dict[str, str]
+    ):
+        """A tiny var cache + unbounded coord cache should keep coords across
+        many variable chunk reads.
+
+        ``orography_chunked_10x10`` has self-coord dims (``y``, ``x``) plus
+        the CF aux coords ``latitude`` / ``longitude``, with the data variable
+        ``geopotential_height`` chunked at 10x10 over a 20x16 grid (4 chunks).
+        With ``var_cache_max_entries=1`` every fresh variable chunk evicts the
+        previous one, so if coordinates lived in the same cache the coord
+        entries would also drop. They must not.
+        """
+        zarr_url = baseline_datasets["orography_chunked_10x10"]
+        backend = rainbear.ZarrBackend.from_url(
+            zarr_url,
+            options=rainbear.BackendOptions(
+                coord_cache_max_entries=0,  # unbounded
+                var_cache_max_entries=1,
+            ),
+        )
+
+        df = await backend.scan_zarr_async(pl.lit(True))
+        assert isinstance(df, pl.DataFrame)
+        assert len(df) > 0
+
+        stats = await backend.cache_stats()
+        assert "coord_entries" in stats
+        assert "var_entries" in stats
+        coord_entries_after_scan = stats["coord_entries"]
+        assert coord_entries_after_scan > 0, (
+            "expected at least one coordinate chunk to be cached"
+        )
+        # Bounded var cache must respect its limit.
+        assert stats["var_entries"] <= 1
+
+        # A second scan should not lose any coord entries even though many
+        # more var chunks are read and the var cache thrashes.
+        await backend.scan_zarr_async(pl.lit(True))
+        stats2 = await backend.cache_stats()
+        assert stats2["coord_entries"] >= coord_entries_after_scan, (
+            f"coord cache shrank from {coord_entries_after_scan} to "
+            f"{stats2['coord_entries']} after var-only churn"
+        )
+        assert stats2["var_entries"] <= 1
 
 
 if __name__ == "__main__":

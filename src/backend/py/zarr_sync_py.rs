@@ -14,6 +14,7 @@ use snafu::ResultExt;
 
 use crate::IntoIStr;
 use crate::backend::implementation::scan_zarr_with_backend_sync;
+use crate::backend::py::PyBackendOptions;
 use crate::backend::py::debug::extract_grids_sync;
 use crate::errors::PolarsSnafu;
 use crate::py::expr_extract::extract_expr;
@@ -44,12 +45,12 @@ impl PyZarrBackendSync {
     ///
     /// # Arguments
     /// * `url` - URL to the zarr store (e.g., "s3://bucket/path.zarr")
-    /// * `max_cache_entries` - Max cached chunks (coords + variables); `0` = unbounded
+    /// * `options` - Optional [`BackendOptions`] (per-cache capacities, ...)
     #[staticmethod]
-    #[pyo3(signature = (url, max_cache_entries=30))]
+    #[pyo3(signature = (url, options=None))]
     fn from_url(
         url: String,
-        max_cache_entries: u64,
+        options: Option<PyBackendOptions>,
     ) -> PyResult<Self> {
         let backend = ZarrBackendSync::new(
             StoreInput::Url(url),
@@ -57,7 +58,9 @@ impl PyZarrBackendSync {
 
         let backend = to_fully_cached_sync(
             backend,
-            max_cache_entries,
+            PyBackendOptions::resolve(
+                options.as_ref(),
+            ),
         )?;
         Ok(Self {
             inner: Arc::new(backend),
@@ -69,13 +72,13 @@ impl PyZarrBackendSync {
     /// # Arguments
     /// * `store` - ObjectStore instance (from rainbear.store or obstore)
     /// * `prefix` - Optional path prefix within the store
-    /// * `max_cache_entries` - Max cached chunks (coords + variables); `0` = unbounded
+    /// * `options` - Optional [`BackendOptions`] (per-cache capacities, ...)
     #[staticmethod]
-    #[pyo3(signature = (store, prefix=None, max_cache_entries=30))]
+    #[pyo3(signature = (store, prefix=None, options=None))]
     fn from_store(
         store: &Bound<'_, PyAny>,
         prefix: Option<String>,
-        max_cache_entries: u64,
+        options: Option<PyBackendOptions>,
     ) -> PyResult<Self> {
         let store_input =
             StoreInput::from_py(store, prefix)?;
@@ -83,7 +86,9 @@ impl PyZarrBackendSync {
             ZarrBackendSync::new(store_input)?;
         let backend = to_fully_cached_sync(
             backend,
-            max_cache_entries,
+            PyBackendOptions::resolve(
+                options.as_ref(),
+            ),
         )?;
         Ok(Self {
             inner: Arc::new(backend),
@@ -286,7 +291,11 @@ impl PyZarrBackendSync {
                     pyo3::types::PyDict::new(py);
                 dict.set_item(
                     "coord_entries",
-                    stats.chunk_entries,
+                    stats.coord_entries,
+                )?;
+                dict.set_item(
+                    "var_entries",
+                    stats.var_entries,
                 )?;
                 dict.set_item(
                     "has_metadata",

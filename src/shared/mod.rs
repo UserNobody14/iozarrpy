@@ -1,9 +1,11 @@
 mod compile;
+mod options;
 mod stats;
 mod structural;
 mod traits;
 mod zarr;
 
+pub use options::BackendOptions;
 pub(crate) use stats::PlannerStats;
 
 // Re-export commonly used traits

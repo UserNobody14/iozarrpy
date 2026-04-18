@@ -19,6 +19,8 @@ pub(crate) fn init_module(
         m
     )?)?;
 
+    m.add_class::<crate::backend::PyBackendOptions>(
+    )?;
     m.add_class::<crate::backend::PyZarrBackend>(
     )?;
     m.add_class::<crate::backend::PyZarrBackendSync>(

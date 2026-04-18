@@ -27,7 +27,7 @@ use crate::reader::{
     retrieve_chunk_async,
 };
 use crate::shared::{
-    ChunkedDataBackendAsync,
+    BackendOptions, ChunkedDataBackendAsync,
     ChunkedDataCacheAsync, HasAsyncStore,
     HasMetadataBackendAsync,
     HasMetadataBackendCacheAsync,
@@ -189,18 +189,18 @@ pub type FullyCachedIcechunkBackendAsync =
 
 /// Convert an `IcechunkBackendAsync` to a fully cached version.
 ///
-/// `max_entries == 0` uses an unbounded chunk cache (see [`ChunkedDataCacheAsync::new`]).
+/// See [`BackendOptions`] for the per-cache `max_entries` knobs
+/// (a value of `0` makes that sub-cache unbounded).
 pub fn to_fully_cached_icechunk_async(
     backend: IcechunkBackendAsync,
-    max_entries: u64,
+    options: BackendOptions,
 ) -> Result<
     FullyCachedIcechunkBackendAsync,
     BackendError,
 > {
     Ok(HasMetadataBackendCacheAsync::new(
         ChunkedDataCacheAsync::new(
-            backend,
-            max_entries,
+            backend, options,
         ),
     ))
 }

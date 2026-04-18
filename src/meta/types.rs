@@ -173,6 +173,36 @@ impl ZarrMeta {
             .collect()
     }
 
+    /// All coordinate array paths (self-coords and CF aux coords).
+    ///
+    /// Paths are returned in canonical (no leading slash) flat-string form,
+    /// matching `ZarrPath::to_flat_string`. Use [`Self::is_coordinate_path`]
+    /// for individual lookups; this is intended for building a hot-path set.
+    pub fn all_coord_paths(&self) -> Vec<IStr> {
+        let mut paths = Vec::new();
+        self.root.collect_coord_paths_recursive(
+            &ZarrPath::root(),
+            &mut paths,
+        );
+        paths
+            .into_iter()
+            .map(|p| p.to_istr())
+            .collect()
+    }
+
+    /// True if `path` resolves to a coordinate array (not a data variable).
+    ///
+    /// Returns `false` for unknown paths and for paths that resolve to a
+    /// data variable. Accepts paths with or without a leading slash.
+    #[allow(dead_code)]
+    pub fn is_coordinate_path<T: IntoIStr>(
+        &self,
+        path: T,
+    ) -> bool {
+        let zp = ZarrPath::from(path.istr());
+        self.root.is_coord_at(&zp)
+    }
+
     /// All array paths (data vars) using recursive tree traversal.
     pub fn all_array_paths(&self) -> Vec<IStr> {
         self.all_zarr_array_paths()
@@ -454,6 +484,63 @@ impl ZarrNode {
                     &child_prefix,
                     out,
                 );
+        }
+    }
+
+    /// Recursively collect coordinate array paths.
+    ///
+    /// Coordinates are arrays in the node that are not listed as data
+    /// variables (i.e. self-coords like `lat`/`lon`/`time` and CF aux
+    /// coords listed in another array's `coordinates` attribute).
+    pub fn collect_coord_paths_recursive(
+        &self,
+        prefix: &ZarrPath,
+        out: &mut Vec<ZarrPath>,
+    ) {
+        let data_var_set: BTreeSet<&IStr> =
+            self.data_vars.iter().collect();
+        for name in self.arrays.keys() {
+            if !data_var_set.contains(name) {
+                out.push(prefix.push(*name));
+            }
+        }
+        for (child_name, child_node) in
+            &self.children
+        {
+            let child_prefix =
+                prefix.push(*child_name);
+            child_node
+                .collect_coord_paths_recursive(
+                    &child_prefix,
+                    out,
+                );
+        }
+    }
+
+    /// True if `path` resolves to an array under this node that is a
+    /// coordinate (i.e. exists in `arrays` but not in `data_vars`).
+    #[allow(dead_code)]
+    pub fn is_coord_at(
+        &self,
+        path: &ZarrPath,
+    ) -> bool {
+        let comps = path.components();
+        match comps.len() {
+            0 => false,
+            1 => {
+                self.arrays
+                    .contains_key(&comps[0])
+                    && !self
+                        .data_vars
+                        .contains(&comps[0])
+            }
+            _ => self
+                .children
+                .get(&comps[0])
+                .is_some_and(|child| {
+                    child
+                        .is_coord_at(&path.tail())
+                }),
         }
     }
 

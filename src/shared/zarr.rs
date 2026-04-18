@@ -8,6 +8,7 @@ use zarrs::storage::{
 
 /// Backend handler for (non-icechunk) zarr datasets
 ///
+use super::options::BackendOptions;
 use super::traits::{
     ChunkedDataBackendAsync,
     ChunkedDataBackendSync,
@@ -356,30 +357,28 @@ pub type FullyCachedZarrBackendAsync =
 
 pub fn to_fully_cached_sync(
     backend: ZarrBackendSync,
-    max_entries: u64,
+    options: BackendOptions,
 ) -> Result<
     FullyCachedZarrBackendSync,
     BackendError,
 > {
     Ok(HasMetadataBackendCacheSync::new(
         ChunkedDataCacheSync::new(
-            backend,
-            max_entries,
+            backend, options,
         ),
     ))
 }
 
 pub fn to_fully_cached_async(
     backend: ZarrBackendAsync,
-    max_entries: u64,
+    options: BackendOptions,
 ) -> Result<
     FullyCachedZarrBackendAsync,
     BackendError,
 > {
     Ok(HasMetadataBackendCacheAsync::new(
         ChunkedDataCacheAsync::new(
-            backend,
-            max_entries,
+            backend, options,
         ),
     ))
 }
