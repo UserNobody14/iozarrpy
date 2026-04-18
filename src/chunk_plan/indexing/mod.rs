@@ -27,12 +27,13 @@ pub mod resolver_traits;
 
 // Core types re-exports
 pub(crate) use grid_execution::{
-    GridGroupExecutionOpts, OwnedGridGroup,
+    GridGroupExecutionOpts,
     apply_streaming_batch_io_cut,
     streaming_grid_chunk_read_count,
 };
-pub use plan::ChunkSubset;
-pub use plan::GroupedChunkPlan;
+pub use plan::{
+    ChunkSubset, GroupedChunkPlan, OwnedGridGroup,
+};
 pub use selection::DatasetSelection;
 pub(crate) use streaming_batch_plan::{
     ScheduleBuilt, StreamingBatch,

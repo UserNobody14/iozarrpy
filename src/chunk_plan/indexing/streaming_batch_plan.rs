@@ -13,7 +13,7 @@ use std::collections::BTreeSet;
 use crate::IStr;
 use crate::meta::ZarrMeta;
 
-use super::grid_execution::OwnedGridGroup;
+use super::plan::OwnedGridGroup;
 
 /// Max chunk reads coalesced into one driver step before flushing (memory / parallelism).
 pub(crate) const MAX_DRIVER_CHUNKS_COALESCED:

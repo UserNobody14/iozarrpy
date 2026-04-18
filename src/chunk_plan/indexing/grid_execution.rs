@@ -17,42 +17,14 @@
 //! contains only a slice that cannot satisfy the Polars predicate in isolation.
 
 use std::collections::BTreeSet;
-use std::sync::Arc;
 
-use super::plan::GroupedChunkPlan;
+use super::plan::{
+    GroupedChunkPlan, OwnedGridGroup,
+};
 use crate::IStr;
-use crate::chunk_plan::ChunkSubset;
-use crate::chunk_plan::ConsolidatedGridGroup;
 use crate::errors::BackendResult;
 use crate::meta::ZarrMeta;
 use crate::scan::column_policy::group_supplies_array_or_1d_enrichable;
-
-/// Owned version of [`ConsolidatedGridGroup`]: the plan is often dropped while
-/// streaming iteration continues.
-pub(crate) struct OwnedGridGroup {
-    pub sig: Arc<
-        crate::chunk_plan::ChunkGridSignature,
-    >,
-    pub vars: Vec<IStr>,
-    pub chunk_indices: Vec<Vec<u64>>,
-    pub chunk_subsets: Vec<Option<ChunkSubset>>,
-    pub array_shape: Vec<u64>,
-}
-
-impl OwnedGridGroup {
-    #[inline]
-    pub(crate) fn from_consolidated(
-        group: ConsolidatedGridGroup<'_>,
-    ) -> Self {
-        Self {
-            sig: Arc::new(group.sig.clone()),
-            vars: group.vars,
-            chunk_indices: group.chunk_indices,
-            chunk_subsets: group.chunk_subsets,
-            array_shape: group.array_shape,
-        }
-    }
-}
 
 /// Predicate / projection narrowing for **streaming** batch reads only.
 pub(crate) struct StreamingBatchIoCut<'a> {
@@ -78,12 +50,9 @@ impl GroupedChunkPlan {
         meta: &ZarrMeta,
         opts: GridGroupExecutionOpts<'_>,
     ) -> BackendResult<Vec<OwnedGridGroup>> {
-        let mut groups: Vec<OwnedGridGroup> = self
-            .iter_consolidated_chunks()
-            .collect::<Result<Vec<_>, _>>()?
-            .into_iter()
-            .map(OwnedGridGroup::from_consolidated)
-            .collect();
+        let mut groups: Vec<OwnedGridGroup> =
+            self.iter_consolidated_chunks()
+                .collect::<Result<Vec<_>, _>>()?;
 
         if opts.literal_false_clear {
             groups.clear();

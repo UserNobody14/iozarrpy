@@ -118,27 +118,20 @@ fn compute_chunk_subset(
 // =============================================================================
 
 /// A grid group with deduplicated chunk indices, ready for reading.
-///
-/// Produced by [`GroupedChunkPlan::iter_consolidated_chunks`]. Callers that need
-/// owned signatures and execution-time filters should use
-/// `GroupedChunkPlan::owned_grid_groups_for_io` (`grid_execution` module).
-pub struct ConsolidatedGridGroup<'a> {
-    /// The chunk grid signature for this group.
-    pub sig: &'a ChunkGridSignature,
-    /// Variables sharing this chunk grid.
+/// Owned version of the grid group.
+pub struct OwnedGridGroup {
+    pub sig: Arc<
+        crate::chunk_plan::ChunkGridSignature,
+    >,
     pub vars: Vec<IStr>,
-    /// Deduplicated, sorted chunk indices.
     pub chunk_indices: Vec<Vec<u64>>,
-    /// Per-chunk local subset (parallel to `chunk_indices`).
-    /// `None` entries mean "full chunk" -- no subsetting needed.
     pub chunk_subsets: Vec<Option<ChunkSubset>>,
-    /// Array shape from the chunk grid.
     pub array_shape: Vec<u64>,
 }
 
-impl<'a> ConsolidatedGridGroup<'a> {
+impl OwnedGridGroup {
     pub fn new(
-        sig: &'a ChunkGridSignature,
+        sig: Arc<ChunkGridSignature>,
         vars: Vec<IStr>,
         chunk_indices: Vec<Vec<u64>>,
         chunk_subsets: Vec<Option<ChunkSubset>>,
@@ -243,9 +236,7 @@ impl GroupedChunkPlan {
     pub fn iter_consolidated_chunks(
         &self,
     ) -> impl Iterator<
-        Item = BackendResult<
-            ConsolidatedGridGroup<'_>,
-        >,
+        Item = BackendResult<OwnedGridGroup>,
     > + '_ {
         self.by_grid.iter().map(
             move |(sig, subsets)| {
@@ -306,7 +297,13 @@ impl GroupedChunkPlan {
                     })
                     .collect();
 
-                Ok(ConsolidatedGridGroup::new(sig, vars, chunk_indices, chunk_subsets, array_shape))
+                Ok(OwnedGridGroup::new(
+                    sig.clone(),
+                    vars,
+                    chunk_indices,
+                    chunk_subsets,
+                    array_shape,
+                ))
             },
         )
     }
