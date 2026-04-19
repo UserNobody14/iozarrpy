@@ -11,7 +11,6 @@ use std::sync::Arc;
 use polars::prelude::*;
 use pyo3::PyErr;
 use pyo3::prelude::*;
-use rayon::prelude::*;
 use snafu::ensure;
 
 use crate::chunk_plan::GridJoinTree;
@@ -23,9 +22,16 @@ use crate::scan::chunk_to_df_from_grid_with_backend_sync;
 use crate::scan::column_policy::ResolvedColumnPolicy;
 use crate::shared::HasMetadataBackendSync;
 use crate::shared::IStr;
+use crate::shared::MaybeParIter;
 use crate::shared::{
     ChunkedExpressionCompilerSync, FullyCachedZarrBackendSync,
 };
+
+/// Below this many chunk reads per batch the rayon scheduling overhead exceeds
+/// the gain from parallel decode (single-chunk batches in particular regress
+/// noticeably when forced through `par_iter`). Tune from benchmarks if decode
+/// cost per chunk changes substantially.
+const PARALLEL_CHUNK_READS: usize = 2;
 
 use super::iterating_common::{
     DEFAULT_BATCH_SIZE, IteratorState,
@@ -249,8 +255,8 @@ impl ZarrIteratorInner {
             let meta = state.meta.clone();
 
             let chunk_dfs: Vec<(usize, DataFrame)> = reads
-                .par_iter()
-                .map(|r| {
+                .maybe_par_iter(PARALLEL_CHUNK_READS)
+                .map_collect(|r| {
                     let df = chunk_to_df_from_grid_with_backend_sync(
                         backend.as_ref(),
                         r.idx.clone(),
@@ -262,8 +268,7 @@ impl ZarrIteratorInner {
                         &meta,
                     )?;
                     Ok::<_, crate::errors::BackendError>((r.leaf_idx, df))
-                })
-                .collect::<Result<Vec<_>, _>>()?;
+                })?;
 
             let combined =
                 assemble_batch_dataframe(

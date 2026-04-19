@@ -1,7 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use rayon::prelude::*;
 use zarrs::array::{
     Array, ArrayMetadata, ArrayShardedExt, ChunkGrid,
 };
@@ -18,7 +17,7 @@ use crate::meta::time_encoding::extract_var_encoding;
 use crate::meta::types::{
     DimensionAnalysis, ZarrArrayMeta, ZarrMeta,
 };
-use crate::shared::{IStr, IntoIStr};
+use crate::shared::{IStr, IntoIStr, MaybeParIter};
 
 use crate::meta::ZarrNode;
 
@@ -235,28 +234,15 @@ pub(crate) fn load_zarr_meta_inner<
         .collect();
 
     let store_arc = store.clone();
-    let mut processed: Vec<ProcessedArrayMetaJob> =
-        if jobs.len() < PARALLEL_ZARR_META_ARRAYS {
-            jobs.iter()
-                .map(|job| {
-                    process_array_meta_job(
-                        store_arc.clone(),
-                        root_path_str,
-                        job,
-                    )
-                })
-                .collect::<Result<Vec<_>, _>>()?
-        } else {
-            jobs.par_iter()
-                .map(|job| {
-                    process_array_meta_job(
-                        store_arc.clone(),
-                        root_path_str,
-                        job,
-                    )
-                })
-                .collect::<Result<Vec<_>, _>>()?
-        };
+    let mut processed: Vec<ProcessedArrayMetaJob> = jobs
+        .maybe_par_iter(PARALLEL_ZARR_META_ARRAYS)
+        .map_collect(|job| {
+            process_array_meta_job(
+                store_arc.clone(),
+                root_path_str,
+                job,
+            )
+        })?;
 
     processed.sort_by(|a, b| {
         a.parent_zp

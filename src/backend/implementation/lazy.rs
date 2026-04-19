@@ -4,7 +4,6 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use polars::prelude::*;
-use rayon::prelude::*;
 use snafu::ensure;
 
 use crate::backend::implementation::iterating_common::{
@@ -21,10 +20,16 @@ use crate::scan::sync_scan::chunk_to_df_from_grid_with_backend;
 use crate::shared::ChunkedExpressionCompilerSync;
 use crate::shared::FullyCachedZarrBackendSync;
 use crate::shared::IStr;
+use crate::shared::MaybeParIter;
 use crate::shared::{
     HasMetadataBackendSync, diagonal_concat_batches,
     expand_projection_to_flat_paths, restructure_to_structs,
 };
+
+/// Below this many chunk reads per batch the rayon scheduling overhead exceeds
+/// the gain from parallel decode. Mirrors the threshold used by the streaming
+/// iterator path.
+const PARALLEL_CHUNK_READS: usize = 2;
 
 /// Eager sync scan: drives the [`GridJoinTree`] reader to exhaustion and
 /// diagonal-concats the per-batch DataFrames.
@@ -103,8 +108,8 @@ pub fn scan_zarr_with_backend_sync(
                 continue;
             }
             let chunk_dfs: Vec<(usize, DataFrame)> = reads
-                .par_iter()
-                .map(|r| {
+                .maybe_par_iter(PARALLEL_CHUNK_READS)
+                .map_collect(|r| {
                     let df = chunk_to_df_from_grid_with_backend(
                         backend,
                         r.idx.clone(),
@@ -116,8 +121,7 @@ pub fn scan_zarr_with_backend_sync(
                         &meta,
                     )?;
                     Ok::<_, BackendError>((r.leaf_idx, df))
-                })
-                .collect::<Result<Vec<_>, _>>()?;
+                })?;
 
             if let Some(df) =
                 assemble_batch_dataframe(

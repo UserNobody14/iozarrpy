@@ -1,7 +1,6 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use rayon::prelude::*;
 use smallvec::SmallVec;
 use snafu::ResultExt;
 use zarrs::array::{ArraySubset, ChunkGrid};
@@ -13,7 +12,7 @@ use crate::chunk_plan::indexing::selection::ArraySubsetList;
 use crate::errors::BackendError;
 
 use crate::meta::ZarrMeta;
-use crate::shared::{IntoIStr, IStr};
+use crate::shared::{IntoIStr, IStr, MaybeParIter};
 
 /// Create an ArraySubsetList that covers the entire array shape.
 fn all_chunks_subset(
@@ -166,28 +165,13 @@ pub fn selection_to_grouped_chunk_plan_unified_from_meta(
     // through `par_iter`, so fall back to a plain map.
     const PARALLEL_PLAN_VARS: usize = 4;
 
-    let parts: Vec<VarPlanPart> = if vars_to_process
-        .len()
-        < PARALLEL_PLAN_VARS
-    {
-        vars_to_process
-            .iter()
-            .map(|(var, maybe_sel)| {
-                var_plan_part_from_meta(
-                    var, *maybe_sel, meta,
-                )
-            })
-            .collect::<Result<Vec<_>, _>>()?
-    } else {
-        vars_to_process
-            .par_iter()
-            .map(|(var, maybe_sel)| {
-                var_plan_part_from_meta(
-                    var, *maybe_sel, meta,
-                )
-            })
-            .collect::<Result<Vec<_>, _>>()?
-    };
+    let parts: Vec<VarPlanPart> = vars_to_process
+        .maybe_par_iter(PARALLEL_PLAN_VARS)
+        .map_collect(|(var, maybe_sel)| {
+            var_plan_part_from_meta(
+                var, *maybe_sel, meta,
+            )
+        })?;
 
     for (var, sig, chunk_plan, chunk_grid) in parts
     {
