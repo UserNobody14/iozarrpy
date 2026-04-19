@@ -5,7 +5,6 @@
 //! - Lazy selection types and inline resolution
 //! - Chunk plan computation from selections
 
-pub mod grid_execution;
 pub mod plan;
 pub mod selection;
 pub mod selection_base;
@@ -26,13 +25,13 @@ pub mod lazy_materialize;
 pub mod resolver_traits;
 
 // Core types re-exports
-pub(crate) use grid_execution::{
+pub use plan::{
+    ChunkSubset, GroupedChunkPlan, OwnedGridGroup,
+};
+pub(crate) use plan::{
     GridGroupExecutionOpts,
     apply_streaming_batch_io_cut,
     streaming_grid_chunk_read_count,
-};
-pub use plan::{
-    ChunkSubset, GroupedChunkPlan, OwnedGridGroup,
 };
 pub use selection::DatasetSelection;
 pub(crate) use streaming_batch_plan::{
