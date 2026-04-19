@@ -109,7 +109,7 @@ impl ChunkShardShape {
     fn validate_chunk_shape(
         shape: &SmallVec<[u64; 4]>,
     ) -> Result<(), BackendError> {
-        if shape.len() == 0 {
+        if shape.is_empty() {
             return Err(
                 BackendError::InvalidChunkShardShape {
                     msg: "chunk shape must have at least 1 dimension".to_string(),

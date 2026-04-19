@@ -1,5 +1,4 @@
 use std::collections::BTreeMap;
-use std::num::NonZero;
 use std::sync::Arc;
 
 use smallvec::SmallVec;

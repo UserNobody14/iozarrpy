@@ -58,9 +58,7 @@ impl<T: FromIStr> FromManyIstrs<T, IStr>
     fn from_istrs(self) -> Vec<T> {
         self.into_iter()
             .map(|istr| {
-                T::from_istr(
-                    istr.borrow().clone(),
-                )
+                T::from_istr(*istr.borrow())
             })
             .collect()
     }
@@ -78,12 +76,8 @@ impl<'a, T: FromIStr> FromManyIstrs<T, &'a IStr>
     for &'a [IStr]
 {
     fn from_istrs(self) -> Vec<T> {
-        self.into_iter()
-            .map(|istr| {
-                T::from_istr(
-                    istr.borrow().clone(),
-                )
-            })
+        self.iter()
+            .map(|istr| T::from_istr(*istr))
             .collect()
     }
 }
@@ -92,7 +86,7 @@ impl<T: IntoIStr + Clone> IntoManyIstrs<T>
     for &[T]
 {
     fn into_istrs(self) -> Vec<IStr> {
-        self.into_iter()
+        self.iter()
             .map(|t| t.clone().istr())
             .collect()
     }
@@ -105,9 +99,7 @@ impl<T: FromIStr, I: Borrow<IStr>, const N: usize>
     fn from_istrs(self) -> Vec<T> {
         self.into_iter()
             .map(|istr| {
-                T::from_istr(
-                    istr.borrow().clone(),
-                )
+                T::from_istr(*istr.borrow())
             })
             .collect()
     }

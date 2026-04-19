@@ -1,5 +1,4 @@
 use crate::chunk_plan::ChunkGridSignature;
-use crate::chunk_plan::indexing::types::ChunkShardShape;
 use crate::meta::ZarrMeta;
 use crate::shared::{
     ChunkedDataBackendAsync,
@@ -9,8 +8,6 @@ use std::sync::Arc;
 
 use pyo3::prelude::*;
 use pyo3::types::PyAny;
-
-use zarrs::array::Array;
 
 use crate::shared::ChunkedExpressionCompilerAsync;
 use crate::shared::{
