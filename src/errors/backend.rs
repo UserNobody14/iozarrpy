@@ -17,6 +17,14 @@ use crate::{
 #[derive(Debug, Snafu)]
 pub enum BackendError {
     #[snafu(display(
+        "invalid chunk shard shape: {msg}",
+        msg = msg,
+    ))]
+    InvalidChunkShardShape { msg: String,
+    inner: Option<Vec<u64>>,
+    outer: Option<Vec<u64>>,
+     },
+    #[snafu(display(
         "unsupported polars expression: {expr:?} because {msg}",
         expr = expr,
         msg = msg,

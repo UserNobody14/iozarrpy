@@ -1,7 +1,9 @@
 use std::collections::BTreeMap;
+use std::num::NonZero;
 use std::sync::Arc;
 
 use smallvec::SmallVec;
+use snafu::ResultExt;
 use zarrs::array::ArraySubset;
 
 use super::DatasetSelection;
@@ -10,8 +12,8 @@ use super::types::ChunkGridSignature;
 use crate::chunk_plan::indexing::selection::ArraySubsetList;
 use crate::errors::BackendError;
 
-use crate::IntoIStr;
 use crate::meta::ZarrMeta;
+use crate::{FromManyIstrs, IntoIStr};
 
 /// Create an ArraySubsetList that covers the entire array shape.
 fn all_chunks_subset(
@@ -81,18 +83,61 @@ pub fn selection_to_grouped_chunk_plan_unified_from_meta(
             );
         };
 
-        // Get chunk shape from metadata
-        let chunk_shape: SmallVec<[u64; 4]> =
-            var_meta
-                .chunk_shape
-                .iter()
-                .copied()
-                .collect();
+        // All zeroes, with the length of the number of dimensions these chunks operate on
+        let all_zeroes_dimensionality =
+            vec![0u64; var_meta.shape.len()];
+        // Extract outer chunk shape (with error context)
+        let outer_chunk_shape: Option<
+            SmallVec<[u64; 4]>,
+        > = {
+            let raw_shape = var_meta
+                .outer_chunk_grid
+                .chunk_shape(all_zeroes_dimensionality.as_slice())
+                .context(
+                    crate::errors::backend::IncompatibleDimensionalitySnafu {
+                        dims: var_meta.dims.clone().from_istrs(),
+                        shape: var_meta.shape.clone().to_vec(),
+                        paths: vec![var.istr()],
+                    },
+                )?;
+            raw_shape.map(|v| {
+                v.into_iter()
+                    .map(|n| n.get())
+                    .collect()
+            })
+        };
+
+        // Extract inner chunk shape (with error context)
+        let inner_chunk_shape: Option<
+            SmallVec<[u64; 4]>,
+        > = match var_meta
+            .inner_chunk_grid
+            .as_ref()
+        {
+            Some(grid) => {
+                let raw_shape = grid
+                    .chunk_shape(&all_zeroes_dimensionality)
+                    .context(
+                        crate::errors::backend::IncompatibleDimensionalitySnafu {
+                            dims: var_meta.dims.clone().from_istrs(),
+                            shape: var_meta.shape.clone().to_vec(),
+                            paths: vec![var.istr()],
+                        },
+                    )?;
+                raw_shape.map(|v| {
+                    v.into_iter()
+                        .map(|n| n.get())
+                        .collect()
+                })
+            }
+            None => None,
+        };
 
         let sig = ChunkGridSignature::new(
             var_meta.dims.clone(),
-            chunk_shape.clone(),
-        );
+            outer_chunk_shape,
+            inner_chunk_shape,
+        )?;
         let sig_arc = sig_cache
             .entry(sig.clone())
             .or_insert_with(|| Arc::new(sig))
@@ -107,7 +152,12 @@ pub fn selection_to_grouped_chunk_plan_unified_from_meta(
             };
 
         let chunk_grid =
-            var_meta.chunk_grid.clone();
+            match &var_meta.inner_chunk_grid {
+                Some(grid) => grid.clone(),
+                None => var_meta
+                    .outer_chunk_grid
+                    .clone(),
+            };
         grouped_plan.insert(
             var.istr(),
             sig_arc,

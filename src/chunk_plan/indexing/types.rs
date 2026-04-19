@@ -12,6 +12,127 @@ use polars::prelude::{
     AnyValue, Operator, Scalar,
 };
 
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+)]
+pub enum ChunkShardShape {
+    ChunkAndShard {
+        outer_chunk_shape: SmallVec<[u64; 4]>,
+        inner_chunk_shape: SmallVec<[u64; 4]>,
+    },
+    ChunkOnly {
+        chunk_shape: SmallVec<[u64; 4]>,
+    },
+    NoInfo,
+}
+
+impl ChunkShardShape {
+    pub fn new(
+        outer: Option<
+            impl Into<SmallVec<[u64; 4]>>,
+        >,
+        inner: Option<
+            impl Into<SmallVec<[u64; 4]>>,
+        >,
+    ) -> Result<Self, BackendError> {
+        let outer: Option<SmallVec<[u64; 4]>> =
+            outer.map(|o| o.into());
+        let inner: Option<SmallVec<[u64; 4]>> =
+            inner.map(|i| i.into());
+        match (outer, inner) {
+            (
+                Some(outer),
+                Some(inner)
+            ) => {
+                Self::validate_chunk_shard(&outer, &inner)?;
+                Ok(Self::ChunkAndShard {
+                    outer_chunk_shape: outer,
+                    inner_chunk_shape: inner,
+                })
+            }
+            (Some(outer), None) => {
+                Self::validate_chunk_shape(&outer)?;
+                Ok(Self::ChunkOnly {
+                    chunk_shape: outer,
+                })
+            }
+            (None, Some(inner)) => {
+                Err(
+                    BackendError::InvalidChunkShardShape {
+                        msg: "inner chunk shape is required when outer chunk shape is provided".to_string(),
+                        inner: Some(inner.to_vec()),
+                        outer: None,
+                    }
+                )?
+            }
+            (None, None) => Ok(Self::NoInfo),
+        }
+    }
+
+    fn validate_chunk_shard(
+        outer: &SmallVec<[u64; 4]>,
+        inner: &SmallVec<[u64; 4]>,
+    ) -> Result<(), BackendError> {
+        Self::validate_chunk_shape(outer)?;
+        Self::validate_chunk_shape(inner)?;
+        if outer.len() != inner.len() {
+            return Err(
+                BackendError::InvalidChunkShardShape {
+                    msg: "outer and inner chunk shapes must have the same length".to_string(),
+                    inner: Some(inner.to_vec()),
+                    outer: Some(outer.to_vec()),
+                }
+            )?;
+        }
+        for (o, i) in
+            outer.iter().zip(inner.iter())
+        {
+            // Ensure outer is a multiple of inner
+            if o % i != 0 {
+                return Err(
+                    BackendError::InvalidChunkShardShape {
+                        msg: "outer chunk shape must be a multiple of inner chunk shape".to_string(),
+                        inner: Some(inner.to_vec()),
+                        outer: Some(outer.to_vec()),
+                    }
+                )?;
+            }
+        }
+        Ok(())
+    }
+    fn validate_chunk_shape(
+        shape: &SmallVec<[u64; 4]>,
+    ) -> Result<(), BackendError> {
+        if shape.len() == 0 {
+            return Err(
+                BackendError::InvalidChunkShardShape {
+                    msg: "chunk shape must have at least 1 dimension".to_string(),
+                    inner: None,
+                    outer: None,
+                }
+            )?;
+        }
+        for s in shape.iter() {
+            if *s == 0 {
+                return Err(
+                    BackendError::InvalidChunkShardShape {
+                        msg: "chunk shape must not be 0".to_string(),
+                        inner: None,
+                        outer: None,
+                    }
+                )?;
+            }
+        }
+        Ok(())
+    }
+}
+
 /// Chunk grid signature - dimensions + chunk shape for grouping.
 ///
 /// Variables with the same chunk grid signature can share chunk iteration.
@@ -29,20 +150,26 @@ use polars::prelude::{
 pub struct ChunkGridSignature {
     /// Dimension names (ordered)
     dims: SmallVec<[IStr; 4]>,
-    /// Chunk shape per dimension (determines grid layout)
-    chunk_shape: SmallVec<[u64; 4]>,
+    chunk_shard_shape: ChunkShardShape,
 }
 
 impl ChunkGridSignature {
     /// Create a new chunk grid signature from dimension names and chunk shape.
     pub fn new(
         dims: impl Into<SmallVec<[IStr; 4]>>,
-        chunk_shape: impl Into<SmallVec<[u64; 4]>>,
-    ) -> Self {
-        Self {
+        outer: Option<
+            impl Into<SmallVec<[u64; 4]>>,
+        >,
+        inner: Option<
+            impl Into<SmallVec<[u64; 4]>>,
+        >,
+    ) -> Result<Self, BackendError> {
+        let chunk_shard_shape =
+            ChunkShardShape::new(outer, inner)?;
+        Ok(Self {
             dims: dims.into(),
-            chunk_shape: chunk_shape.into(),
-        }
+            chunk_shard_shape,
+        })
     }
 
     /// Create a signature from dims only (with empty chunk shape).
@@ -52,7 +179,8 @@ impl ChunkGridSignature {
     ) -> Self {
         Self {
             dims: dims.into(),
-            chunk_shape: SmallVec::new(),
+            chunk_shard_shape:
+                ChunkShardShape::NoInfo,
         }
     }
 
@@ -61,9 +189,37 @@ impl ChunkGridSignature {
         &self.dims
     }
 
-    /// Get the chunk shape.
-    pub fn chunk_shape(&self) -> &[u64] {
-        &self.chunk_shape
+    /// Get the shape of what we need to retrieve subitems for this grid.
+    /// If the grid has shards, represents a single shard, if the grid does not have shards
+    /// represents a single chunk.
+    pub fn retrieval_shape(&self) -> &[u64] {
+        match &self.chunk_shard_shape {
+            ChunkShardShape::ChunkAndShard {
+                outer_chunk_shape: _,
+                inner_chunk_shape,
+            } => inner_chunk_shape,
+            ChunkShardShape::ChunkOnly {
+                chunk_shape,
+            } => chunk_shape,
+            ChunkShardShape::NoInfo => &[],
+        }
+    }
+
+    pub fn is_sharded(&self) -> bool {
+        matches!(
+            self.chunk_shard_shape,
+            ChunkShardShape::ChunkAndShard { .. }
+        )
+    }
+
+    pub fn outer_chunk_shape(&self) -> &[u64] {
+        match &self.chunk_shard_shape {
+            ChunkShardShape::ChunkAndShard {
+                outer_chunk_shape,
+                inner_chunk_shape: _,
+            } => outer_chunk_shape,
+            _ => &[],
+        }
     }
 }
 
@@ -84,11 +240,35 @@ impl Display for ChunkGridSignature {
     ) -> std::fmt::Result {
         write!(f, "ChunkGridSignature(")?;
         write!(f, "dims: {:?}", self.dims)?;
-        write!(
-            f,
-            "chunk_shape: {:?}",
-            self.chunk_shape
-        )?;
+        match &self.chunk_shard_shape {
+            ChunkShardShape::ChunkAndShard {
+                outer_chunk_shape,
+                inner_chunk_shape,
+            } => {
+                write!(
+                    f,
+                    "outer_chunk_shape: {:?}",
+                    outer_chunk_shape
+                )?;
+                write!(
+                    f,
+                    "inner_chunk_shape (shard): {:?}",
+                    inner_chunk_shape
+                )?;
+            }
+            ChunkShardShape::ChunkOnly {
+                chunk_shape,
+            } => {
+                write!(
+                    f,
+                    "chunk_shape: {:?}",
+                    chunk_shape
+                )?;
+            }
+            ChunkShardShape::NoInfo => {
+                write!(f, "no chunk shape info")?;
+            }
+        }
         write!(f, ")")
     }
 }

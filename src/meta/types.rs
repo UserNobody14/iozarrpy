@@ -692,7 +692,8 @@ pub struct ZarrArrayMeta {
     pub shape: Arc<[u64]>,
     /// Regular chunk shape (edge chunks may be smaller).
     pub chunk_shape: Arc<[u64]>,
-    pub chunk_grid: Arc<ChunkGrid>,
+    pub outer_chunk_grid: Arc<ChunkGrid>,
+    pub inner_chunk_grid: Option<Arc<ChunkGrid>>,
     pub dims: SmallVec<[IStr; 4]>,
     pub polars_dtype: PlDataType,
     pub encoding: Option<VarEncoding>,

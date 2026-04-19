@@ -280,7 +280,7 @@ fn axis_interval(
     axis: usize,
 ) -> (u64, u64) {
     let idx = g.chunk_indices[slot][axis];
-    let cs = g.sig.chunk_shape()[axis];
+    let cs = g.sig.retrieval_shape()[axis];
     let alen = g.array_shape[axis];
     let start = idx * cs;
     let end = (start + cs).min(alen);
@@ -321,7 +321,7 @@ fn chunk_element_count(
     slot: usize,
 ) -> usize {
     let idx = &g.chunk_indices[slot];
-    let cs = g.sig.chunk_shape();
+    let cs = g.sig.retrieval_shape();
     let a = &g.array_shape;
     idx.iter()
         .zip(cs.iter())

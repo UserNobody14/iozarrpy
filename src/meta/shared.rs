@@ -1,7 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use zarrs::array::{Array, ArrayShardedExt};
+use zarrs::array::{
+    Array, ArrayShardedExt, ChunkGrid,
+};
 use zarrs::hierarchy::NodeMetadata;
 
 use crate::errors::BackendResult;
@@ -182,14 +184,24 @@ pub(crate) fn load_zarr_meta_inner<
                     .insert(coord_name.istr());
             }
         }
+        // Figure out if it's sharded or not
+        let is_sharded = array.is_sharded();
+        let outer_chunk_grid: Arc<ChunkGrid> =
+            array.chunk_grid().clone().into();
+        let inner_chunk_grid: Option<
+            Arc<ChunkGrid>,
+        > = if is_sharded {
+            Some(array.subchunk_grid().into())
+        } else {
+            None
+        };
 
         let arr_meta = ZarrArrayMeta {
             path: path_str.istr(),
             shape,
             chunk_shape,
-            chunk_grid: array
-                .subchunk_grid()
-                .into(),
+            outer_chunk_grid,
+            inner_chunk_grid,
             dims,
             polars_dtype,
             encoding,

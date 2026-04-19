@@ -251,7 +251,7 @@ impl GroupedChunkPlan {
                     })?;
                 let array_shape =
                     chunkgrid.array_shape().to_vec();
-                let chunk_shape = sig.chunk_shape();
+                let chunk_shape = sig.retrieval_shape();
 
                 let mut seen: BTreeSet<Vec<u64>> =
                     BTreeSet::new();

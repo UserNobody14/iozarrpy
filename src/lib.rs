@@ -23,6 +23,8 @@ pub mod bench_internals;
 pub(crate) use shared::PlannerStats;
 
 use polars::prelude::*;
+use smallvec::SmallVec;
+use std::borrow::Borrow;
 
 /// Interned string type used throughout the codebase for dimension/variable names.
 pub type IStr = internment::Intern<str>;
@@ -36,11 +38,93 @@ pub trait FromIStr {
     fn from_istr(istr: IStr) -> Self;
 }
 
+// Traits and implementations for automatically mapping vecs of IStrs to vecs of strings and vice versa
+pub trait FromManyIstrs<
+    T: FromIStr,
+    I: Borrow<IStr>,
+> where
+    Self: IntoIterator<Item = I>,
+{
+    fn from_istrs(self) -> Vec<T>;
+}
+
+pub trait IntoManyIstrs<T: IntoIStr> {
+    fn into_istrs(self) -> Vec<IStr>;
+}
+
+impl<T: FromIStr> FromManyIstrs<T, IStr>
+    for Vec<IStr>
+{
+    fn from_istrs(self) -> Vec<T> {
+        self.into_iter()
+            .map(|istr| {
+                T::from_istr(
+                    istr.borrow().clone(),
+                )
+            })
+            .collect()
+    }
+}
+
+impl<T: IntoIStr> IntoManyIstrs<T> for Vec<T> {
+    fn into_istrs(self) -> Vec<IStr> {
+        self.into_iter()
+            .map(|t| t.istr())
+            .collect()
+    }
+}
+
+impl<'a, T: FromIStr> FromManyIstrs<T, &'a IStr>
+    for &'a [IStr]
+{
+    fn from_istrs(self) -> Vec<T> {
+        self.into_iter()
+            .map(|istr| {
+                T::from_istr(
+                    istr.borrow().clone(),
+                )
+            })
+            .collect()
+    }
+}
+
+impl<T: IntoIStr + Clone> IntoManyIstrs<T>
+    for &[T]
+{
+    fn into_istrs(self) -> Vec<IStr> {
+        self.into_iter()
+            .map(|t| t.clone().istr())
+            .collect()
+    }
+}
+
+// Smallvec (arbitrary length)
+impl<T: FromIStr, I: Borrow<IStr>, const N: usize>
+    FromManyIstrs<T, I> for SmallVec<[I; N]>
+{
+    fn from_istrs(self) -> Vec<T> {
+        self.into_iter()
+            .map(|istr| {
+                T::from_istr(
+                    istr.borrow().clone(),
+                )
+            })
+            .collect()
+    }
+}
+
 // impl FromIStr for &str {
 //     fn from_istr(istr: IStr) -> Self {
 //         istr.to_string().as_str()
 //     }
 // }
+
+impl FromIStr for IStr {
+    // No-op
+    fn from_istr(istr: IStr) -> Self {
+        istr
+    }
+}
 
 impl FromIStr for String {
     fn from_istr(istr: IStr) -> Self {

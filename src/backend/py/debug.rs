@@ -1,3 +1,5 @@
+use crate::chunk_plan::ChunkGridSignature;
+use crate::chunk_plan::indexing::types::ChunkShardShape;
 use crate::meta::ZarrMeta;
 use crate::shared::{
     ChunkedDataBackendAsync,
@@ -77,27 +79,18 @@ fn shard_info_from_outer_grid(
     }
 }
 
-/// Build per–inner-chunk debug entries. When sharded, each chunk lists the
-/// containing shard in `shards` (one element for typical Zarr shard layouts).
 fn build_group_chunks(
     inner_chunk_indices: &[Vec<u64>],
     inner_chunk_shape: &[u64],
-    outer_chunk_shape: &Option<Vec<u64>>,
+    sig: &ChunkGridSignature,
     array_shape: &Option<Vec<u64>>,
 ) -> Vec<ChunkInfo> {
     let mut chunks: Vec<ChunkInfo> = Vec::new();
-    let is_sharded =
-        outer_chunk_shape.as_ref().is_some_and(
-            |outer| outer != inner_chunk_shape,
-        );
-
+    let is_sharded = sig.is_sharded();
     for inner_idx in inner_chunk_indices {
         if is_sharded {
-            let Some(outer_shape) =
-                outer_chunk_shape.as_ref()
-            else {
-                continue;
-            };
+            let outer_shape =
+                sig.outer_chunk_shape();
             let outer_idx: Vec<u64> = inner_idx
                 .iter()
                 .zip(inner_chunk_shape.iter())
@@ -200,45 +193,13 @@ pub(crate) async fn extract_grids<
             .collect();
 
         let inner_chunk_shape: Vec<u64> =
-            sig.chunk_shape().to_vec();
-
-        // Sharding detection/metadata
-        let store = backend.async_store().clone();
-        let mut outer_chunk_shape: Option<
-            Vec<u64>,
-        > = None;
-        let mut array_shape: Option<Vec<u64>> =
-            None;
-        if let Some(var) = vars.first() {
-            let path =
-                crate::shared::normalize_path(
-                    var,
-                );
-            if let Ok(arr) = Array::async_open(
-                store.clone(),
-                &path,
-            )
-            .await
-            {
-                let zero = vec![
-                        0u64;
-                        arr.dimensionality()
-                    ];
-                outer_chunk_shape = arr
-                    .chunk_grid()
-                    .chunk_shape_u64(&zero)
-                    .ok()
-                    .flatten();
-                array_shape =
-                    Some(arr.shape().to_vec());
-            }
-        }
+            sig.retrieval_shape().to_vec();
 
         let chunks = build_group_chunks(
             &inner_chunk_indices,
             &inner_chunk_shape,
-            &outer_chunk_shape,
-            &array_shape,
+            &sig,
+            &Some(group.array_shape),
         );
 
         grids.push(GridInfo {
@@ -296,42 +257,13 @@ pub(crate) fn extract_grids_sync<
             .collect();
 
         let inner_chunk_shape: Vec<u64> =
-            sig.chunk_shape().to_vec();
-
-        // Sharding detection/metadata
-        let store = backend.store().clone();
-        let mut outer_chunk_shape: Option<
-            Vec<u64>,
-        > = None;
-        let mut array_shape: Option<Vec<u64>> =
-            None;
-        if let Some(var) = vars.first() {
-            let path =
-                crate::shared::normalize_path(
-                    var,
-                );
-            if let Ok(arr) =
-                Array::open(store.clone(), &path)
-            {
-                let zero = vec![
-                        0u64;
-                        arr.dimensionality()
-                    ];
-                outer_chunk_shape = arr
-                    .chunk_grid()
-                    .chunk_shape_u64(&zero)
-                    .ok()
-                    .flatten();
-                array_shape =
-                    Some(arr.shape().to_vec());
-            }
-        }
+            sig.retrieval_shape().to_vec();
 
         let chunks = build_group_chunks(
             &inner_chunk_indices,
             &inner_chunk_shape,
-            &outer_chunk_shape,
-            &array_shape,
+            &sig,
+            &Some(group.array_shape),
         );
 
         grids.push(GridInfo {
