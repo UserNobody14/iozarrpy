@@ -7,12 +7,10 @@ use pyo3::PyErr;
 use snafu::Backtrace;
 use snafu::prelude::*;
 
-use crate::{
-    IStr,
-    chunk_plan::{
-        ChunkGridSignature, ResolutionError,
-    },
+use crate::chunk_plan::{
+    ChunkGridSignature, ResolutionError,
 };
+use crate::shared::IStr;
 /// Error type for backend operations.
 #[derive(Debug, Snafu)]
 pub enum BackendError {

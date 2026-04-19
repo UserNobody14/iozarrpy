@@ -2,7 +2,7 @@
 //!
 //! Provides error types and the dim-length lookup needed for index-only dimensions.
 
-use crate::IStr;
+use crate::shared::IStr;
 
 /// Error type for resolution operations.
 #[derive(Debug, Clone)]

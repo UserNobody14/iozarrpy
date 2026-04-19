@@ -4,10 +4,10 @@ use std::ops::{Bound, RangeBounds};
 
 use smallvec::SmallVec;
 
-use crate::IStr;
 use crate::errors::{
     BackendError, BackendResult,
 };
+use crate::shared::IStr;
 use polars::prelude::{
     AnyValue, Operator, Scalar,
 };

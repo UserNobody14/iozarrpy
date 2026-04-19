@@ -18,7 +18,7 @@ use crate::chunk_plan::indexing::selection::SetOperations;
 use crate::chunk_plan::indexing::types::{CoordScalar, ValueRangePresent};
 use crate::chunk_plan::prelude::*;
 use crate::errors::BackendError;
-use crate::{IStr, IntoIStr};
+use crate::shared::{IStr, IntoIStr};
 
 type LazyResult = Result<ExprPlan, BackendError>;
 

@@ -12,12 +12,12 @@ use pyo3_async_runtimes::tokio::future_into_py;
 use pyo3_polars::{PyDataFrame, PySchema};
 use snafu::ResultExt;
 
-use crate::IntoIStr;
 use crate::backend::implementation::scan_zarr_with_backend_sync;
 use crate::backend::py::PyBackendOptions;
 use crate::backend::py::debug::extract_grids_sync;
 use crate::errors::PolarsSnafu;
 use crate::py::expr_extract::extract_expr;
+use crate::shared::IntoIStr;
 use crate::shared::{
     EvictableChunkCacheSync,
     HasMetadataBackendSync,
@@ -124,7 +124,7 @@ impl PyZarrBackendSync {
                 lit(true)
             };
         let with_cols_set: Option<
-            BTreeSet<crate::IStr>,
+            BTreeSet<crate::shared::IStr>,
         > = with_columns.map(|cols| {
             cols.into_iter()
                 .map(|c| c.istr())
@@ -184,7 +184,7 @@ impl PyZarrBackendSync {
                 lit(true)
             };
         let with_cols_set: Option<
-            BTreeSet<crate::IStr>,
+            BTreeSet<crate::shared::IStr>,
         > = with_columns.map(|cols| {
             cols.into_iter()
                 .map(|c| c.istr())
@@ -208,16 +208,17 @@ impl PyZarrBackendSync {
         &self,
         variables: Option<Vec<String>>,
     ) -> PyResult<PySchema> {
-        use crate::IntoIStr;
+        use crate::shared::IntoIStr;
 
         let meta = self.inner.metadata()?;
 
-        let vars: Option<Vec<crate::IStr>> =
-            variables.map(|v| {
-                v.into_iter()
-                    .map(|s| s.istr())
-                    .collect()
-            });
+        let vars: Option<
+            Vec<crate::shared::IStr>,
+        > = variables.map(|v| {
+            v.into_iter()
+                .map(|s| s.istr())
+                .collect()
+        });
         let schema =
             meta.tidy_schema(vars.as_deref());
 

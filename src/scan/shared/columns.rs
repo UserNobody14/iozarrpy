@@ -4,9 +4,9 @@ pub use crate::reader::{
 pub(crate) use polars::prelude::*;
 pub(crate) use std::collections::BTreeSet;
 
-use crate::IStr;
 use crate::chunk_plan::ChunkSubset;
 use crate::meta::VarEncoding;
+use crate::shared::IStr;
 
 /// Represents which flat indices in a chunk are in-bounds.
 ///

@@ -1,4 +1,5 @@
 mod compile;
+mod intern;
 mod options;
 mod stats;
 mod structural;
@@ -40,3 +41,5 @@ pub(crate) use structural::{
     expand_projection_to_flat_paths,
     restructure_to_structs,
 };
+
+pub(crate) use intern::*;

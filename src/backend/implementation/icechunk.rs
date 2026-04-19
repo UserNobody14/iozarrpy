@@ -17,7 +17,6 @@ use zarrs::storage::{
 };
 use zarrs_icechunk::AsyncIcechunkStore;
 
-use crate::IStr;
 use crate::errors::BackendError;
 use crate::meta::{
     ZarrMeta, load_zarr_meta_from_store_async,
@@ -26,6 +25,7 @@ use crate::reader::{
     ColumnData, ShardedCacheAsync,
     retrieve_chunk_async,
 };
+use crate::shared::IStr;
 use crate::shared::{
     BackendOptions, ChunkedDataBackendAsync,
     ChunkedDataCacheAsync, HasAsyncStore,

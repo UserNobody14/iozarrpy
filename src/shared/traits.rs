@@ -22,7 +22,7 @@ use crate::errors::BackendError;
 use crate::meta::ZarrMeta;
 use crate::reader::ColumnData;
 use crate::shared::options::BackendOptions;
-use crate::{IStr, IntoIStr};
+use crate::shared::{IStr, IntoIStr};
 
 /// Build a moka sync cache with `max_entries` capacity (`0` = unbounded).
 fn build_sync_cache<K, V>(

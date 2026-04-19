@@ -12,7 +12,7 @@ use crate::chunk_plan::indexing::selection::ArraySubsetList;
 use crate::errors::BackendError;
 
 use crate::meta::ZarrMeta;
-use crate::{FromManyIstrs, IntoIStr};
+use crate::shared::{FromManyIstrs, IntoIStr};
 
 /// Create an ArraySubsetList that covers the entire array shape.
 fn all_chunks_subset(

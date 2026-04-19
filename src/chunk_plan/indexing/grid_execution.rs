@@ -21,10 +21,10 @@ use std::collections::BTreeSet;
 use super::plan::{
     GroupedChunkPlan, OwnedGridGroup,
 };
-use crate::IStr;
 use crate::errors::BackendResult;
 use crate::meta::ZarrMeta;
 use crate::scan::column_policy::group_supplies_array_or_1d_enrichable;
+use crate::shared::IStr;
 
 /// Predicate / projection narrowing for **streaming** batch reads only.
 pub(crate) struct StreamingBatchIoCut<'a> {

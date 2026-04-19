@@ -3,7 +3,6 @@
 //! This module provides sync functions to convert zarr chunks into Polars DataFrames,
 //! using a generic backend interface that can work with any implementation.
 
-use crate::IStr;
 use crate::chunk_plan::{
     ChunkGridSignature, ChunkSubset,
 };
@@ -24,6 +23,7 @@ use crate::scan::shared::{
     compute_in_bounds_mask,
 };
 use crate::shared::ChunkedDataBackendSync;
+use crate::shared::IStr;
 use polars::prelude::*;
 use snafu::ResultExt;
 

@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use snafu::ensure;
 
-use crate::IStr;
+use crate::shared::IStr;
 use crate::backend::implementation::iterating_common::expr_top_literal_bool;
 use crate::chunk_plan::{
     GridGroupExecutionOpts, streaming_grid_chunk_read_count,

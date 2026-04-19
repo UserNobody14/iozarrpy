@@ -11,7 +11,7 @@ use crate::chunk_plan::indexing::types::ValueRangePresent;
 use crate::chunk_plan::prelude::*;
 use crate::errors::BackendError;
 use crate::meta::path::ZarrPath;
-use crate::{IStr, IntoIStr};
+use crate::shared::{IStr, IntoIStr};
 
 type LazyResult = Result<ExprPlan, BackendError>;
 

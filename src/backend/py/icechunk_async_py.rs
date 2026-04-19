@@ -30,7 +30,7 @@ use crate::shared::{
     EvictableChunkCacheAsync,
     HasMetadataBackendAsync,
 };
-use crate::{IStr, IntoIStr};
+use crate::shared::{IStr, IntoIStr};
 use snafu::ResultExt;
 
 /// Extract session bytes from a Python session object.

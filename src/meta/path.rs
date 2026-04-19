@@ -2,7 +2,7 @@ use std::fmt;
 
 use smallvec::SmallVec;
 
-use crate::{IStr, IntoIStr};
+use crate::shared::{IStr, IntoIStr};
 
 /// A structured path through the zarr hierarchy, stored as components
 /// rather than a slash-delimited string.

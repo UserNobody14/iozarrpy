@@ -1,4 +1,4 @@
-use crate::IStr;
+use crate::shared::IStr;
 use std::collections::BTreeMap;
 use tokio::sync::RwLock;
 use zarrs::storage::{
@@ -18,7 +18,6 @@ use super::traits::{
     HasMetadataBackendCacheSync,
     HasMetadataBackendSync, HasStore,
 };
-use crate::IntoIStr;
 use crate::errors::{
     BackendError, BackendResult,
 };
@@ -30,6 +29,7 @@ use crate::reader::{
     ColumnData, retrieve_chunk,
     retrieve_chunk_async,
 };
+use crate::shared::IntoIStr;
 use crate::store::{
     AsyncOpenedStore, OpenedStore, StoreInput,
 };

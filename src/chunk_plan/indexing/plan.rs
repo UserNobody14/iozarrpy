@@ -10,7 +10,7 @@ use crate::chunk_plan::indexing::types::ChunkGridSignature;
 use crate::errors::{
     BackendError, BackendResult,
 };
-use crate::{IStr, IntoIStr};
+use crate::shared::{IStr, IntoIStr};
 use snafu::prelude::*;
 
 // =============================================================================

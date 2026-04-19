@@ -17,7 +17,7 @@ use crate::meta::time_encoding::extract_var_encoding;
 use crate::meta::types::{
     DimensionAnalysis, ZarrArrayMeta, ZarrMeta,
 };
-use crate::{IStr, IntoIStr};
+use crate::shared::{IStr, IntoIStr};
 
 use crate::meta::ZarrNode;
 

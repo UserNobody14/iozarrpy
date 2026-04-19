@@ -10,8 +10,8 @@
 
 use std::collections::BTreeSet;
 
-use crate::IStr;
 use crate::meta::ZarrMeta;
+use crate::shared::IStr;
 
 use super::plan::OwnedGridGroup;
 

@@ -4,7 +4,7 @@ use super::super::compile_ctx::LazyCompileCtx;
 use super::super::expr_plan::{ExprPlan, VarSet};
 use crate::chunk_plan::prelude::*;
 use crate::errors::BackendError;
-use crate::{IStr, IntoIStr};
+use crate::shared::{IStr, IntoIStr};
 use snafu::ResultExt;
 
 type LazyResult = Result<ExprPlan, BackendError>;

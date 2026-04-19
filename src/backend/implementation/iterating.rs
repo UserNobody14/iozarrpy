@@ -7,11 +7,11 @@ use pyo3::prelude::*;
 use rayon::prelude::*;
 use snafu::ensure;
 
-use crate::IStr;
 use crate::errors::MaxChunksToReadExceededSnafu;
 use crate::scan::chunk_to_df_from_grid_with_backend_sync;
 use crate::scan::column_policy::ResolvedColumnPolicy;
 use crate::shared::HasMetadataBackendSync;
+use crate::shared::IStr;
 use crate::shared::{
     ChunkedExpressionCompilerSync,
     FullyCachedZarrBackendSync,

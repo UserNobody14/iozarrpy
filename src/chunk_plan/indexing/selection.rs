@@ -3,7 +3,7 @@ use std::sync::Arc;
 use smallvec::SmallVec;
 use zarrs::array::ArraySubset;
 
-use crate::IStr;
+use crate::shared::IStr;
 
 use super::grouped_selection::{
     ArraySelectionType, GroupedSelection,

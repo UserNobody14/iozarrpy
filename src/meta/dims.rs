@@ -1,7 +1,7 @@
 use smallvec::SmallVec;
 use zarrs::array::Array;
 
-use crate::{IStr, IntoIStr};
+use crate::shared::{IStr, IntoIStr};
 
 pub(crate) fn leaf_name(path: &str) -> IStr {
     path.rsplit('/')

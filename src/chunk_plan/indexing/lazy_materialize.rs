@@ -26,12 +26,12 @@ use super::selection::{
 use super::types::{
     ChunkGridSignature, ValueRangePresent,
 };
-use crate::IStr;
 use crate::chunk_plan::exprs::expr_plan::{
     ExprPlan, VarSet,
 };
 use crate::chunk_plan::indexing::selection::ArraySubsetList;
 use crate::meta::ZarrMeta;
+use crate::shared::IStr;
 
 use super::types::CoordScalar;
 use crate::reader::ColumnData;

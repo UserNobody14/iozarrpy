@@ -9,14 +9,14 @@ use std::sync::Arc;
 use polars::prelude::*;
 use snafu::ResultExt;
 
-use crate::FromIStr;
-use crate::IStr;
 use crate::chunk_plan::ChunkSubset;
 use crate::chunk_plan::OwnedGridGroup;
 use crate::chunk_plan::StreamingBatch;
 use crate::errors::BackendError;
 use crate::errors::PolarsSnafu;
 use crate::meta::ZarrMeta;
+use crate::shared::FromIStr;
+use crate::shared::IStr;
 use crate::shared::{
     combine_chunk_dataframes,
     restructure_to_structs,

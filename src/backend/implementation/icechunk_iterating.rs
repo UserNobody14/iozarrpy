@@ -17,7 +17,6 @@ use snafu::ResultExt;
 use snafu::ensure;
 use tokio::sync::Semaphore;
 
-use crate::IStr;
 use crate::errors::BackendError;
 use crate::errors::CreateTokioRuntimeForSyncStoreSnafu;
 use crate::errors::MaxChunksToReadExceededSnafu;
@@ -25,6 +24,7 @@ use crate::scan::async_scan::chunk_to_df_from_grid_with_backend;
 use crate::scan::column_policy::ResolvedColumnPolicy;
 use crate::shared::ChunkedExpressionCompilerAsync;
 use crate::shared::HasMetadataBackendAsync;
+use crate::shared::IStr;
 
 use super::FullyCachedIcechunkBackendAsync;
 use super::iterating_common::{

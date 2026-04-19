@@ -150,7 +150,7 @@ impl PyZarrBackend {
         &self,
         variables: Option<Vec<String>>,
     ) -> PyResult<PySchema> {
-        use crate::IntoIStr;
+        use crate::shared::IntoIStr;
 
         // Create a runtime to block on async metadata load
         let runtime = tokio::runtime::Runtime::new()
@@ -164,12 +164,13 @@ impl PyZarrBackend {
         let meta = runtime
             .block_on(self.inner.metadata())?;
 
-        let vars: Option<Vec<crate::IStr>> =
-            variables.map(|v| {
-                v.into_iter()
-                    .map(|s| s.istr())
-                    .collect()
-            });
+        let vars: Option<
+            Vec<crate::shared::IStr>,
+        > = variables.map(|v| {
+            v.into_iter()
+                .map(|s| s.istr())
+                .collect()
+        });
         let schema =
             meta.tidy_schema(vars.as_deref());
 

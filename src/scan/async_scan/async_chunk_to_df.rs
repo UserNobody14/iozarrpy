@@ -21,7 +21,6 @@ pub(crate) use crate::reader::{
     compute_strides,
 };
 
-use crate::IStr;
 use crate::chunk_plan::{
     ChunkGridSignature, ChunkSubset,
 };
@@ -34,6 +33,7 @@ use crate::scan::shared::{
     compute_in_bounds_mask,
 };
 use crate::shared::ChunkedDataBackendAsync;
+use crate::shared::IStr;
 
 use std::collections::BTreeMap;
 use std::sync::Arc;

@@ -6,7 +6,6 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use polars::prelude::Expr;
 
-use crate::IStr;
 use crate::chunk_plan::collect_column_refs;
 use crate::errors::{
     BackendError, BackendResult,
@@ -16,6 +15,7 @@ use crate::scan::shared::{
     compute_var_chunk_indices,
     should_include_column,
 };
+use crate::shared::IStr;
 use crate::shared::expand_projection_to_flat_paths;
 
 /// All column names referenced by a Polars predicate expression.

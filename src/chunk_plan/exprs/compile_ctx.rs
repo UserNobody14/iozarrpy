@@ -1,7 +1,7 @@
 //! Compilation context for lazy chunk planning.
 
-use crate::IStr;
 use crate::meta::ZarrMeta;
+use crate::shared::IStr;
 
 /// Compilation context for the lazy compilation path.
 ///

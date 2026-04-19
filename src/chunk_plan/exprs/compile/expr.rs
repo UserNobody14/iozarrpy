@@ -25,7 +25,7 @@ use super::utils::{
 };
 use crate::chunk_plan::prelude::*;
 use crate::errors::BackendError;
-use crate::{IStr, IntoIStr};
+use crate::shared::{IStr, IntoIStr};
 
 type LazyResult = Result<ExprPlan, BackendError>;
 

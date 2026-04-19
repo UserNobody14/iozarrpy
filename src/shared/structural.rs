@@ -2,10 +2,10 @@ use polars::prelude::*;
 use snafu::ResultExt;
 use std::collections::BTreeSet;
 
-use crate::IStr;
 use crate::errors::{BackendResult, PolarsSnafu};
 use crate::meta::path::ZarrPath;
 use crate::meta::{ZarrMeta, ZarrNode};
+use crate::shared::IStr;
 /// Combine chunk DataFrames, handling heterogeneous schemas.
 ///
 /// Strategy:

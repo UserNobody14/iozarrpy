@@ -10,7 +10,7 @@ use smallvec::SmallVec;
 use zarrs::array::ChunkGrid;
 
 use crate::meta::path::ZarrPath;
-use crate::{IStr, IntoIStr};
+use crate::shared::{IStr, IntoIStr};
 
 // =============================================================================
 // Unified Hierarchical Metadata Types

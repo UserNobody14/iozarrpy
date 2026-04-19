@@ -6,7 +6,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use crate::IStr;
+use crate::shared::IStr;
 
 use super::selection::Emptyable;
 use super::types::ChunkGridSignature;
