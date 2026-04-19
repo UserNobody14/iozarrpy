@@ -60,7 +60,7 @@ pub(super) fn compile_struct_field_cmp(
         .components()
         .iter()
         .fold(full_path, |acc, c| acc.push(*c));
-    let array_path = array_zp.to_istr();
+    let array_path = array_zp.istr();
 
     let arr_meta_opt =
         ctx.meta.array_by_path(array_path);

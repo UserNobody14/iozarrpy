@@ -1,10 +1,6 @@
 use crate::shared::IStr;
 use std::collections::BTreeMap;
 use tokio::sync::RwLock;
-use zarrs::storage::{
-    AsyncReadableWritableListableStorage,
-    ReadableWritableListableStorage,
-};
 
 /// Backend handler for (non-icechunk) zarr datasets
 ///
@@ -13,10 +9,10 @@ use super::traits::{
     ChunkedDataBackendAsync,
     ChunkedDataBackendSync,
     ChunkedDataCacheAsync, ChunkedDataCacheSync,
-    HasAsyncStore, HasMetadataBackendAsync,
+    HasMetadataBackendAsync,
     HasMetadataBackendCacheAsync,
     HasMetadataBackendCacheSync,
-    HasMetadataBackendSync, HasStore,
+    HasMetadataBackendSync,
 };
 use crate::errors::{
     BackendError, BackendResult,
@@ -81,13 +77,13 @@ impl ZarrBackendSync {
     }
 }
 
-impl HasStore for ZarrBackendSync {
-    fn store(
-        &self,
-    ) -> &ReadableWritableListableStorage {
-        &self.store.as_ref().store
-    }
-}
+// impl HasStore for ZarrBackendSync {
+//     fn store(
+//         &self,
+//     ) -> &ReadableWritableListableStorage {
+//         &self.store.as_ref().store
+//     }
+// }
 
 impl HasMetadataBackendSync<ZarrMeta>
     for ZarrBackendSync
@@ -196,15 +192,6 @@ pub struct ZarrBackendAsync {
     >,
     /// Cached ZarrMeta (once loaded)
     cached_meta: RwLock<Option<Arc<ZarrMeta>>>,
-}
-
-impl HasAsyncStore for ZarrBackendAsync {
-    fn async_store(
-        &self,
-    ) -> &AsyncReadableWritableListableStorage
-    {
-        &self.store.as_ref().store
-    }
 }
 
 impl ZarrBackendAsync {

@@ -15,7 +15,7 @@ use crate::chunk_plan::StreamingBatch;
 use crate::errors::BackendError;
 use crate::errors::PolarsSnafu;
 use crate::meta::ZarrMeta;
-use crate::shared::FromIStr;
+use crate::shared::FromManyIstrs;
 use crate::shared::IStr;
 use crate::shared::{
     combine_chunk_dataframes,
@@ -174,15 +174,21 @@ fn project_to_polars_output(
     if cols.is_empty() {
         return Ok(df);
     }
-    let names: Vec<PlSmallStr> = cols
-        .iter()
+    let names: Vec<PlSmallStr> =
+        Vec::<PlSmallStr>::from_istrs(
+            cols.iter().cloned(),
+        );
+    // Filter out columns that are not in the DataFrame
+    let filtered_names: Vec<PlSmallStr> = names
+        .into_iter()
         .filter(|c| df.column(c.as_ref()).is_ok())
-        .map(|c| PlSmallStr::from_istr(*c))
         .collect();
-    if names.is_empty() {
+
+    if filtered_names.is_empty() {
         return Ok(df);
     }
-    df.select(&names).context(PolarsSnafu {
+    df.select(&filtered_names)
+        .context(PolarsSnafu {
         message:
             "Error projecting to polars output"
                 .to_string(),

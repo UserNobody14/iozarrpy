@@ -13,7 +13,7 @@ use zarrs::array::ChunkGrid;
 use zarrs::array::chunk_grid::regular::RegularChunkGrid;
 
 use _core::bench_internals::*;
-use _core::{IStr, IntoIStr};
+use _core::{IStr, IntoIStr, IntoManyIstrs};
 
 // =============================================================================
 // Mock backend
@@ -44,10 +44,7 @@ impl MockBackendSync {
                     .map(|i| i as f64 * 0.1)
                     .collect(),
             )),
-            coord_names: coord_names
-                .iter()
-                .map(|s| s.istr())
-                .collect(),
+            coord_names: coord_names.into_istrs(),
         }
     }
 }
@@ -96,7 +93,7 @@ fn make_array_meta(
     dtype: DataType,
 ) -> (IStr, Arc<ZarrArrayMeta>) {
     let dim_sv: SmallVec<[IStr; 4]> =
-        dims.iter().map(|d| d.istr()).collect();
+        dims.into_istrs();
     let cg = make_chunk_grid(shape, chunk_shape);
     let meta = ZarrArrayMeta {
         path: path.istr(),

@@ -12,7 +12,7 @@ use crate::chunk_plan::indexing::selection::ArraySubsetList;
 use crate::errors::BackendError;
 
 use crate::meta::ZarrMeta;
-use crate::shared::{FromManyIstrs, IntoIStr};
+use crate::shared::IntoIStr;
 
 /// Create an ArraySubsetList that covers the entire array shape.
 fn all_chunks_subset(
@@ -94,7 +94,7 @@ pub fn selection_to_grouped_chunk_plan_unified_from_meta(
                 .chunk_shape(all_zeroes_dimensionality.as_slice())
                 .context(
                     crate::errors::backend::IncompatibleDimensionalitySnafu {
-                        dims: var_meta.dims.clone().from_istrs(),
+                        dims: var_meta.dims.clone().to_vec(),
                         shape: var_meta.shape.clone().to_vec(),
                         paths: vec![var.istr()],
                     },
@@ -118,7 +118,7 @@ pub fn selection_to_grouped_chunk_plan_unified_from_meta(
                     .chunk_shape(&all_zeroes_dimensionality)
                     .context(
                         crate::errors::backend::IncompatibleDimensionalitySnafu {
-                            dims: var_meta.dims.clone().from_istrs(),
+                            dims: var_meta.dims.clone().to_vec(),
                             shape: var_meta.shape.clone().to_vec(),
                             paths: vec![var.istr()],
                         },

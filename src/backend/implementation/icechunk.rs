@@ -28,7 +28,7 @@ use crate::reader::{
 use crate::shared::IStr;
 use crate::shared::{
     BackendOptions, ChunkedDataBackendAsync,
-    ChunkedDataCacheAsync, HasAsyncStore,
+    ChunkedDataCacheAsync,
     HasMetadataBackendAsync,
     HasMetadataBackendCacheAsync,
 };
@@ -73,15 +73,6 @@ impl IcechunkBackendAsync {
                 BTreeMap::new(),
             ),
         }
-    }
-}
-
-impl HasAsyncStore for IcechunkBackendAsync {
-    fn async_store(
-        &self,
-    ) -> &AsyncReadableWritableListableStorage
-    {
-        &self.store
     }
 }
 

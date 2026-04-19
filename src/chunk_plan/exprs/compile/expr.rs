@@ -25,7 +25,9 @@ use super::utils::{
 };
 use crate::chunk_plan::prelude::*;
 use crate::errors::BackendError;
-use crate::shared::{IStr, IntoIStr};
+use crate::shared::{
+    IStr, IntoIStr, IntoManyIstrs,
+};
 
 type LazyResult = Result<ExprPlan, BackendError>;
 
@@ -455,10 +457,8 @@ pub fn compile_expr(
         }
 
         Expr::Field(names) => {
-            let vars: Vec<IStr> = names
-                .iter()
-                .map(|n| n.istr())
-                .collect();
+            let vars: Vec<IStr> =
+                names.into_istrs();
             if vars.is_empty() {
                 Ok(ExprPlan::NoConstraint)
             } else {

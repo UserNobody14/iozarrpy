@@ -5,7 +5,7 @@ use std::collections::BTreeSet;
 use crate::errors::{BackendResult, PolarsSnafu};
 use crate::meta::path::ZarrPath;
 use crate::meta::{ZarrMeta, ZarrNode};
-use crate::shared::IStr;
+use crate::shared::{IStr, IntoIStr};
 /// Combine chunk DataFrames, handling heterogeneous schemas.
 ///
 /// Strategy:
@@ -338,7 +338,7 @@ pub fn expand_projection_to_flat_paths(
             meta.root.find_paths_under(&zp);
         if !child_paths.is_empty() {
             for p in child_paths {
-                expanded.insert(p.to_istr());
+                expanded.insert(p.istr());
             }
             continue;
         }

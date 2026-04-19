@@ -2,7 +2,7 @@ use crate::chunk_plan::ChunkGridSignature;
 use crate::meta::ZarrMeta;
 use crate::shared::{
     ChunkedDataBackendAsync,
-    ChunkedExpressionCompilerSync, HasStore,
+    ChunkedExpressionCompilerSync,
 };
 use std::sync::Arc;
 
@@ -11,7 +11,7 @@ use pyo3::types::PyAny;
 
 use crate::shared::ChunkedExpressionCompilerAsync;
 use crate::shared::{
-    ChunkedDataBackendSync, HasAsyncStore,
+    ChunkedDataBackendSync,
     HasMetadataBackendAsync,
     HasMetadataBackendSync,
 };
@@ -147,8 +147,7 @@ fn build_group_chunks(
 // Helper for async grid extraction logic
 pub(crate) async fn extract_grids<
     B: HasMetadataBackendAsync<ZarrMeta>
-        + ChunkedDataBackendAsync
-        + HasAsyncStore,
+        + ChunkedDataBackendAsync,
 >(
     backend: Arc<B>,
     expr: polars::prelude::Expr,
@@ -212,8 +211,7 @@ pub(crate) async fn extract_grids<
 // Helper for sync grid extraction logic
 pub(crate) fn extract_grids_sync<
     B: HasMetadataBackendSync<ZarrMeta>
-        + ChunkedDataBackendSync
-        + HasStore,
+        + ChunkedDataBackendSync,
 >(
     backend: Arc<B>,
     expr: polars::prelude::Expr,

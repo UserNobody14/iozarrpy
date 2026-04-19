@@ -10,7 +10,9 @@ use smallvec::SmallVec;
 use zarrs::array::ChunkGrid;
 
 use crate::meta::path::ZarrPath;
-use crate::shared::{IStr, IntoIStr};
+use crate::shared::{
+    IStr, IntoIStr, IntoManyIstrs,
+};
 
 // =============================================================================
 // Unified Hierarchical Metadata Types
@@ -167,10 +169,7 @@ impl ZarrMeta {
                 &ZarrPath::root(),
                 &mut paths,
             );
-        paths
-            .into_iter()
-            .map(|p| p.to_istr())
-            .collect()
+        paths.into_istrs()
     }
 
     /// All coordinate array paths (self-coords and CF aux coords).
@@ -184,10 +183,7 @@ impl ZarrMeta {
             &ZarrPath::root(),
             &mut paths,
         );
-        paths
-            .into_iter()
-            .map(|p| p.to_istr())
-            .collect()
+        paths.into_istrs()
     }
 
     /// True if `path` resolves to a coordinate array (not a data variable).
@@ -216,10 +212,7 @@ impl ZarrMeta {
             &ZarrPath::root(),
             &mut paths,
         );
-        paths
-            .into_iter()
-            .map(|p| p.to_istr())
-            .collect()
+        paths.into_istrs()
     }
 
     /// Generate a Polars schema for the tidy DataFrame output.

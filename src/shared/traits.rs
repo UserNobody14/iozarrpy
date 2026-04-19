@@ -13,10 +13,6 @@ use std::sync::{Arc, RwLock as StdRwLock};
 
 use ambassador::{Delegate, delegatable_trait};
 use tokio::sync::RwLock;
-use zarrs::storage::{
-    AsyncReadableWritableListableStorage,
-    ReadableWritableListableStorage,
-};
 
 use crate::errors::BackendError;
 use crate::meta::ZarrMeta;
@@ -155,19 +151,6 @@ pub trait HasMetadataBackendAsync<
     ) -> Result<Arc<METADATA>, BackendError>;
 }
 
-#[delegatable_trait]
-pub trait HasStore {
-    fn store(
-        &self,
-    ) -> &ReadableWritableListableStorage;
-}
-
-pub trait HasAsyncStore {
-    fn async_store(
-        &self,
-    ) -> &AsyncReadableWritableListableStorage;
-}
-
 // =============================================================================
 // Cache wrappers with ambassador delegation for sync traits
 // =============================================================================
@@ -177,11 +160,6 @@ pub trait HasAsyncStore {
 #[allow(clippy::duplicated_attributes)]
 // ambassador: separate `#[delegate]` per trait, same target field
 #[delegate(HasMetadataBackendSync<METADATA>, target = "backend", generics = "METADATA", where = "METADATA: Send + Sync, BACKEND: HasMetadataBackendSync<METADATA>")]
-#[delegate(
-    HasStore,
-    target = "backend",
-    where = "BACKEND: HasStore"
-)]
 /// Sync in-memory chunk cache with the same **in-flight coalescing** behavior as
 /// [`ChunkedDataCacheAsync`] (via [`moka::sync::Cache::try_get_with`]).
 ///
@@ -241,11 +219,6 @@ pub struct ChunkedDataCacheAsync<
     ChunkedDataBackendSync,
     target = "backend",
     where = "BACKEND: ChunkedDataBackendSync"
-)]
-#[delegate(
-    HasStore,
-    target = "backend",
-    where = "BACKEND: HasStore"
 )]
 pub struct HasMetadataBackendCacheSync<
     METADATA: Send + Sync,
@@ -611,37 +584,6 @@ impl<
     }
 }
 
-impl<
-    BACKEND: ChunkedDataBackendAsync + HasAsyncStore,
-> HasAsyncStore
-    for ChunkedDataCacheAsync<BACKEND>
-{
-    fn async_store(
-        &self,
-    ) -> &AsyncReadableWritableListableStorage
-    {
-        self.backend.async_store()
-    }
-}
-
-impl<
-    METADATA: Send + Sync,
-    BACKEND: HasMetadataBackendAsync<METADATA>
-        + HasAsyncStore,
-> HasAsyncStore
-    for HasMetadataBackendCacheAsync<
-        METADATA,
-        BACKEND,
-    >
-{
-    fn async_store(
-        &self,
-    ) -> &AsyncReadableWritableListableStorage
-    {
-        self.backend.async_store()
-    }
-}
-
 // =============================================================================
 // Display implementations (ambassador doesn't delegate std traits)
 // =============================================================================
@@ -721,23 +663,6 @@ impl<
 // =============================================================================
 // Blanket impls for Arc<T>
 // =============================================================================
-
-impl<T: HasStore> HasStore for Arc<T> {
-    fn store(
-        &self,
-    ) -> &ReadableWritableListableStorage {
-        (**self).store()
-    }
-}
-
-impl<T: HasAsyncStore> HasAsyncStore for Arc<T> {
-    fn async_store(
-        &self,
-    ) -> &AsyncReadableWritableListableStorage
-    {
-        (**self).async_store()
-    }
-}
 
 impl<T: ChunkedDataBackendSync>
     ChunkedDataBackendSync for Arc<T>

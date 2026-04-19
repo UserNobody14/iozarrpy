@@ -2,7 +2,7 @@ use std::fmt;
 
 use smallvec::SmallVec;
 
-use crate::shared::{IStr, IntoIStr};
+use crate::shared::{FromIStr, IStr, IntoIStr};
 
 /// A structured path through the zarr hierarchy, stored as components
 /// rather than a slash-delimited string.
@@ -107,11 +107,6 @@ impl ZarrPath {
             .collect();
         parts.join("/")
     }
-
-    /// Convert to `IStr` for interop with existing APIs.
-    pub fn to_istr(&self) -> IStr {
-        self.to_flat_string().istr()
-    }
 }
 
 impl fmt::Display for ZarrPath {
@@ -124,6 +119,13 @@ impl fmt::Display for ZarrPath {
         } else {
             write!(f, "{}", self.to_flat_string())
         }
+    }
+}
+
+impl IntoIStr for ZarrPath {
+    /// Convert to `IStr` for interop with existing APIs.
+    fn istr(self) -> IStr {
+        self.to_flat_string().istr()
     }
 }
 
@@ -149,7 +151,7 @@ impl From<&IStr> for ZarrPath {
 
 impl From<ZarrPath> for IStr {
     fn from(p: ZarrPath) -> Self {
-        p.to_istr()
+        p.istr()
     }
 }
 

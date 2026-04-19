@@ -4,7 +4,9 @@ use super::super::compile_ctx::LazyCompileCtx;
 use super::super::expr_plan::{ExprPlan, VarSet};
 use crate::chunk_plan::prelude::*;
 use crate::errors::BackendError;
-use crate::shared::{IStr, IntoIStr};
+use crate::shared::{
+    IStr, IntoIStr, IntoManyIstrs,
+};
 use snafu::ResultExt;
 
 type LazyResult = Result<ExprPlan, BackendError>;
@@ -63,10 +65,8 @@ pub(super) fn compile_selector_lazy(
         }
         Selector::Empty => Ok(ExprPlan::Empty),
         Selector::ByName { names, .. } => {
-            let vars: Vec<IStr> = names
-                .iter()
-                .map(|s| s.istr())
-                .collect();
+            let vars: Vec<IStr> =
+                names.into_istrs();
             Ok(ExprPlan::unconstrained_vars(
                 VarSet::from_vec(vars),
             ))

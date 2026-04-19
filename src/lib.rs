@@ -22,8 +22,6 @@ pub mod bench_internals;
 
 pub(crate) use shared::PlannerStats;
 
-use polars::prelude::*;
-
 #[pymodule]
 fn _core(
     py: Python<'_>,

@@ -15,10 +15,10 @@ pub use traits::{
     ChunkedDataBackendSync,
     ChunkedDataCacheAsync,
     EvictableChunkCacheAsync,
-    EvictableChunkCacheSync, HasAsyncStore,
+    EvictableChunkCacheSync,
     HasMetadataBackendAsync,
     HasMetadataBackendCacheAsync,
-    HasMetadataBackendSync, HasStore,
+    HasMetadataBackendSync,
 };
 
 // Re-export compile traits

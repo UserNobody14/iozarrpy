@@ -1,6 +1,6 @@
 use polars::prelude::PlSmallStr;
 use smallvec::SmallVec;
-use std::borrow::Borrow;
+use std::{borrow::Borrow, sync::Arc};
 
 /// Interned string type used throughout the codebase for dimension/variable names.
 pub type IStr = internment::Intern<str>;
@@ -15,24 +15,22 @@ pub trait FromIStr {
 }
 
 // Traits and implementations for automatically mapping vecs of IStrs to vecs of strings and vice versa
-pub trait FromManyIstrs<
-    T: FromIStr,
-    I: Borrow<IStr>,
-> where
-    Self: IntoIterator<Item = I>,
-{
-    fn from_istrs(self) -> Vec<T>;
+pub trait FromManyIstrs<I: Borrow<IStr>> {
+    fn from_istrs(
+        istrs: impl IntoIterator<Item = I>,
+    ) -> Self;
 }
 
 pub trait IntoManyIstrs<T: IntoIStr> {
     fn into_istrs(self) -> Vec<IStr>;
 }
 
-impl<T: FromIStr> FromManyIstrs<T, IStr>
-    for Vec<IStr>
-{
-    fn from_istrs(self) -> Vec<T> {
-        self.into_iter()
+impl<T: FromIStr> FromManyIstrs<IStr> for Vec<T> {
+    fn from_istrs(
+        istrs: impl IntoIterator<Item = IStr>,
+    ) -> Vec<T> {
+        istrs
+            .into_iter()
             .map(|istr| {
                 T::from_istr(*istr.borrow())
             })
@@ -40,7 +38,10 @@ impl<T: FromIStr> FromManyIstrs<T, IStr>
     }
 }
 
-impl<T: IntoIStr> IntoManyIstrs<T> for Vec<T> {
+impl<T: IntoIStr> IntoManyIstrs<T> for Vec<T>
+where
+    T: IntoIStr,
+{
     fn into_istrs(self) -> Vec<IStr> {
         self.into_iter()
             .map(|t| t.istr())
@@ -48,13 +49,21 @@ impl<T: IntoIStr> IntoManyIstrs<T> for Vec<T> {
     }
 }
 
-impl<'a, T: FromIStr> FromManyIstrs<T, &'a IStr>
-    for &'a [IStr]
+impl<'a, T: FromIStr, const COUNT: usize>
+    FromManyIstrs<&'a IStr> for [T; COUNT]
+where
+    T: FromIStr,
+    'a: 'a,
 {
-    fn from_istrs(self) -> Vec<T> {
-        self.iter()
+    fn from_istrs(
+        istrs: impl IntoIterator<Item = &'a IStr>,
+    ) -> [T; COUNT] {
+        return istrs
+            .into_iter()
             .map(|istr| T::from_istr(*istr))
-            .collect()
+            .collect::<Vec<T>>()
+            .try_into()
+            .unwrap_or_else(|_| panic!("Expected exactly COUNT elements"));
     }
 }
 
@@ -70,17 +79,31 @@ impl<T: IntoIStr + Clone> IntoManyIstrs<T>
 
 // Smallvec (arbitrary length)
 impl<T: FromIStr, I: Borrow<IStr>, const N: usize>
-    FromManyIstrs<T, I> for SmallVec<[I; N]>
+    FromManyIstrs<I> for SmallVec<[T; N]>
 {
-    fn from_istrs(self) -> Vec<T> {
-        self.into_iter()
+    fn from_istrs(
+        istrs: impl IntoIterator<Item = I>,
+    ) -> SmallVec<[T; N]> {
+        return istrs
+            .into_iter()
             .map(|istr| {
                 T::from_istr(*istr.borrow())
             })
-            .collect()
+            .collect::<Vec<T>>()
+            .into();
     }
 }
 
+impl<T: IntoIStr> IntoManyIstrs<T> for &Arc<[T]>
+where
+    T: Clone + IntoIStr,
+{
+    fn into_istrs(self) -> Vec<IStr> {
+        self.iter()
+            .map(|t| t.clone().istr())
+            .collect()
+    }
+}
 // impl FromIStr for &str {
 //     fn from_istr(istr: IStr) -> Self {
 //         istr.to_string().as_str()
@@ -103,6 +126,18 @@ impl FromIStr for String {
 impl FromIStr for PlSmallStr {
     fn from_istr(istr: IStr) -> Self {
         PlSmallStr::from(istr.clone().to_string())
+    }
+}
+
+impl IntoIStr for PlSmallStr {
+    fn istr(self) -> IStr {
+        IStr::from(self.as_str())
+    }
+}
+
+impl IntoIStr for &PlSmallStr {
+    fn istr(self) -> IStr {
+        IStr::from(self.clone().as_str())
     }
 }
 

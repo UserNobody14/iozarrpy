@@ -28,7 +28,7 @@ use crate::errors::PolarsSnafu;
 use crate::py::expr_extract::extract_expr;
 use crate::shared::{
     EvictableChunkCacheAsync,
-    HasMetadataBackendAsync,
+    HasMetadataBackendAsync, IntoManyIstrs,
 };
 use crate::shared::{IStr, IntoIStr};
 use snafu::ResultExt;
@@ -375,12 +375,8 @@ impl PyIcechunkBackend {
         let meta = runtime
             .block_on(self.inner.metadata())?;
 
-        let vars: Option<Vec<IStr>> = variables
-            .map(|v| {
-                v.into_iter()
-                    .map(|s| s.istr())
-                    .collect()
-            });
+        let vars: Option<Vec<IStr>> =
+            variables.map(|v| v.into_istrs());
         let schema =
             meta.tidy_schema(vars.as_deref());
 

@@ -18,7 +18,7 @@ use crate::chunk_plan::indexing::selection::SetOperations;
 use crate::chunk_plan::indexing::types::{CoordScalar, ValueRangePresent};
 use crate::chunk_plan::prelude::*;
 use crate::errors::BackendError;
-use crate::shared::{IStr, IntoIStr};
+use crate::shared::{IntoManyIstrs, IStr, IntoIStr};
 
 type LazyResult = Result<ExprPlan, BackendError>;
 
@@ -134,13 +134,9 @@ pub(super) fn interpolate_selection_nd_lazy(
                 )));
                 }
             },
-            Expr::Field(names) => (
-                names
-                    .iter()
-                    .map(|n| n.istr())
-                    .collect::<Vec<_>>(),
-                None,
-            ),
+            Expr::Field(names) => {
+                (names.into_istrs(), None)
+            }
             _ => {
                 return Err(
                     BackendError::compile_polars(
@@ -363,13 +359,9 @@ pub(super) fn interpolate_selection_geospatial_lazy(
                     )));
                 }
             },
-            Expr::Field(names) => (
-                names
-                    .iter()
-                    .map(|n| n.istr())
-                    .collect::<Vec<_>>(),
-                None,
-            ),
+            Expr::Field(names) => {
+                (names.into_istrs(), None)
+            }
             _ => {
                 return Err(
                     BackendError::compile_polars(
@@ -444,10 +436,8 @@ mod tests {
         shape: &[u64],
         chunk_shape: &[u64],
     ) -> (IStr, Arc<ZarrArrayMeta>) {
-        let dim_sv: SmallVec<[IStr; 4]> = dims
-            .iter()
-            .map(|d| d.istr())
-            .collect();
+        let dim_sv: SmallVec<[IStr; 4]> =
+            dims.into_istrs().into();
         let cg =
             make_chunk_grid(shape, chunk_shape);
         let meta = ZarrArrayMeta {
