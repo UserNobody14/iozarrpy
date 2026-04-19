@@ -1,14 +1,18 @@
-//! Synchronous scan using the backend.
+//! Synchronous eager scan using the unified [`GridJoinTree`]-driven reader.
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use polars::prelude::*;
+use rayon::prelude::*;
+use snafu::ensure;
 
-use crate::shared::IStr;
-use crate::backend::implementation::iterating_common::expr_top_literal_bool;
-use crate::chunk_plan::{
-    GridGroupExecutionOpts, streaming_grid_chunk_read_count,
+use crate::backend::implementation::iterating_common::{
+    build_batches, distinct_chunks_in_batches, expr_top_literal_bool,
+};
+use crate::chunk_plan::GridJoinTree;
+use crate::chunk_plan::indexing::grid_join_reader::{
+    assemble_batch_dataframe, flatten_reads,
 };
 use crate::errors::BackendError;
 use crate::errors::MaxChunksToReadExceededSnafu;
@@ -16,17 +20,14 @@ use crate::scan::column_policy::ResolvedColumnPolicy;
 use crate::scan::sync_scan::chunk_to_df_from_grid_with_backend;
 use crate::shared::ChunkedExpressionCompilerSync;
 use crate::shared::FullyCachedZarrBackendSync;
+use crate::shared::IStr;
 use crate::shared::{
-    HasMetadataBackendSync,
-    combine_chunk_dataframes,
-    expand_projection_to_flat_paths,
-    restructure_to_structs,
+    HasMetadataBackendSync, diagonal_concat_batches,
+    expand_projection_to_flat_paths, restructure_to_structs,
 };
-use snafu::ensure;
 
-/// Internal: scan using the backend.
-///
-/// This uses the backend's cached metadata and chunk reading directly.
+/// Eager sync scan: drives the [`GridJoinTree`] reader to exhaustion and
+/// diagonal-concats the per-batch DataFrames.
 pub fn scan_zarr_with_backend_sync(
     backend: &Arc<FullyCachedZarrBackendSync>,
     expr: polars::prelude::Expr,
@@ -36,7 +37,6 @@ pub fn scan_zarr_with_backend_sync(
     polars::prelude::DataFrame,
     BackendError,
 > {
-    // Get metadata from backend
     let meta = backend.metadata()?;
 
     let chunk_expanded =
@@ -45,22 +45,19 @@ pub fn scan_zarr_with_backend_sync(
                 cols, &meta,
             )
         });
-    let enrich_policy = ResolvedColumnPolicy::new(
-        with_columns.clone().or_else(|| {
-            Some(
-                meta.tidy_column_order(None)
-                    .into_iter()
-                    .collect(),
-            )
-        }),
-        &expr,
-        &meta,
-    );
-    let _enrich_wc = enrich_policy
-        .physical_superset()
-        .cloned();
+    let _enrich_policy =
+        ResolvedColumnPolicy::new(
+            with_columns.clone().or_else(|| {
+                Some(
+                    meta.tidy_column_order(None)
+                        .into_iter()
+                        .collect(),
+                )
+            }),
+            &expr,
+            &meta,
+        );
 
-    // Compile grouped chunk plan
     let (grouped_plan, _stats) =
         backend.compile_expression_sync(&expr)?;
 
@@ -68,24 +65,24 @@ pub fn scan_zarr_with_backend_sync(
         expr_top_literal_bool(&expr)
             == Some(false);
 
-    let grid_groups = grouped_plan
+    let groups = grouped_plan
         .owned_grid_groups_for_io(
+            emit_empty_schema_once,
             &meta,
-            GridGroupExecutionOpts {
-                literal_false_clear:
-                    emit_empty_schema_once,
-                drop_redundant_1d_coords:
-                    !emit_empty_schema_once,
-                streaming_batch_io_cut: None,
-            },
         )?;
 
-    // Check max_chunks_to_read limit before doing any I/O
+    let tree = GridJoinTree::build(groups);
+    // For eager scans we materialize the entire dataset at once, so let each
+    // batch be as large as it needs to be. The planner still applies geometry
+    // bounds (chunk count cap), but we don't need to cap by row budget.
+    let batches = match &tree {
+        Some(t) => build_batches(t, usize::MAX),
+        None => Vec::new(),
+    };
+
     if let Some(max_chunks) = max_chunks_to_read {
         let total_chunks =
-            streaming_grid_chunk_read_count(
-                &grid_groups,
-            );
+            distinct_chunks_in_batches(&batches);
         ensure!(
             total_chunks <= max_chunks,
             MaxChunksToReadExceededSnafu {
@@ -95,40 +92,44 @@ pub fn scan_zarr_with_backend_sync(
         );
     }
 
-    // Read chunks using consolidated (deduplicated) iteration
-    let mut dfs = Vec::new();
-    for group in &grid_groups {
-        let vars: Vec<IStr> = group.vars.clone();
+    let mut batch_dfs: Vec<DataFrame> =
+        Vec::new();
+    if let Some(tree_ref) = tree.as_ref() {
+        let leaves = tree_ref.leaves();
+        for plan in &batches {
+            let reads =
+                flatten_reads(plan, &leaves);
+            if reads.is_empty() {
+                continue;
+            }
+            let chunk_dfs: Vec<(usize, DataFrame)> = reads
+                .par_iter()
+                .map(|r| {
+                    let df = chunk_to_df_from_grid_with_backend(
+                        backend,
+                        r.idx.clone(),
+                        r.sig.as_ref(),
+                        &r.array_shape,
+                        &r.vars,
+                        chunk_expanded.as_ref(),
+                        r.subset.as_ref(),
+                        &meta,
+                    )?;
+                    Ok::<_, BackendError>((r.leaf_idx, df))
+                })
+                .collect::<Result<Vec<_>, _>>()?;
 
-        for (idx, subset) in group
-            .chunk_indices
-            .iter()
-            .cloned()
-            .zip(
-                group
-                    .chunk_subsets
-                    .iter()
-                    .cloned(),
-            )
-        {
-            let df =
-                chunk_to_df_from_grid_with_backend(
-                    backend,
-                    idx,
-                    group.sig.as_ref(),
-                    &group.array_shape,
-                    &vars,
-                    chunk_expanded.as_ref(),
-                    subset.as_ref(),
-                    &meta,
-                )?;
-            dfs.push(df);
+            if let Some(df) =
+                assemble_batch_dataframe(
+                    plan, chunk_dfs,
+                )?
+            {
+                batch_dfs.push(df);
+            }
         }
     }
 
-    // Combine all chunk DataFrames
-    // For heterogeneous grids, we need to join on coordinate columns
-    let result = if dfs.is_empty() {
+    let result = if batch_dfs.is_empty() {
         let keys: Vec<IStr> = grouped_plan
             .var_to_grid()
             .keys()
@@ -139,20 +140,10 @@ pub fn scan_zarr_with_backend_sync(
                 keys.as_slice(),
             )),
         )
-    } else if dfs.len() == 1 {
-        dfs.into_iter().next().unwrap()
     } else {
-        combine_chunk_dataframes(dfs, &meta)?
+        diagonal_concat_batches(batch_dfs)?
     };
 
-    // let result = enrich_df_missing_requested_vars(
-    //     backend,
-    //     result,
-    //     &meta,
-    //     enrich_wc.as_ref(),
-    // )?;
-
-    // For hierarchical data, convert flat path columns to struct columns
     if meta.is_hierarchical() {
         Ok(restructure_to_structs(
             &result, &meta,

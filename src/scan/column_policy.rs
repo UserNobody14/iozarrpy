@@ -125,10 +125,9 @@ pub(crate) fn expand_io_source_physical(
     Some(expanded)
 }
 
-/// Policy built from Polars pushdown + predicate: predicate refs and the expanded
-/// physical column set used for streaming reads and enrichment.
+/// Policy built from Polars pushdown + predicate: the expanded physical column
+/// set used for streaming reads and enrichment.
 pub(crate) struct ResolvedColumnPolicy {
-    predicate_refs: BTreeSet<IStr>,
     physical_superset: Option<BTreeSet<IStr>>,
 }
 
@@ -150,16 +149,7 @@ impl ResolvedColumnPolicy {
                 &predicate_refs,
                 meta,
             );
-        Self {
-            predicate_refs,
-            physical_superset,
-        }
-    }
-
-    pub(crate) fn predicate_refs(
-        &self,
-    ) -> &BTreeSet<IStr> {
-        &self.predicate_refs
+        Self { physical_superset }
     }
 
     pub(crate) fn physical_superset(

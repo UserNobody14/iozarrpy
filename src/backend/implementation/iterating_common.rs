@@ -1,7 +1,7 @@
 //! Shared types and utilities for zarr iterators (sync and async).
 //!
-//! Both `ZarrIterator` and `IcechunkIterator` use the same chunk-planning and
-//! batch-postprocessing logic; this module centralizes the common pieces.
+//! Both `ZarrIterator` and `IcechunkIterator` are thin wrappers around the
+//! tree-driven [`crate::chunk_plan::indexing::grid_join_reader::BatchPlanner`].
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -9,22 +9,13 @@ use std::sync::Arc;
 use polars::prelude::*;
 use snafu::ResultExt;
 
-use crate::chunk_plan::ChunkSubset;
-use crate::chunk_plan::OwnedGridGroup;
-use crate::chunk_plan::StreamingBatch;
-use crate::errors::BackendError;
-use crate::errors::PolarsSnafu;
+use crate::chunk_plan::indexing::grid_join_reader::{BatchPlan, BatchPlanner};
+use crate::chunk_plan::GridJoinTree;
+use crate::errors::{BackendError, PolarsSnafu};
 use crate::meta::ZarrMeta;
 use crate::shared::FromManyIstrs;
 use crate::shared::IStr;
-use crate::shared::{
-    combine_chunk_dataframes,
-    restructure_to_structs,
-};
-
-/// Maximum chunks to read per batch iteration (avoids unbounded memory growth).
-pub(crate) const CHUNKS_PER_BATCH_LIMIT: usize =
-    100;
+use crate::shared::restructure_to_structs;
 
 /// Default batch size in rows when not specified.
 pub(crate) const DEFAULT_BATCH_SIZE: usize =
@@ -48,27 +39,15 @@ pub(crate) fn expr_top_literal_bool(
     }
 }
 
-/// Legacy sequential batching (non-join-closed) state.
-pub(crate) struct LegacyBatchState {
-    pub current_group_idx: usize,
-    pub current_chunk_idx: usize,
-    pub current_batch: Vec<DataFrame>,
-    pub current_batch_rows: usize,
-}
-
-/// Join-closed plan vs sequential streaming.
-pub(crate) enum StreamingSchedule {
-    Legacy(LegacyBatchState),
-    JoinClosed {
-        batches: Vec<StreamingBatch>,
-        cursor: usize,
-    },
-}
-
 /// Iterator state shared by both sync and async zarr iterators.
 pub(crate) struct IteratorState {
-    pub grid_groups: Vec<OwnedGridGroup>,
-    pub schedule: StreamingSchedule,
+    /// The join tree owns its leaves; planners and `flatten_reads` borrow from
+    /// `tree.leaves()`.
+    pub tree: Option<GridJoinTree>,
+    /// Pre-computed batch plans (cheap in-memory metadata describing reads).
+    pub batches: Vec<BatchPlan>,
+    /// Cursor into `batches`.
+    pub cursor: usize,
 
     pub total_rows_yielded: usize,
     pub num_rows_limit: Option<usize>,
@@ -86,13 +65,22 @@ pub(crate) struct IteratorState {
     pub emit_empty_schema_once: bool,
 }
 
+/// Pre-compute every [`BatchPlan`] for `tree` at the configured `batch_size`.
+pub(crate) fn build_batches(
+    tree: &GridJoinTree,
+    batch_size: usize,
+) -> Vec<BatchPlan> {
+    let mut planner = BatchPlanner::new(tree);
+    let mut out = Vec::new();
+    while let Some(plan) =
+        planner.next_batch(batch_size)
+    {
+        out.push(plan);
+    }
+    out
+}
+
 /// Final column projection for streaming batches.
-///
-/// When Polars passes a narrowed list, keep that order and append **1D non-dim**
-/// extras from the read superset (e.g. CF lat/lon omitted from IO callback).
-/// Index dimensions themselves stay in the DataFrame through filter, then are
-/// dropped here when not listed. When the callback passes `None`, use full
-/// [`ZarrMeta::tidy_column_order`] plus any extra expanded paths.
 pub(crate) fn output_columns_for_streaming_batch(
     meta: &ZarrMeta,
     polars_requested: Option<&BTreeSet<IStr>>,
@@ -164,7 +152,7 @@ pub(crate) fn output_columns_for_streaming_batch(
 }
 
 /// Keep only columns Polars asked for; order matches `output_columns`.
-fn project_to_polars_output(
+pub(crate) fn project_to_polars_output(
     df: DataFrame,
     output_columns: Option<&[IStr]>,
 ) -> Result<DataFrame, BackendError> {
@@ -178,7 +166,6 @@ fn project_to_polars_output(
         Vec::<PlSmallStr>::from_istrs(
             cols.iter().cloned(),
         );
-    // Filter out columns that are not in the DataFrame
     let filtered_names: Vec<PlSmallStr> = names
         .into_iter()
         .filter(|c| df.column(c.as_ref()).is_ok())
@@ -195,75 +182,13 @@ fn project_to_polars_output(
     })
 }
 
-/// Collect the next batch of chunk indices to read from the current group.
-///
-/// Advances `current_chunk_idx` and returns up to `CHUNKS_PER_BATCH_LIMIT` chunks,
-/// or until `current_batch_rows` would exceed `batch_size`, or the group is exhausted.
-///
-/// Returns `(chunks_to_read, num_chunks_advanced)`.
-#[inline]
-pub(crate) fn collect_chunks_for_batch(
-    group: &OwnedGridGroup,
-    current_chunk_idx: &mut usize,
-    current_batch_rows: usize,
-    batch_size: usize,
-) -> Vec<(Vec<u64>, Option<ChunkSubset>)> {
-    let mut chunks_to_read = Vec::new();
-    while *current_chunk_idx
-        < group.chunk_indices.len()
-        && current_batch_rows < batch_size
-    {
-        let ci = *current_chunk_idx;
-        chunks_to_read.push((
-            group.chunk_indices[ci].clone(),
-            group.chunk_subsets[ci].clone(),
-        ));
-        *current_chunk_idx += 1;
-
-        if chunks_to_read.len()
-            >= CHUNKS_PER_BATCH_LIMIT
-        {
-            break;
-        }
-    }
-    chunks_to_read
-}
-
-pub(crate) fn merge_batch_dataframes(
-    batch_dfs: Vec<DataFrame>,
-    meta: &ZarrMeta,
-) -> Result<DataFrame, BackendError> {
-    if batch_dfs.is_empty() {
-        let keys: Vec<IStr> =
-            meta.all_array_paths();
-        Ok(DataFrame::empty_with_schema(
-            &meta.tidy_schema(Some(
-                keys.as_slice(),
-            )),
-        ))
-    } else if batch_dfs.len() == 1 {
-        Ok(batch_dfs.into_iter().next().unwrap())
-    } else {
-        combine_chunk_dataframes(batch_dfs, meta)
-    }
-}
-
-/// Combine chunk DataFrames, apply predicate filter, row limit, and restructure.
-///
-/// Shared post-processing for both sync and async iterators.
-pub(crate) fn combine_and_postprocess_batch(
-    batch_dfs: Vec<DataFrame>,
+/// Apply predicate filter, row limit, and restructuring to a freshly assembled
+/// batch DataFrame.
+pub(crate) fn postprocess_batch(
+    df: DataFrame,
     state: &mut IteratorState,
-    // enrich: E,
 ) -> Result<DataFrame, BackendError> {
-    let combined = merge_batch_dataframes(
-        batch_dfs,
-        &state.meta,
-    )?;
-
-    // let combined = enrich(combined)?;
-
-    let result = combined
+    let result = df
         .lazy()
         .filter(state.predicate.clone())
         .collect()
@@ -329,4 +254,23 @@ pub(crate) fn empty_streaming_schema_batch(
         df,
         state.output_columns.as_deref(),
     )
+}
+
+/// Convenience: count distinct chunks across pre-built batches.
+pub(crate) fn distinct_chunks_in_batches(
+    batches: &[BatchPlan],
+) -> usize {
+    let mut seen: BTreeSet<(usize, usize)> =
+        BTreeSet::new();
+    for b in batches {
+        for slab in &b.batch.slabs {
+            for &slot in &slab.chunk_slots {
+                seen.insert((
+                    slab.leaf_idx,
+                    slot,
+                ));
+            }
+        }
+    }
+    seen.len()
 }

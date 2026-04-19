@@ -6,157 +6,28 @@ use crate::errors::{BackendResult, PolarsSnafu};
 use crate::meta::path::ZarrPath;
 use crate::meta::{ZarrMeta, ZarrNode};
 use crate::shared::{IStr, IntoIStr};
-/// Combine chunk DataFrames, handling heterogeneous schemas.
+
+/// Diagonal-concatenate batch DataFrames produced by the
+/// [`crate::chunk_plan::indexing::grid_join_reader`].
 ///
-/// Strategy:
-/// 1. Group DataFrames by their column schema (signature)
-/// 2. Within each group, use vstack (same schema)
-/// 3. Across groups, join on shared coordinate columns
-///
-/// **Join keys** are the intersection of [`ZarrMeta::dim_analysis`] dimension
-/// names that appear as columns in every schema group. For example, a 3D chunk
-/// grid (`foo`, `bar`, `a`) merged with a 1D grid on (`a`) joins on shared dims
-/// such as `a` so auxiliary variables indexed only along `a` align with the
-/// primary field’s rows.
-pub fn combine_chunk_dataframes(
-    mut dfs: Vec<DataFrame>,
-    meta: &ZarrMeta,
+/// Each batch is already join-closed (joins inside `Join` nodes happen during
+/// batch assembly), so combining batches just needs `concat_df_diagonal` to
+/// align mismatched schemas with `null` fills.
+pub fn diagonal_concat_batches(
+    dfs: Vec<DataFrame>,
 ) -> BackendResult<DataFrame> {
-    use std::collections::BTreeMap;
-
-    // Get dimension column names
-    let dim_cols: BTreeSet<&str> = meta
-        .dim_analysis
-        .all_dims
-        .iter()
-        .map(|d| d.as_ref())
-        .collect();
-
-    // Group DataFrames by schema signature
-    // (sorted list of column names)
-    let mut schema_groups: BTreeMap<
-        Vec<PlSmallStr>,
-        Vec<DataFrame>,
-    > = BTreeMap::new();
-
-    for df in dfs.drain(..) {
-        let mut cols: Vec<PlSmallStr> =
-            df.get_column_names_owned();
-        cols.sort();
-        schema_groups
-            .entry(cols)
-            .or_default()
-            .push(df);
+    if dfs.is_empty() {
+        return Ok(DataFrame::empty());
     }
-
-    // Combine within each group (vstack)
-    // Need to ensure consistent column order before vstacking
-    let mut vstacked: Vec<DataFrame> =
-        Vec::with_capacity(schema_groups.len());
-    for (_sig, group) in schema_groups {
-        let mut iter = group.into_iter();
-        let first = iter.next().unwrap();
-
-        // Get the column order from the first DataFrame
-        let col_order: Vec<PlSmallStr> =
-            first.get_column_names_owned();
-
-        let mut acc = first;
-        for df in iter {
-            // Reorder columns to match the first DataFrame
-            let reordered = df
-                .select(col_order.as_slice())
-                .context(PolarsSnafu {
-                    message:
-                        "Error reordering columns"
-                            .to_string(),
-                })?;
-            acc.vstack_mut(&reordered)
-                .context(PolarsSnafu {
-                message:
-                    "Error vstacking DataFrames"
-                        .to_string(),
-            })?;
-        }
-        vstacked.push(acc);
-    }
-
-    if vstacked.len() == 1 {
-        return Ok(vstacked
+    if dfs.len() == 1 {
+        return Ok(dfs
             .into_iter()
             .next()
             .unwrap());
     }
-
-    // Multiple schema groups - join on coordinate columns
-    // Find shared coordinate columns across all vstacked DFs
-    let shared_coords: Vec<PlSmallStr> = {
-        let first_cols: BTreeSet<PlSmallStr> =
-            vstacked[0]
-                .get_column_names_owned()
-                .into_iter()
-                .filter(|c| {
-                    dim_cols.contains(c.as_str())
-                })
-                .collect();
-
-        vstacked
-            .iter()
-            .skip(1)
-            .fold(first_cols, |acc, df| {
-                let df_dims: BTreeSet<
-                    PlSmallStr,
-                > = df
-                    .get_column_names_owned()
-                    .into_iter()
-                    .filter(|c| {
-                        dim_cols
-                            .contains(c.as_str())
-                    })
-                    .collect();
-                acc.intersection(&df_dims)
-                    .cloned()
-                    .collect()
-            })
-            .into_iter()
-            .collect()
-    };
-
-    if shared_coords.is_empty() {
-        // No shared coordinates - fall back to diagonal concat
-        return polars::functions::concat_df_diagonal(
-            &vstacked,
-        ).context(
-            PolarsSnafu {
-                message: "Error concatenating DataFrames (no shared coordinates)"
-                    .to_string(),
-            }
-        );
-    }
-
-    // Join on shared coordinates
-    // Start with the first DF and successively join others
-    let mut result = vstacked.remove(0);
-    for df in vstacked {
-        result = result
-            .join(
-                &df,
-                shared_coords.as_slice(),
-                shared_coords.as_slice(),
-                JoinArgs::new(JoinType::Full)
-                    .with_coalesce(
-                    JoinCoalesce::CoalesceColumns,
-                ),
-                None,
-            )
-            .context(PolarsSnafu {
-                message:
-                    "Error joining DataFrames"
-                        .to_string(),
-            })?;
-    }
-
-    Ok(result)
+    polars::functions::concat_df_diagonal(&dfs).context(PolarsSnafu {
+        message: "Error diagonal-concatenating batch DataFrames".to_string(),
+    })
 }
 
 /// Convert flat path columns (e.g., "model_a/temperature") to nested struct columns.

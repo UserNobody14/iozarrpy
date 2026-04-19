@@ -1,8 +1,8 @@
 //! Streaming iterator for Icechunk-backed zarr datasets.
 //!
-//! Provides a sync iterator that yields DataFrames in batches by blocking on
-//! async chunk reads. Uses tokio concurrency within each batch for efficient
-//! I/O when scanning large time-chunked datasets.
+//! Sync iterator that blocks on async chunk reads. Uses the unified
+//! [`crate::chunk_plan::indexing::grid_join_reader`] for batching and joining,
+//! and tokio concurrency within each batch for I/O parallelism.
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -17,6 +17,10 @@ use snafu::ResultExt;
 use snafu::ensure;
 use tokio::sync::Semaphore;
 
+use crate::chunk_plan::GridJoinTree;
+use crate::chunk_plan::indexing::grid_join_reader::{
+    assemble_batch_dataframe, flatten_reads,
+};
 use crate::errors::BackendError;
 use crate::errors::CreateTokioRuntimeForSyncStoreSnafu;
 use crate::errors::MaxChunksToReadExceededSnafu;
@@ -29,28 +33,15 @@ use crate::shared::IStr;
 use super::FullyCachedIcechunkBackendAsync;
 use super::iterating_common::{
     DEFAULT_BATCH_SIZE, IteratorState,
-    LegacyBatchState, StreamingSchedule,
-    collect_chunks_for_batch,
-    combine_and_postprocess_batch,
+    build_batches, distinct_chunks_in_batches,
     empty_streaming_schema_batch,
     expr_top_literal_bool,
     output_columns_for_streaming_batch,
-};
-use crate::chunk_plan::{
-    GridGroupExecutionOpts, ScheduleBuilt,
-    apply_streaming_batch_io_cut,
-    build_streaming_schedule,
-    distinct_chunk_slots_in_batches,
-    streaming_grid_chunk_read_count,
+    postprocess_batch,
 };
 
 const DEFAULT_MAX_CONCURRENCY: usize = 32;
 
-/// Streaming iterator for Icechunk-backed zarr that yields DataFrames in batches.
-///
-/// Blocks on async I/O internally, using tokio concurrency for chunk reads
-/// within each batch. Enables memory-efficient streaming when scanning
-/// time-chunked data (e.g., a single point across a year).
 #[pyclass]
 pub struct IcechunkIterator {
     backend: Arc<FullyCachedIcechunkBackendAsync>,
@@ -80,12 +71,10 @@ impl IcechunkIterator {
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
-            .context(
-                CreateTokioRuntimeForSyncStoreSnafu {
-                    store: "icechunk_iterating".to_string(),
-                    prefix: "".to_string(),
-                },
-            )?;
+            .context(CreateTokioRuntimeForSyncStoreSnafu {
+                store: "icechunk_iterating".to_string(),
+                prefix: "".to_string(),
+            })?;
 
         Ok(Self {
             backend,
@@ -116,110 +105,57 @@ impl IcechunkIterator {
             self.max_chunks_to_read;
         let batch_size = self.batch_size;
 
-        let (
-            grid_groups,
-            meta,
-            expanded_with_columns,
-            emit_empty_schema_once,
-            schedule,
-        ) = self.runtime.block_on(async {
-            let meta = backend.metadata().await?;
-            let effective_with_columns = with_columns.clone().or_else(|| {
-                Some(meta.tidy_column_order(None).into_iter().collect())
-            });
+        let (tree, batches, meta, expanded_with_columns, emit_empty_schema_once) =
+            self.runtime.block_on(async {
+                let meta = backend.metadata().await?;
+                let effective_with_columns = with_columns.clone().or_else(|| {
+                    Some(meta.tidy_column_order(None).into_iter().collect())
+                });
 
-            let policy = ResolvedColumnPolicy::new(
-                effective_with_columns.clone(),
-                &expr,
-                &meta,
-            );
-            let expanded_with_columns =
-                policy.physical_superset().cloned();
+                let policy = ResolvedColumnPolicy::new(
+                    effective_with_columns.clone(),
+                    &expr,
+                    &meta,
+                );
+                let expanded_with_columns = policy.physical_superset().cloned();
 
-            let (grouped_plan, _stats) = backend.compile_expression_async(&expr).await?;
+                let (grouped_plan, _stats) =
+                    backend.compile_expression_async(&expr).await?;
 
-            let emit_empty_schema_once =
-                expr_top_literal_bool(&expr) == Some(false);
+                let literal_false =
+                    expr_top_literal_bool(&expr) == Some(false);
 
-            let groups_uncut = grouped_plan.owned_grid_groups_for_io(
-                meta.as_ref(),
-                GridGroupExecutionOpts {
-                    literal_false_clear: emit_empty_schema_once,
-                    drop_redundant_1d_coords: !emit_empty_schema_once,
-                    streaming_batch_io_cut: None,
-                },
-            )?;
+                let groups = grouped_plan
+                    .owned_grid_groups_for_io(literal_false, meta.as_ref())?;
 
-            let grid_groups = if emit_empty_schema_once {
-                groups_uncut
-            } else {
-                apply_streaming_batch_io_cut(
-                    groups_uncut,
-                    policy.predicate_refs(),
-                    with_columns.as_ref(),
-                    meta.as_ref(),
-                )
-            };
+                let tree = GridJoinTree::build(groups);
+                let batches = match &tree {
+                    Some(t) => build_batches(t, batch_size),
+                    None => Vec::new(),
+                };
+                // Emit one empty-schema batch when we have nothing to read so
+                // Polars can still resolve downstream projection / filter expressions.
+                let emit_empty_schema_once = literal_false || batches.is_empty();
 
-            let built = build_streaming_schedule(
-                &grid_groups,
-                meta.as_ref(),
-                batch_size,
-            );
-
-            let schedule = match built {
-                ScheduleBuilt::JoinClosed { batches } => {
-                    if let Some(max_chunks) = max_chunks_to_read {
-                        let total_chunks =
-                            distinct_chunk_slots_in_batches(
-                                &batches,
-                            );
-                        ensure!(
-                            total_chunks <= max_chunks,
-                            MaxChunksToReadExceededSnafu {
-                                total_chunks,
-                                max_chunks,
-                            }
-                        );
-                    }
-                    StreamingSchedule::JoinClosed {
-                        batches,
-                        cursor: 0,
-                    }
+                if let Some(max_chunks) = max_chunks_to_read {
+                    let total_chunks = distinct_chunks_in_batches(&batches);
+                    ensure!(
+                        total_chunks <= max_chunks,
+                        MaxChunksToReadExceededSnafu {
+                            total_chunks,
+                            max_chunks,
+                        }
+                    );
                 }
-                ScheduleBuilt::Legacy => {
-                    if let Some(max_chunks) = max_chunks_to_read {
-                        let total_chunks =
-                            streaming_grid_chunk_read_count(
-                                &grid_groups,
-                            );
-                        ensure!(
-                            total_chunks <= max_chunks,
-                            MaxChunksToReadExceededSnafu {
-                                total_chunks,
-                                max_chunks,
-                            }
-                        );
-                    }
-                    StreamingSchedule::Legacy(
-                        LegacyBatchState {
-                            current_group_idx: 0,
-                            current_chunk_idx: 0,
-                            current_batch: Vec::new(),
-                            current_batch_rows: 0,
-                        },
-                    )
-                }
-            };
 
-            Ok::<_, BackendError>((
-                grid_groups,
-                meta,
-                expanded_with_columns,
-                emit_empty_schema_once,
-                schedule,
-            ))
-        })?;
+                Ok::<_, BackendError>((
+                    tree,
+                    batches,
+                    meta,
+                    expanded_with_columns,
+                    emit_empty_schema_once,
+                ))
+            })?;
 
         let output_columns =
             output_columns_for_streaming_batch(
@@ -229,8 +165,9 @@ impl IcechunkIterator {
             );
 
         self.state = Some(IteratorState {
-            grid_groups,
-            schedule,
+            tree,
+            batches,
+            cursor: 0,
             total_rows_yielded: 0,
             num_rows_limit: self.num_rows,
             meta,
@@ -246,10 +183,11 @@ impl IcechunkIterator {
     fn next_batch(
         &mut self,
     ) -> Result<Option<DataFrame>, PyErr> {
-        let state = self
-            .state
-            .as_mut()
-            .ok_or_else(|| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>("Iterator not initialized"))?;
+        let state = self.state.as_mut().ok_or_else(|| {
+            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                "Iterator not initialized",
+            )
+        })?;
 
         if let Some(limit) = state.num_rows_limit
             && state.total_rows_yielded >= limit
@@ -261,216 +199,95 @@ impl IcechunkIterator {
             state.emit_empty_schema_once = false;
             return empty_streaming_schema_batch(state)
                 .map_err(|e| {
-                    PyErr::new::<
-                        pyo3::exceptions::PyRuntimeError,
-                        _,
-                    >(format!("{e:?}"))
+                    PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
+                        "{e:?}"
+                    ))
                 })
                 .map(Some);
         }
 
-        match &mut state.schedule {
-            StreamingSchedule::JoinClosed {
-                batches,
-                cursor,
-            } => {
-                if *cursor >= batches.len() {
-                    return Ok(None);
-                }
-                let mut reads = batches[*cursor]
-                    .reads
-                    .clone();
-                *cursor += 1;
-                reads.sort_by_key(|r| {
-                    (r.group_idx, r.chunk_slot)
+        loop {
+            if state.cursor >= state.batches.len()
+            {
+                return Ok(None);
+            }
+            let plan = state.batches
+                [state.cursor]
+                .clone();
+            state.cursor += 1;
+
+            let leaves = state
+                .tree
+                .as_ref()
+                .expect("tree present when batches non-empty")
+                .leaves();
+            let reads =
+                flatten_reads(&plan, &leaves);
+            if reads.is_empty() {
+                continue;
+            }
+
+            let backend = self.backend.clone();
+            let expanded_with_columns = state
+                .expanded_with_columns
+                .clone();
+            let max_concurrency =
+                self.max_concurrency;
+            let meta = state.meta.clone();
+
+            let chunk_dfs: Result<Vec<(usize, DataFrame)>, PyErr> =
+                self.runtime.block_on(async {
+                    let semaphore = Arc::new(Semaphore::new(max_concurrency));
+                    let mut futs = FuturesUnordered::new();
+
+                    for r in reads {
+                        let sem = semaphore.clone();
+                        let backend = backend.clone();
+                        let expanded = expanded_with_columns.clone();
+                        let meta = meta.clone();
+                        let leaf_idx = r.leaf_idx;
+                        let sig = r.sig.clone();
+                        let array_shape = r.array_shape.clone();
+                        let vars = r.vars.clone();
+                        let idx = r.idx.clone();
+                        let subset = r.subset.clone();
+
+                        futs.push(async move {
+                            let _permit =
+                                sem.acquire().await.expect("semaphore closed");
+                            let df = chunk_to_df_from_grid_with_backend(
+                                backend.as_ref(),
+                                idx,
+                                sig.as_ref(),
+                                &array_shape,
+                                &vars,
+                                expanded.as_ref(),
+                                subset.as_ref(),
+                                &meta,
+                            )
+                            .await?;
+                            Ok::<_, BackendError>((leaf_idx, df))
+                        });
+                    }
+
+                    let mut dfs = Vec::new();
+                    while let Some(r) = futs.next().await {
+                        dfs.push(r?);
+                    }
+                    Ok(dfs)
                 });
 
-                let backend =
-                    self.backend.clone();
-                let expanded_with_columns = state
-                    .expanded_with_columns
-                    .clone();
-                let max_concurrency =
-                    self.max_concurrency;
-                let meta = state.meta.clone();
-
-                let chunk_dfs: Result<Vec<DataFrame>, PyErr> =
-                    self.runtime.block_on(async {
-                        let semaphore =
-                            Arc::new(Semaphore::new(
-                                max_concurrency,
-                            ));
-                        let mut futs =
-                            FuturesUnordered::new();
-
-                        for r in reads {
-                            let g = &state.grid_groups
-                                [r.group_idx];
-                            let idx = g.chunk_indices
-                                [r.chunk_slot]
-                                .clone();
-                            let subset = g.chunk_subsets
-                                [r.chunk_slot]
-                                .clone();
-                            let vars: Vec<IStr> =
-                                g.vars.clone();
-                            let sig = g.sig.clone();
-                            let array_shape =
-                                g.array_shape.clone();
-                            let sem = semaphore.clone();
-                            let backend =
-                                backend.clone();
-                            let expanded = expanded_with_columns.clone();
-                            let meta = meta.clone();
-
-                            futs.push(async move {
-                                let _permit = sem
-                                    .acquire()
-                                    .await
-                                    .expect("semaphore closed");
-                                chunk_to_df_from_grid_with_backend(
-                                    backend.as_ref(),
-                                    idx,
-                                    sig.as_ref(),
-                                    &array_shape,
-                                    &vars,
-                                    expanded.as_ref(),
-                                    subset.as_ref(),
-                                    &meta,
-                                )
-                                .await
-                            });
-                        }
-
-                        let mut dfs = Vec::new();
-                        while let Some(r) =
-                            futs.next().await
-                        {
-                            dfs.push(r?);
-                        }
-                        Ok(dfs)
-                    });
-
-                let result =
-                    combine_and_postprocess_batch(
-                        chunk_dfs?, state,
-                    )?;
-                Ok(Some(result))
-            }
-            StreamingSchedule::Legacy(leg) => {
-                while leg.current_group_idx
-                    < state.grid_groups.len()
-                {
-                    let group = &state
-                        .grid_groups
-                        [leg.current_group_idx];
-
-                    let chunks_to_read =
-                        collect_chunks_for_batch(
-                            group,
-                            &mut leg.current_chunk_idx,
-                            leg.current_batch_rows,
-                            self.batch_size,
-                        );
-
-                    if !chunks_to_read.is_empty()
-                    {
-                        let vars =
-                            group.vars.clone();
-                        let backend =
-                            self.backend.clone();
-                        let sig =
-                            group.sig.clone();
-                        let array_shape = group
-                            .array_shape
-                            .clone();
-                        let expanded_with_columns = state
-                            .expanded_with_columns
-                            .clone();
-                        let max_concurrency =
-                            self.max_concurrency;
-                        let meta =
-                            state.meta.clone();
-
-                        let chunk_dfs: Result<Vec<DataFrame>, PyErr> = self.runtime.block_on(async {
-                            let semaphore = Arc::new(Semaphore::new(max_concurrency));
-                            let mut futs = FuturesUnordered::new();
-
-                            for (idx, subset) in chunks_to_read {
-                                let sem = semaphore.clone();
-                                let backend = backend.clone();
-                                let sig = sig.clone();
-                                let array_shape = array_shape.clone();
-                                let vars = vars.clone();
-                                let expanded = expanded_with_columns.clone();
-                                let meta = meta.clone();
-
-                                futs.push(async move {
-                                    let _permit = sem.acquire().await.expect("semaphore closed");
-                                    chunk_to_df_from_grid_with_backend(
-                                        backend.as_ref(),
-                                        idx,
-                                        &sig,
-                                        &array_shape,
-                                        &vars,
-                                        expanded.as_ref(),
-                                        subset.as_ref(),
-                                        &meta,
-                                    )
-                                    .await
-                                });
-                            }
-
-                            let mut dfs = Vec::new();
-                            while let Some(r) = futs.next().await {
-                                dfs.push(r?);
-                            }
-                            Ok(dfs)
-                        });
-
-                        for df in chunk_dfs? {
-                            leg.current_batch_rows +=
-                                df.height();
-                            leg.current_batch
-                                .push(df);
-                        }
-                    }
-
-                    if leg.current_chunk_idx
-                        >= group
-                            .chunk_indices
-                            .len()
-                    {
-                        leg.current_group_idx +=
-                            1;
-                        leg.current_chunk_idx = 0;
-                    }
-
-                    if leg.current_batch_rows
-                        >= self.batch_size
-                    {
-                        break;
-                    }
-                }
-
-                if !leg.current_batch.is_empty() {
-                    let batch_dfs =
-                        std::mem::take(
-                            &mut leg
-                                .current_batch,
-                        );
-                    leg.current_batch_rows = 0;
-
-                    let result =
-                        combine_and_postprocess_batch(
-                            batch_dfs,
-                            state,
-                        )?;
-                    Ok(Some(result))
-                } else {
-                    Ok(None)
-                }
-            }
+            let combined =
+                assemble_batch_dataframe(
+                    &plan, chunk_dfs?,
+                )?;
+            let Some(combined) = combined else {
+                continue;
+            };
+            let result = postprocess_batch(
+                combined, state,
+            )?;
+            return Ok(Some(result));
         }
     }
 }

@@ -37,7 +37,7 @@ pub(crate) use zarr::{
 
 // Re-export structural traits
 pub(crate) use structural::{
-    combine_chunk_dataframes,
+    diagonal_concat_batches,
     expand_projection_to_flat_paths,
     restructure_to_structs,
 };
