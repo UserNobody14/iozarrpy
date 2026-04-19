@@ -216,6 +216,60 @@ fn bench_mask(c: &mut Criterion) {
         })
     });
 
+    // Interior chunk constrained by a small chunk_subset — exercises the
+    // cartesian-product fast path that replaces the legacy
+    // O(chunk_len * ndim) row scan.
+    let small_subset = ChunkSubset::from_ranges(vec![
+        0u64..3,
+        2u64..5,
+        4u64..7,
+    ]);
+    group.bench_function("interior_subset", |b| {
+        b.iter(|| {
+            compute_in_bounds_mask(
+                black_box(chunk_len),
+                black_box(&chunk_shape),
+                black_box(&interior_origin),
+                black_box(&array_shape),
+                black_box(&strides),
+                black_box(Some(&small_subset)),
+            )
+        })
+    });
+
+    // Larger 4D chunk that resembles the multivar grid (1, 3, 200, 200) with
+    // a small spatial subset — this is the actual workload that motivated
+    // the optimisation.
+    let big_chunk_shape = [1u64, 3, 200, 200];
+    let big_array_shape = [3u64, 10, 400, 400];
+    let big_strides =
+        compute_strides(&big_chunk_shape);
+    let big_chunk_len: usize =
+        big_chunk_shape.iter().product::<u64>()
+            as usize;
+    let big_origin = [0u64, 0, 0, 0];
+    let big_subset = ChunkSubset::from_ranges(vec![
+        0u64..1,
+        0u64..3,
+        50u64..61,
+        100u64..111,
+    ]);
+    group.bench_function(
+        "interior_big_4d_subset",
+        |b| {
+            b.iter(|| {
+                compute_in_bounds_mask(
+                    black_box(big_chunk_len),
+                    black_box(&big_chunk_shape),
+                    black_box(&big_origin),
+                    black_box(&big_array_shape),
+                    black_box(&big_strides),
+                    black_box(Some(&big_subset)),
+                )
+            })
+        },
+    );
+
     group.finish();
 }
 

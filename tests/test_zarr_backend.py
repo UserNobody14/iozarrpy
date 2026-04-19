@@ -33,10 +33,10 @@ class TestZarrBackendCreation:
         """BackendOptions should have sensible defaults and a useful repr."""
         opts = rainbear.BackendOptions()
         assert opts.coord_cache_max_entries == 256
-        assert opts.var_cache_max_entries == 30
+        assert opts.var_cache_max_entries == 4096
         assert "BackendOptions" in repr(opts)
         assert "coord_cache_max_entries=256" in repr(opts)
-        assert "var_cache_max_entries=30" in repr(opts)
+        assert "var_cache_max_entries=4096" in repr(opts)
 
     def test_backend_repr(self, baseline_datasets: dict[str, str]):
         """Test backend string representation."""

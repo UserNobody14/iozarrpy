@@ -27,6 +27,18 @@ pub struct ChunkSubset {
 }
 
 impl ChunkSubset {
+    /// Construct a [`ChunkSubset`] from explicit per-dim chunk-local ranges.
+    ///
+    /// Used by tests and benches that need to materialize a subset without
+    /// going through [`compute_chunk_subset`].
+    pub fn from_ranges(
+        ranges: Vec<Range<u64>>,
+    ) -> Self {
+        Self {
+            ranges: ranges.into_iter().collect(),
+        }
+    }
+
     fn is_full_chunk(
         &self,
         chunk_shape: &[u64],

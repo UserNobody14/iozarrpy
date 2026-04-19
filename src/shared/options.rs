@@ -22,7 +22,11 @@ impl Default for BackendOptions {
     fn default() -> Self {
         Self {
             coord_cache_max_entries: 256,
-            var_cache_max_entries: 30,
+            // Sized so multivar workloads (10-50+ vars × multiple chunks
+            // per query) don't thrash on hot scans. The previous default
+            // of 30 caused chunks to be re-decoded on every repeat call
+            // even for modest variable counts.
+            var_cache_max_entries: 4096,
         }
     }
 }

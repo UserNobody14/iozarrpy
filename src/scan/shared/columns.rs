@@ -3,6 +3,9 @@ pub use crate::reader::{
 };
 pub(crate) use polars::prelude::*;
 pub(crate) use std::collections::BTreeSet;
+use std::ops::Range;
+
+use smallvec::SmallVec;
 
 use crate::chunk_plan::ChunkSubset;
 use crate::meta::VarEncoding;
@@ -269,9 +272,15 @@ pub fn build_coord_column(
 /// Compute the in-bounds mask for edge chunk handling,
 /// optionally constrained by a chunk-local subset.
 ///
-/// For interior chunks with no subset, returns `KeepMask::All`
-/// in O(ndim) without iterating over elements.
-/// Edge chunks or subsetted chunks pay O(chunk_len × ndim).
+/// Both edge clipping (per-dim `array_shape[d] - origin[d]`) and the
+/// chunk-local subset reduce to a contiguous per-dim range of valid
+/// `local` indices. We collapse them into one per-dim range and enumerate
+/// the cartesian product in C-order (rightmost dim varies fastest, so
+/// emitted flat indices are monotonically increasing).
+///
+/// Cost is `O(num_kept × ndim)` (only additions / comparisons), versus
+/// the previous `O(chunk_len × ndim)` with a division per element. For
+/// dense interior chunks we still short-circuit to `KeepMask::All`.
 pub fn compute_in_bounds_mask(
     chunk_len: usize,
     chunk_shape: &[u64],
@@ -280,43 +289,98 @@ pub fn compute_in_bounds_mask(
     strides: &[u64],
     chunk_subset: Option<&ChunkSubset>,
 ) -> KeepMask {
-    // O(ndim) check: is every dimension fully in-bounds?
-    let is_interior = chunk_shape
-        .iter()
-        .zip(origin.iter())
-        .zip(array_shape.iter())
-        .all(|((cs, o), a)| o + cs <= *a);
+    let ndim = chunk_shape.len();
 
-    if is_interior && chunk_subset.is_none() {
+    // Compute per-dim effective ranges (intersection of edge clip and subset).
+    // Tracks whether any clipping/subsetting was applied; if not, we can return
+    // `KeepMask::All(chunk_len)` without enumerating.
+    let mut ranges: SmallVec<[Range<u64>; 4]> =
+        SmallVec::with_capacity(ndim);
+    let mut total: u64 = 1;
+    let mut full = true;
+    for d in 0..ndim {
+        let edge_end = chunk_shape[d].min(
+            array_shape[d].saturating_sub(origin[d]),
+        );
+        let (start, end) =
+            if let Some(sub) = chunk_subset {
+                let s = sub.ranges[d].start;
+                let e = sub.ranges[d].end.min(edge_end);
+                (s, e)
+            } else {
+                (0u64, edge_end)
+            };
+        if start >= end {
+            return KeepMask::Sparse(Vec::new());
+        }
+        if start != 0 || end != chunk_shape[d] {
+            full = false;
+        }
+        total = total
+            .saturating_mul(end - start);
+        ranges.push(start..end);
+    }
+
+    if full {
         return KeepMask::All(chunk_len);
     }
 
+    let total_usize = total as usize;
     let mut keep: Vec<usize> =
-        Vec::with_capacity(chunk_len);
-    for row in 0..chunk_len {
-        let mut ok = true;
-        for d in 0..chunk_shape.len() {
-            let local = (row as u64 / strides[d])
-                % chunk_shape[d];
-            if !is_interior {
-                let global = origin[d] + local;
-                if global >= array_shape[d] {
-                    ok = false;
-                    break;
-                }
+        Vec::with_capacity(total_usize);
+
+    // Cartesian-product enumeration in C-order. We maintain the
+    // running flat index (sum of `local[d] * strides[d]`) so the
+    // inner emit loop on the fastest-varying dim is just an
+    // addition by `strides[ndim-1]`.
+    let mut local: SmallVec<[u64; 4]> = ranges
+        .iter()
+        .map(|r| r.start)
+        .collect();
+    let mut row: u64 = local
+        .iter()
+        .zip(strides.iter())
+        .map(|(l, s)| l * s)
+        .sum();
+
+    let last_d = ndim - 1;
+    let last_stride = strides[last_d];
+    let last_start = ranges[last_d].start;
+    let last_end = ranges[last_d].end;
+
+    'outer: loop {
+        // Emit every row along the fastest-varying axis without
+        // touching the per-dim cursor: stride is constant.
+        let mut r = row;
+        for _ in last_start..last_end {
+            keep.push(r as usize);
+            r += last_stride;
+        }
+
+        if last_d == 0 {
+            break;
+        }
+
+        // Carry-style increment of the slower-varying dims.
+        let mut d = last_d;
+        loop {
+            if d == 0 {
+                break 'outer;
             }
-            if let Some(sub) = chunk_subset
-                && (local < sub.ranges[d].start
-                    || local >= sub.ranges[d].end)
-            {
-                ok = false;
+            d -= 1;
+            row += strides[d];
+            local[d] += 1;
+            if local[d] < ranges[d].end {
                 break;
             }
-        }
-        if ok {
-            keep.push(row);
+            // Roll this dim back to its start; subtract the
+            // contribution we just added so `row` stays consistent.
+            let span = local[d] - ranges[d].start;
+            row -= span * strides[d];
+            local[d] = ranges[d].start;
         }
     }
+
     KeepMask::Sparse(keep)
 }
 
@@ -479,4 +543,211 @@ pub fn build_var_column(
         name.as_ref(),
         encoding,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use smallvec::smallvec;
+
+    fn legacy_mask(
+        chunk_len: usize,
+        chunk_shape: &[u64],
+        origin: &[u64],
+        array_shape: &[u64],
+        strides: &[u64],
+        chunk_subset: Option<&ChunkSubset>,
+    ) -> Vec<usize> {
+        let is_interior = chunk_shape
+            .iter()
+            .zip(origin.iter())
+            .zip(array_shape.iter())
+            .all(|((cs, o), a)| o + cs <= *a);
+
+        if is_interior && chunk_subset.is_none() {
+            return (0..chunk_len).collect();
+        }
+
+        let mut keep: Vec<usize> = Vec::new();
+        for row in 0..chunk_len {
+            let mut ok = true;
+            for d in 0..chunk_shape.len() {
+                let local = (row as u64
+                    / strides[d])
+                    % chunk_shape[d];
+                if !is_interior {
+                    let global = origin[d] + local;
+                    if global >= array_shape[d] {
+                        ok = false;
+                        break;
+                    }
+                }
+                if let Some(sub) = chunk_subset
+                    && (local
+                        < sub.ranges[d].start
+                        || local
+                            >= sub.ranges[d].end)
+                {
+                    ok = false;
+                    break;
+                }
+            }
+            if ok {
+                keep.push(row);
+            }
+        }
+        keep
+    }
+
+    fn assert_matches_legacy(
+        chunk_shape: &[u64],
+        origin: &[u64],
+        array_shape: &[u64],
+        chunk_subset: Option<&ChunkSubset>,
+    ) {
+        let chunk_len: usize = chunk_shape
+            .iter()
+            .product::<u64>()
+            as usize;
+        let strides = compute_strides(chunk_shape);
+        let expected = legacy_mask(
+            chunk_len,
+            chunk_shape,
+            origin,
+            array_shape,
+            &strides,
+            chunk_subset,
+        );
+        let mask = compute_in_bounds_mask(
+            chunk_len,
+            chunk_shape,
+            origin,
+            array_shape,
+            &strides,
+            chunk_subset,
+        );
+        let actual: Vec<usize> = match mask {
+            KeepMask::All(n) => (0..n).collect(),
+            KeepMask::Sparse(v) => v,
+        };
+        assert_eq!(
+            actual, expected,
+            "mismatch for shape={chunk_shape:?} origin={origin:?} array={array_shape:?} subset={chunk_subset:?}"
+        );
+    }
+
+    #[test]
+    fn interior_no_subset_is_all() {
+        assert_matches_legacy(
+            &[10, 10, 10],
+            &[20, 30, 10],
+            &[100, 100, 50],
+            None,
+        );
+    }
+
+    #[test]
+    fn edge_no_subset() {
+        assert_matches_legacy(
+            &[10, 10, 10],
+            &[90, 90, 40],
+            &[100, 100, 50],
+            None,
+        );
+    }
+
+    #[test]
+    fn interior_with_subset_partial() {
+        let subset = ChunkSubset {
+            ranges: smallvec![
+                0u64..3,
+                2u64..5,
+                4u64..7,
+            ],
+        };
+        assert_matches_legacy(
+            &[10, 10, 10],
+            &[20, 30, 10],
+            &[100, 100, 50],
+            Some(&subset),
+        );
+    }
+
+    #[test]
+    fn edge_with_subset() {
+        let subset = ChunkSubset {
+            ranges: smallvec![
+                0u64..15,
+                3u64..8,
+                0u64..7,
+            ],
+        };
+        assert_matches_legacy(
+            &[10, 10, 10],
+            &[90, 90, 40],
+            &[100, 100, 50],
+            Some(&subset),
+        );
+    }
+
+    #[test]
+    fn subset_covers_full_chunk_returns_all() {
+        let subset = ChunkSubset {
+            ranges: smallvec![
+                0u64..10,
+                0u64..10,
+                0u64..10,
+            ],
+        };
+        let mask = compute_in_bounds_mask(
+            1000,
+            &[10, 10, 10],
+            &[20, 30, 10],
+            &[100, 100, 50],
+            &compute_strides(&[10, 10, 10]),
+            Some(&subset),
+        );
+        assert!(matches!(mask, KeepMask::All(1000)));
+    }
+
+    #[test]
+    fn empty_intersection_returns_empty() {
+        // Subset entirely beyond the edge-clipped extent.
+        let subset = ChunkSubset {
+            ranges: smallvec![
+                0u64..3,
+                15u64..20,
+                0u64..3,
+            ],
+        };
+        let mask = compute_in_bounds_mask(
+            1000,
+            &[10, 10, 10],
+            &[90, 90, 40],
+            &[100, 100, 50],
+            &compute_strides(&[10, 10, 10]),
+            Some(&subset),
+        );
+        match mask {
+            KeepMask::Sparse(v) => {
+                assert!(v.is_empty())
+            }
+            KeepMask::All(_) => {
+                panic!("expected empty Sparse")
+            }
+        }
+    }
+
+    #[test]
+    fn one_dim_subset() {
+        let subset = ChunkSubset {
+            ranges: smallvec![3u64..7],
+        };
+        assert_matches_legacy(
+            &[10],
+            &[5],
+            &[20],
+            Some(&subset),
+        );
+    }
 }
