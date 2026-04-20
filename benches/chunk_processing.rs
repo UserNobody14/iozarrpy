@@ -219,23 +219,29 @@ fn bench_mask(c: &mut Criterion) {
     // Interior chunk constrained by a small chunk_subset — exercises the
     // cartesian-product fast path that replaces the legacy
     // O(chunk_len * ndim) row scan.
-    let small_subset = ChunkSubset::from_ranges(vec![
-        0u64..3,
-        2u64..5,
-        4u64..7,
-    ]);
-    group.bench_function("interior_subset", |b| {
-        b.iter(|| {
-            compute_in_bounds_mask(
-                black_box(chunk_len),
-                black_box(&chunk_shape),
-                black_box(&interior_origin),
-                black_box(&array_shape),
-                black_box(&strides),
-                black_box(Some(&small_subset)),
-            )
-        })
-    });
+    let small_subset =
+        ChunkSubset::from_ranges(vec![
+            0u64..3,
+            2u64..5,
+            4u64..7,
+        ]);
+    group.bench_function(
+        "interior_subset",
+        |b| {
+            b.iter(|| {
+                compute_in_bounds_mask(
+                    black_box(chunk_len),
+                    black_box(&chunk_shape),
+                    black_box(&interior_origin),
+                    black_box(&array_shape),
+                    black_box(&strides),
+                    black_box(Some(
+                        &small_subset,
+                    )),
+                )
+            })
+        },
+    );
 
     // Larger 4D chunk that resembles the multivar grid (1, 3, 200, 200) with
     // a small spatial subset — this is the actual workload that motivated
@@ -248,12 +254,13 @@ fn bench_mask(c: &mut Criterion) {
         big_chunk_shape.iter().product::<u64>()
             as usize;
     let big_origin = [0u64, 0, 0, 0];
-    let big_subset = ChunkSubset::from_ranges(vec![
-        0u64..1,
-        0u64..3,
-        50u64..61,
-        100u64..111,
-    ]);
+    let big_subset =
+        ChunkSubset::from_ranges(vec![
+            0u64..1,
+            0u64..3,
+            50u64..61,
+            100u64..111,
+        ]);
     group.bench_function(
         "interior_big_4d_subset",
         |b| {
@@ -651,32 +658,6 @@ fn bench_compile_expr(c: &mut Criterion) {
 }
 
 // =============================================================================
-// Benchmark: selection_to_grouped_chunk_plan
-// =============================================================================
-
-fn bench_selection_to_plan(c: &mut Criterion) {
-    let mut group =
-        c.benchmark_group("selection_to_plan");
-
-    let meta = make_test_meta();
-
-    // NoSelectionMade — creates plans covering all chunks
-    let no_selection =
-        DatasetSelection::NoSelectionMade;
-    group.bench_function("no_selection_made", |b| {
-        b.iter(|| {
-            selection_to_grouped_chunk_plan_unified_from_meta(
-                black_box(&no_selection),
-                black_box(&meta),
-            )
-            .unwrap()
-        })
-    });
-
-    group.finish();
-}
-
-// =============================================================================
 // Criterion harness
 // =============================================================================
 
@@ -688,6 +669,5 @@ criterion_group!(
     bench_var_indices,
     bench_chunk_to_df,
     bench_compile_expr,
-    bench_selection_to_plan,
 );
 criterion_main!(benches);

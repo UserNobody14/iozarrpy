@@ -20,8 +20,6 @@ mod store;
 #[doc(hidden)]
 pub mod bench_internals;
 
-pub(crate) use shared::PlannerStats;
-
 #[pymodule]
 fn _core(
     py: Python<'_>,

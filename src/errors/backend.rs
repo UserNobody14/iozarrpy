@@ -7,9 +7,8 @@ use pyo3::PyErr;
 use snafu::Backtrace;
 use snafu::prelude::*;
 
-use crate::chunk_plan::{
-    ChunkGridSignature, ResolutionError,
-};
+use crate::chunk_plan::ChunkGridSignature;
+use crate::chunk_plan::coord_resolve::ResolutionError;
 use crate::shared::IStr;
 /// Error type for backend operations.
 #[derive(Debug, Snafu)]

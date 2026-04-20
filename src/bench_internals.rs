@@ -24,13 +24,10 @@ pub use crate::shared::{
 };
 
 pub use crate::chunk_plan::exprs::expr_plan::ExprPlan;
-pub use crate::chunk_plan::indexing::DatasetSelection;
 pub use crate::chunk_plan::{
-    ChunkGridSignature, ChunkSubset,
-    GroupedChunkPlan, LazyCompileCtx,
+    ChunkGridSignature, ChunkSubset, LazyCompileCtx,
     compile_expr,
     compute_dims_and_lengths_unified,
-    selection_to_grouped_chunk_plan_unified_from_meta,
 };
 
 pub use crate::errors::BackendError;

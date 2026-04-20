@@ -38,7 +38,9 @@ pub trait MaybeParIter<'a> {
     ) -> MaybePar<'a, Self::Item>;
 }
 
-impl<'a, T: Sync + 'a> MaybeParIter<'a> for [T] {
+impl<'a, T: Sync + 'a> MaybeParIter<'a>
+    for [T]
+{
     type Item = T;
 
     fn maybe_par_iter(
@@ -53,7 +55,9 @@ impl<'a, T: Sync + 'a> MaybeParIter<'a> for [T] {
     }
 }
 
-impl<'a, T: Sync + 'a> MaybeParIter<'a> for Vec<T> {
+impl<'a, T: Sync + 'a> MaybeParIter<'a>
+    for Vec<T>
+{
     type Item = T;
 
     fn maybe_par_iter(

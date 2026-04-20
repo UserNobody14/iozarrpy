@@ -144,6 +144,42 @@ fn build_group_chunks(
     chunks
 }
 
+fn grids_from_tree(
+    tree: Option<&crate::chunk_plan::GridJoinTree>,
+) -> Vec<GridInfo> {
+    let Some(tree) = tree else {
+        return Vec::new();
+    };
+    let mut grids: Vec<GridInfo> = Vec::new();
+    for leaf in tree.leaves() {
+        let sig = leaf.sig.clone();
+        let dims: Vec<String> = sig
+            .dims()
+            .iter()
+            .map(|d| d.to_string())
+            .collect();
+        let variables: Vec<String> = leaf
+            .vars
+            .iter()
+            .map(|v| v.to_string())
+            .collect();
+        let inner_chunk_shape: Vec<u64> =
+            sig.retrieval_shape().to_vec();
+        let chunks = build_group_chunks(
+            &leaf.chunk_indices,
+            &inner_chunk_shape,
+            &sig,
+            &Some(leaf.array_shape.clone()),
+        );
+        grids.push(GridInfo {
+            dims,
+            variables,
+            chunks,
+        });
+    }
+    grids
+}
+
 // Helper for async grid extraction logic
 pub(crate) async fn extract_grids<
     B: HasMetadataBackendAsync<ZarrMeta>
@@ -152,60 +188,11 @@ pub(crate) async fn extract_grids<
     backend: Arc<B>,
     expr: polars::prelude::Expr,
 ) -> PyResult<(Vec<GridInfo>, u64)> {
-    // Compile expression to grouped chunk plan using backend-based resolver
-    let (grouped_plan, stats) = backend
+    let (tree, _stats) = backend
         .clone()
-        .compile_expression_async(&expr)
+        .compile_expression_to_tree_async(&expr)
         .await?;
-
-    let mut grids: Vec<GridInfo> = Vec::new();
-
-    // Use iter_consolidated_chunks() to mirror the actual I/O path exactly.
-    // This function already deduplicates chunk indices across overlapping subsets
-    // using the same BTreeSet logic as the real chunk readers.
-    for result in
-        grouped_plan.iter_consolidated_chunks()
-    {
-        let group = result.map_err(|e| {
-            PyErr::new::<
-                pyo3::exceptions::PyValueError,
-                _,
-            >(e.to_string())
-        })?;
-        let sig = group.sig;
-        let vars = group.vars;
-        // chunk_indices are already deduplicated by iter_consolidated_chunks()
-        let inner_chunk_indices =
-            group.chunk_indices;
-
-        let dims: Vec<String> = sig
-            .dims()
-            .iter()
-            .map(|d| d.to_string())
-            .collect();
-        let variables: Vec<String> = vars
-            .iter()
-            .map(|v| v.to_string())
-            .collect();
-
-        let inner_chunk_shape: Vec<u64> =
-            sig.retrieval_shape().to_vec();
-
-        let chunks = build_group_chunks(
-            &inner_chunk_indices,
-            &inner_chunk_shape,
-            &sig,
-            &Some(group.array_shape),
-        );
-
-        grids.push(GridInfo {
-            dims,
-            variables,
-            chunks,
-        });
-    }
-
-    Ok((grids, stats.coord_reads))
+    Ok((grids_from_tree(tree.as_ref()), 0))
 }
 
 // Helper for sync grid extraction logic
@@ -216,59 +203,10 @@ pub(crate) fn extract_grids_sync<
     backend: Arc<B>,
     expr: polars::prelude::Expr,
 ) -> PyResult<(Vec<GridInfo>, u64)> {
-    let (grouped_plan, stats) =
-        backend
-            .clone()
-            .compile_expression_sync(&expr)?;
-
-    let mut grids: Vec<GridInfo> = Vec::new();
-
-    // Use iter_consolidated_chunks() to mirror the actual I/O path exactly.
-    // This function already deduplicates chunk indices across overlapping subsets
-    // using the same BTreeSet logic as the real chunk readers.
-    for result in
-        grouped_plan.iter_consolidated_chunks()
-    {
-        let group = result.map_err(|e| {
-            PyErr::new::<
-                pyo3::exceptions::PyValueError,
-                _,
-            >(e.to_string())
-        })?;
-        let sig = group.sig;
-        let vars = group.vars;
-        // chunk_indices are already deduplicated by iter_consolidated_chunks()
-        let inner_chunk_indices =
-            group.chunk_indices;
-
-        let dims: Vec<String> = sig
-            .dims()
-            .iter()
-            .map(|d| d.to_string())
-            .collect();
-        let variables: Vec<String> = vars
-            .iter()
-            .map(|v| v.to_string())
-            .collect();
-
-        let inner_chunk_shape: Vec<u64> =
-            sig.retrieval_shape().to_vec();
-
-        let chunks = build_group_chunks(
-            &inner_chunk_indices,
-            &inner_chunk_shape,
-            &sig,
-            &Some(group.array_shape),
-        );
-
-        grids.push(GridInfo {
-            dims,
-            variables,
-            chunks,
-        });
-    }
-
-    Ok((grids, stats.coord_reads))
+    let (tree, _stats) = backend
+        .clone()
+        .compile_expression_to_tree_sync(&expr)?;
+    Ok((grids_from_tree(tree.as_ref()), 0))
 }
 
 pub(crate) fn grids_to_python<'py>(

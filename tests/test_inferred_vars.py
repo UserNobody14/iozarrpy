@@ -10,9 +10,8 @@ import pytest
 from rainbear import ZarrBackend
 
 if TYPE_CHECKING:
-    from tests.conftest import MultiVarDatasetInfo
-
     from rainbear._core import SelectedChunksDebugReturn
+    from tests.conftest import MultiVarDatasetInfo
 
 
 
@@ -123,8 +122,10 @@ class TestSelectorSetOps:
         expr = cs.all() - cs.by_name("surface")
         inferred = get_inferred_vars(multi_var_dataset.path, expr)
         # All data vars except surface
-        expected = {"a", "b", "c", "lon", "lat", "temp", "precip", "wind_u", "wind_v", "pressure"}
+        expected = {"lon", "lat", "temp", "precip", "wind_u", "wind_v", "pressure"}
         assert inferred == expected
+        coord_dims = get_inferred_dims(multi_var_dataset.path, expr)
+        assert coord_dims == {"a", "b", "c"}
 
     def test_selector_intersection(self, multi_var_dataset: MultiVarDatasetInfo):
         """Intersection of selectors should find common variables."""
@@ -144,8 +145,10 @@ class TestSelectorSetOps:
         expr = cs.numeric()
         inferred = get_inferred_vars(multi_var_dataset.path, expr)
         # All data vars are numeric
-        expected = {"a", "b", "c", "lon", "lat", "temp", "precip", "wind_u", "wind_v", "pressure", "surface"}
+        expected = {"lon", "lat", "temp", "precip", "wind_u", "wind_v", "pressure", "surface"}
         assert inferred == expected
+        coord_dims = get_inferred_dims(multi_var_dataset.path, expr)
+        assert coord_dims == {"a", "b", "c"}
 
     def test_cs_float(self, multi_var_dataset: MultiVarDatasetInfo):
         """cs.float() should select float columns."""
@@ -181,7 +184,9 @@ class TestTernary:
             pl.when(pl.col("a") < 20).then(pl.col("temp")).otherwise(pl.col("precip"))
         )
         inferred = get_inferred_vars(multi_var_dataset.path, expr)
-        assert inferred == {"temp", "precip", "a"}
+        assert inferred == {"temp", "precip"}
+        coord_dims = get_inferred_dims(multi_var_dataset.path, expr)
+        assert coord_dims == {"a", "b", "c"}
 
 
     def test_when_coord_reference_in_predicate(
@@ -202,14 +207,18 @@ class TestTernary:
             .otherwise(pl.col("wind_u"))
         )
         inferred = get_inferred_vars(multi_var_dataset.path, expr)
-        assert inferred == {"temp", "precip", "wind_u", "a"}
+        assert inferred == {"temp", "precip", "wind_u"}
+        coord_dims = get_inferred_dims(multi_var_dataset.path, expr)
+        assert coord_dims == {"a", "b", "c"}
 
     def test_nested_when(self, multi_var_dataset: MultiVarDatasetInfo):
         """Nested when() expressions."""
         inner = pl.when(pl.col("b") < 10).then(pl.col("precip")).otherwise(pl.lit(0))
         expr = pl.when(pl.col("a") < 10).then(inner).otherwise(pl.lit(0))
         inferred = get_inferred_vars(multi_var_dataset.path, expr)
-        assert inferred == {"precip", "a", "b"}
+        assert inferred == {"precip"}
+        coord_dims = get_inferred_dims(multi_var_dataset.path, expr)
+        assert coord_dims == {"a", "b", "c"}
 
     def test_when_lon_lat_predicate(self, multi_var_dataset: MultiVarDatasetInfo):
         """when() with lon/lat predicate selecting specific region."""
@@ -252,7 +261,7 @@ class TestVariableInference:
         expr = pl.col("temp").filter(pl.col("a") > 30)
         inferred = get_inferred_vars(multi_var_dataset.path, expr)
         inferred_dims = get_inferred_dims(multi_var_dataset.path, expr)
-        assert inferred == {"temp", "a"}
+        assert inferred == {"temp"}
         assert inferred_dims == {"a", "b", "c"}
 
     def test_infer_2d_coord_from_filter(self, multi_var_dataset: MultiVarDatasetInfo):
@@ -260,7 +269,7 @@ class TestVariableInference:
         expr = pl.col("temp").filter((pl.col("a") > 33.0) & (pl.col("b") > 33.0))
         inferred = get_inferred_vars(multi_var_dataset.path, expr)
         inferred_dims = get_inferred_dims(multi_var_dataset.path, expr)
-        assert inferred == {"temp", "a", "b"}
+        assert inferred == {"temp"}
         assert inferred_dims == {"a", "b", "c"}
 
     def test_alias_preserves_inference(self, multi_var_dataset: MultiVarDatasetInfo):
@@ -332,14 +341,18 @@ class TestWindowFunctions:
         """sum().over() should infer data and partition columns."""
         expr = pl.col("temp").sum().over("a")
         inferred = get_inferred_vars(multi_var_dataset.path, expr)
-        assert inferred == {"temp", "a"}
+        assert inferred == {"temp"}
+        coord_dims = get_inferred_dims(multi_var_dataset.path, expr)
+        assert coord_dims == {"a", "b", "c"}
 
 
     def test_over_multiple_partition_cols(self, multi_var_dataset: MultiVarDatasetInfo):
         """over() with multiple partition cols should infer all."""
         expr = pl.col("temp").rank().over(["a", "b"])
         inferred = get_inferred_vars(multi_var_dataset.path, expr)
-        assert inferred == {"temp", "a", "b"}
+        assert inferred == {"temp"}
+        coord_dims = get_inferred_dims(multi_var_dataset.path, expr)
+        assert coord_dims == {"a", "b", "c"}
 
 
 
@@ -377,7 +390,9 @@ class TestColumnSelectors:
         """pl.col("temp").filter(pl.col("a") > 10) should infer temp and coord a."""
         expr = pl.col("temp").filter(pl.col("a") > 10)
         inferred = get_inferred_vars(multi_var_dataset.path, expr)
-        assert inferred == {"temp", "a"}
+        assert inferred == {"temp"}
+        coord_dims = get_inferred_dims(multi_var_dataset.path, expr)
+        assert coord_dims == {"a", "b", "c"}
 
     def test_multiple_cols_inferred(self, multi_var_dataset: MultiVarDatasetInfo):
         """Expression with multiple columns should infer all."""

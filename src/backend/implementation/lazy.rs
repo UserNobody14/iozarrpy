@@ -7,9 +7,8 @@ use polars::prelude::*;
 use snafu::ensure;
 
 use crate::backend::implementation::iterating_common::{
-    build_batches, distinct_chunks_in_batches, expr_top_literal_bool,
+    build_batches, distinct_chunks_in_batches,
 };
-use crate::chunk_plan::GridJoinTree;
 use crate::chunk_plan::indexing::grid_join_reader::{
     assemble_batch_dataframe, flatten_reads,
 };
@@ -23,7 +22,7 @@ use crate::shared::IStr;
 use crate::shared::MaybeParIter;
 use crate::shared::{
     HasMetadataBackendSync, diagonal_concat_batches,
-    expand_projection_to_flat_paths, restructure_to_structs,
+    expand_projection_to_flat_paths,
 };
 
 /// Below this many chunk reads per batch the rayon scheduling overhead exceeds
@@ -63,20 +62,9 @@ pub fn scan_zarr_with_backend_sync(
             &meta,
         );
 
-    let (grouped_plan, _stats) =
-        backend.compile_expression_sync(&expr)?;
+    let (tree, _stats) = backend
+        .compile_expression_to_tree_sync(&expr)?;
 
-    let emit_empty_schema_once =
-        expr_top_literal_bool(&expr)
-            == Some(false);
-
-    let groups = grouped_plan
-        .owned_grid_groups_for_io(
-            emit_empty_schema_once,
-            &meta,
-        )?;
-
-    let tree = GridJoinTree::build(groups);
     // For eager scans we materialize the entire dataset at once, so let each
     // batch be as large as it needs to be. The planner still applies geometry
     // bounds (chunk count cap), but we don't need to cap by row budget.
@@ -134,11 +122,12 @@ pub fn scan_zarr_with_backend_sync(
     }
 
     let result = if batch_dfs.is_empty() {
-        let keys: Vec<IStr> = grouped_plan
-            .var_to_grid()
-            .keys()
-            .cloned()
-            .collect();
+        let keys: Vec<IStr> = match &with_columns {
+            Some(cols) => {
+                cols.iter().cloned().collect()
+            }
+            None => meta.tidy_column_order(None),
+        };
         DataFrame::empty_with_schema(
             &meta.tidy_schema(Some(
                 keys.as_slice(),
@@ -148,11 +137,5 @@ pub fn scan_zarr_with_backend_sync(
         diagonal_concat_batches(batch_dfs)?
     };
 
-    if meta.is_hierarchical() {
-        Ok(restructure_to_structs(
-            &result, &meta,
-        )?)
-    } else {
-        Ok(result)
-    }
+    Ok(result)
 }

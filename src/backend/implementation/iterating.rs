@@ -13,7 +13,6 @@ use pyo3::PyErr;
 use pyo3::prelude::*;
 use snafu::ensure;
 
-use crate::chunk_plan::GridJoinTree;
 use crate::chunk_plan::indexing::grid_join_reader::{
     assemble_batch_dataframe, flatten_reads,
 };
@@ -127,9 +126,9 @@ impl ZarrIteratorInner {
         let expanded_with_columns =
             policy.physical_superset().cloned();
 
-        let (grouped_plan, _stats) = self
+        let (tree, _stats) = self
             .backend
-            .compile_expression_sync(
+            .compile_expression_to_tree_sync(
                 &self.expr,
             )?;
 
@@ -137,13 +136,6 @@ impl ZarrIteratorInner {
             expr_top_literal_bool(&self.expr)
                 == Some(false);
 
-        let groups = grouped_plan
-            .owned_grid_groups_for_io(
-                literal_false,
-                meta.as_ref(),
-            )?;
-
-        let tree = GridJoinTree::build(groups);
         let batches = match &tree {
             Some(t) => {
                 build_batches(t, self.batch_size)

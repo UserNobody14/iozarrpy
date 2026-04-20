@@ -8,7 +8,6 @@ use std::collections::BTreeMap;
 
 use smallvec::SmallVec;
 
-use super::grouped_selection::ArraySelectionType;
 use super::selection::Emptyable;
 use super::types::ValueRangePresent;
 use crate::shared::IStr;
@@ -508,8 +507,6 @@ impl SetOperations for LazyArraySelection {
             .union(&other.difference(self))
     }
 }
-
-impl ArraySelectionType for LazyArraySelection {}
 
 /// Intersect two lazy hyper-rectangles.
 fn intersect_lazy_rectangles(

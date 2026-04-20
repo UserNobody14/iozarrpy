@@ -21,8 +21,9 @@ use std::sync::Arc;
 use polars::prelude::*;
 use snafu::ResultExt;
 
-use super::grid_join_tree::GridJoinTree;
-use super::plan::{ChunkSubset, OwnedGridGroup};
+use super::grid_join_tree::{
+    ChunkSubset, GridJoinTree, LeafGroup,
+};
 use crate::chunk_plan::ChunkGridSignature;
 use crate::errors::{
     BackendError, BackendResult, PolarsSnafu,
@@ -62,6 +63,10 @@ pub enum CombineNode {
     },
     /// Diagonal-concatenate children (no shared keys).
     Concat { children: Vec<CombineNode> },
+    /// Wrap the child's combined DataFrame's `"<name>/..."` columns into a
+    /// single `Struct`-typed column called `name`. Mirrors
+    /// [`GridJoinTree::Group`].
+    Group { name: IStr, child: Box<CombineNode> },
 }
 
 /// Walk a [`GridJoinTree`] and emit a stream of [`BatchPlan`]s sized by
@@ -69,7 +74,7 @@ pub enum CombineNode {
 /// have data, so predicate filtering on any column produced by the tree always
 /// sees a populated DataFrame.
 pub struct BatchPlanner<'a> {
-    leaves: Vec<&'a OwnedGridGroup>,
+    leaves: Vec<&'a LeafGroup>,
     /// Recursive schedule mirroring the tree shape.
     root: ScheduleNode,
 }
@@ -92,6 +97,12 @@ enum ScheduleNode {
     },
     /// Independent subtrees — every child contributes a tick to every batch.
     Independent { children: Vec<ScheduleNode> },
+    /// Mirrors [`GridJoinTree::Group`]: a transparent wrapper that turns the
+    /// child's combined DataFrame into a struct column at combine time.
+    Group {
+        name: IStr,
+        child: Box<ScheduleNode>,
+    },
 }
 
 impl<'a> BatchPlanner<'a> {
@@ -126,7 +137,7 @@ const MAX_DRIVER_SLABS_COALESCED: usize = 100;
 /// `None` if the node is exhausted.
 fn advance_node(
     node: &mut ScheduleNode,
-    leaves: &[&OwnedGridGroup],
+    leaves: &[&LeafGroup],
     batch_size: usize,
     slabs: &mut Vec<LeafSlab>,
 ) -> Option<CombineNode> {
@@ -218,12 +229,23 @@ fn advance_node(
                 }),
             }
         }
+        ScheduleNode::Group { name, child } => {
+            advance_node(
+                child, leaves, batch_size, slabs,
+            )
+            .map(|combine| {
+                CombineNode::Group {
+                    name: *name,
+                    child: Box::new(combine),
+                }
+            })
+        }
     }
 }
 
 /// Pull a row-budget bounded slab of chunk slots from `g`, advancing `cursor`.
 fn take_slab(
-    g: &OwnedGridGroup,
+    g: &LeafGroup,
     cursor: &mut usize,
     batch_size: usize,
 ) -> Vec<usize> {
@@ -253,7 +275,7 @@ fn take_slab(
 
 fn build_schedule(
     tree: &GridJoinTree,
-    leaves: &[&OwnedGridGroup],
+    leaves: &[&LeafGroup],
 ) -> ScheduleNode {
     match tree {
         GridJoinTree::Leaf(g) => {
@@ -272,6 +294,14 @@ fn build_schedule(
                         build_schedule(s, leaves)
                     })
                     .collect(),
+            }
+        }
+        GridJoinTree::Group { name, child } => {
+            ScheduleNode::Group {
+                name: *name,
+                child: Box::new(build_schedule(
+                    child, leaves,
+                )),
             }
         }
         GridJoinTree::Join { .. } => {
@@ -349,12 +379,15 @@ fn has_independent_inside(
         } => subtrees
             .iter()
             .any(has_independent_inside),
+        GridJoinTree::Group { child, .. } => {
+            has_independent_inside(child)
+        }
     }
 }
 
 fn pick_driver_leaf(
     tree: &GridJoinTree,
-    leaves: &[&OwnedGridGroup],
+    leaves: &[&LeafGroup],
 ) -> usize {
     let mut best: Option<(
         usize,
@@ -380,8 +413,8 @@ fn pick_driver_leaf(
 }
 
 fn leaf_index_of(
-    leaves: &[&OwnedGridGroup],
-    g: &OwnedGridGroup,
+    leaves: &[&LeafGroup],
+    g: &LeafGroup,
 ) -> usize {
     leaves
         .iter()
@@ -396,13 +429,13 @@ fn leaf_index_of(
 
 fn visit_leaves_with_index(
     tree: &GridJoinTree,
-    leaves: &[&OwnedGridGroup],
-    f: &mut impl FnMut(usize, &OwnedGridGroup),
+    leaves: &[&LeafGroup],
+    f: &mut impl FnMut(usize, &LeafGroup),
 ) {
     fn walk<'a>(
         node: &'a GridJoinTree,
-        leaves: &[&'a OwnedGridGroup],
-        f: &mut impl FnMut(usize, &OwnedGridGroup),
+        leaves: &[&'a LeafGroup],
+        f: &mut impl FnMut(usize, &LeafGroup),
     ) {
         match node {
             GridJoinTree::Leaf(g) => {
@@ -421,6 +454,11 @@ fn visit_leaves_with_index(
                     walk(s, leaves, f);
                 }
             }
+            GridJoinTree::Group {
+                child, ..
+            } => {
+                walk(child, leaves, f);
+            }
         }
     }
     walk(tree, leaves, f);
@@ -430,7 +468,7 @@ fn visit_leaves_with_index(
 /// (positions of accumulated join dims inside that leaf's signature).
 fn collect_join_participants(
     tree: &GridJoinTree,
-    leaves: &[&OwnedGridGroup],
+    leaves: &[&LeafGroup],
     inherited_join: &[IStr],
     participants: &mut Vec<usize>,
     join_axes_per_leaf: &mut Vec<Vec<usize>>,
@@ -475,12 +513,17 @@ fn collect_join_participants(
                 "collect_join_participants should never see Independent (caller checks via has_independent_inside)"
             );
         }
+        GridJoinTree::Group { .. } => {
+            unreachable!(
+                "collect_join_participants should never see Group; Group is only inserted as the outermost wrapper or around an Independent/Leaf, never inside a Join"
+            );
+        }
     }
 }
 
 fn combine_for(
     tree: &GridJoinTree,
-    leaves: &[&OwnedGridGroup],
+    leaves: &[&LeafGroup],
 ) -> CombineNode {
     match tree {
         GridJoinTree::Leaf(g) => {
@@ -513,6 +556,14 @@ fn combine_for(
                     .collect(),
             }
         }
+        GridJoinTree::Group { name, child } => {
+            CombineNode::Group {
+                name: *name,
+                child: Box::new(combine_for(
+                    child, leaves,
+                )),
+            }
+        }
     }
 }
 
@@ -521,7 +572,7 @@ fn combine_for(
 // =============================================================================
 
 fn chunk_element_count(
-    g: &OwnedGridGroup,
+    g: &LeafGroup,
     slot: usize,
 ) -> usize {
     let idx = &g.chunk_indices[slot];
@@ -540,7 +591,7 @@ fn chunk_element_count(
 }
 
 fn axis_interval(
-    g: &OwnedGridGroup,
+    g: &LeafGroup,
     slot: usize,
     axis: usize,
 ) -> (u64, u64) {
@@ -555,9 +606,9 @@ fn axis_interval(
 /// Set of `leaf` chunk slots that overlap any of `driver_slots` on every join
 /// dim. `driver_axes` and `leaf_axes` are positional axes (same length).
 fn overlapping_chunks(
-    driver: &OwnedGridGroup,
+    driver: &LeafGroup,
     driver_slots: &[usize],
-    leaf: &OwnedGridGroup,
+    leaf: &LeafGroup,
     driver_axes: &[usize],
     leaf_axes: &[usize],
 ) -> Vec<usize> {
@@ -717,7 +768,132 @@ pub fn combine_per_leaf(
                     .map(Some),
             }
         }
+        CombineNode::Group { name, child } => {
+            let Some(child_df) =
+                combine_per_leaf(
+                    child, per_leaf,
+                )?
+            else {
+                return Ok(None);
+            };
+            let restructured =
+                wrap_columns_into_group_struct(
+                    &child_df, *name,
+                )?;
+            Ok(Some(restructured))
+        }
     }
+}
+
+/// Wrap all `"<group_name>/..."` columns of `df` into a single (possibly
+/// nested) struct column named `group_name`.
+///
+/// Columns that don't match the prefix are preserved in place and order; the
+/// new struct column is appended at the end. Sub-prefixes inside the matched
+/// columns are recursively re-wrapped into nested struct fields, mirroring
+/// the [`crate::shared::structural::restructure_to_structs`] semantics:
+/// `"level_1/level_2/var_2"` ends up as `level_1.level_2.var_2`.
+fn wrap_columns_into_group_struct(
+    df: &DataFrame,
+    group_name: IStr,
+) -> BackendResult<DataFrame> {
+    let group_str: &str = group_name.as_ref();
+    let prefix = format!("{group_str}/");
+
+    let mut kept: Vec<Column> = Vec::new();
+    let mut grouped: Vec<Column> = Vec::new();
+    for col in df.columns() {
+        let name: &str = col.name().as_str();
+        if let Some(field_name) =
+            name.strip_prefix(&prefix)
+        {
+            let field_pl: PlSmallStr =
+                field_name.into();
+            let renamed =
+                col.clone().with_name(field_pl);
+            grouped.push(renamed);
+        } else {
+            kept.push(col.clone());
+        }
+    }
+
+    if grouped.is_empty() {
+        return Ok(df.clone());
+    }
+
+    let nested = nest_columns_recursively(
+        grouped,
+        df.height(),
+    )?;
+
+    let struct_col = StructChunked::from_columns(
+        group_str.into(),
+        df.height(),
+        &nested,
+    )
+    .context(PolarsSnafu {
+        message:
+            "Error creating Group struct column"
+                .to_string(),
+    })?;
+    kept.push(struct_col.into_column());
+
+    DataFrame::new(df.height(), kept).context(
+        PolarsSnafu {
+            message:
+                "Error building Group DataFrame"
+                    .to_string(),
+        },
+    )
+}
+
+/// Recursively partition `cols` by their first `'/'`-separated component,
+/// emitting a nested [`StructChunked`] per non-leaf component.
+fn nest_columns_recursively(
+    cols: Vec<Column>,
+    height: usize,
+) -> BackendResult<Vec<Column>> {
+    use std::collections::BTreeMap;
+
+    let mut leaves: Vec<Column> = Vec::new();
+    let mut groups: BTreeMap<String, Vec<Column>> =
+        BTreeMap::new();
+    for col in cols {
+        let name: &str = col.name().as_str();
+        if let Some((head, tail)) =
+            name.split_once('/')
+        {
+            let renamed = col
+                .clone()
+                .with_name(tail.into());
+            groups
+                .entry(head.to_string())
+                .or_default()
+                .push(renamed);
+        } else {
+            leaves.push(col);
+        }
+    }
+
+    let mut out: Vec<Column> = leaves;
+    for (head, group_cols) in groups {
+        let nested = nest_columns_recursively(
+            group_cols, height,
+        )?;
+        let struct_col =
+            StructChunked::from_columns(
+                head.as_str().into(),
+                height,
+                &nested,
+            )
+            .context(PolarsSnafu {
+                message:
+                    "Error creating nested Group struct column"
+                        .to_string(),
+            })?;
+        out.push(struct_col.into_column());
+    }
+    Ok(out)
 }
 
 /// vstack a list of chunk DataFrames belonging to one leaf.
@@ -758,7 +934,7 @@ pub struct ChunkRead {
 /// Flatten a [`BatchPlan`]'s slabs into a list of individual chunk read tasks.
 pub fn flatten_reads(
     plan: &BatchPlan,
-    leaves: &[&OwnedGridGroup],
+    leaves: &[&LeafGroup],
 ) -> Vec<ChunkRead> {
     let mut out = Vec::new();
     for slab in &plan.batch.slabs {
@@ -813,4 +989,108 @@ pub fn assemble_batch_dataframe(
 #[allow(dead_code)]
 fn _unused(e: BackendError) -> BackendError {
     e
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::shared::IntoIStr;
+
+    #[test]
+    fn wrap_columns_into_group_struct_basic() {
+        let df = df! {
+            "x" => [1i64, 2, 3],
+            "model_a/temperature" => [10.0f64, 20.0, 30.0],
+            "model_a/pressure" => [1.1f64, 2.2, 3.3],
+        }
+        .unwrap();
+
+        let result =
+            wrap_columns_into_group_struct(
+                &df,
+                "model_a".istr(),
+            )
+            .unwrap();
+
+        let names: Vec<&str> = result
+            .get_column_names()
+            .iter()
+            .map(|n| n.as_str())
+            .collect();
+        assert_eq!(names, vec!["x", "model_a"]);
+
+        let struct_col =
+            result.column("model_a").unwrap();
+        let struct_chunked =
+            struct_col.struct_().unwrap();
+        let fields =
+            struct_chunked.fields_as_series();
+        let field_names: Vec<&str> = fields
+            .iter()
+            .map(|s| s.name().as_str())
+            .collect();
+        assert!(
+            field_names.contains(&"temperature")
+        );
+        assert!(
+            field_names.contains(&"pressure")
+        );
+        assert_eq!(field_names.len(), 2);
+    }
+
+    #[test]
+    fn wrap_columns_into_group_struct_nested() {
+        let df = df! {
+            "x" => [1i64, 2, 3],
+            "level_1/level_2/var_2" => [1.0f64, 2.0, 3.0],
+            "level_1/level_3/var_3" => [4.0f64, 5.0, 6.0],
+        }
+        .unwrap();
+        let result =
+            wrap_columns_into_group_struct(
+                &df,
+                "level_1".istr(),
+            )
+            .unwrap();
+        let names: Vec<&str> = result
+            .get_column_names()
+            .iter()
+            .map(|n| n.as_str())
+            .collect();
+        assert_eq!(names, vec!["x", "level_1"]);
+
+        let l1 =
+            result.column("level_1").unwrap();
+        let l1_struct = l1.struct_().unwrap();
+        let l1_field_series =
+            l1_struct.fields_as_series();
+        let l1_fields: Vec<&str> = l1_field_series
+            .iter()
+            .map(|s| s.name().as_str())
+            .collect();
+        assert!(l1_fields.contains(&"level_2"));
+        assert!(l1_fields.contains(&"level_3"));
+    }
+
+    #[test]
+    fn wrap_columns_into_group_struct_no_match_is_clone()
+     {
+        let df = df! {
+            "x" => [1i64, 2, 3],
+            "y" => [4i64, 5, 6],
+        }
+        .unwrap();
+        let result =
+            wrap_columns_into_group_struct(
+                &df,
+                "nope".istr(),
+            )
+            .unwrap();
+        let names: Vec<&str> = result
+            .get_column_names()
+            .iter()
+            .map(|n| n.as_str())
+            .collect();
+        assert_eq!(names, vec!["x", "y"]);
+    }
 }
