@@ -5,9 +5,8 @@ use std::sync::Arc;
 use snafu::ensure;
 
 use crate::backend::implementation::iterating_common::{
-    build_batches, distinct_chunks_in_batches, expr_top_literal_bool,
+    build_batches, distinct_chunks_in_batches,
 };
-use crate::chunk_plan::GridJoinTree;
 use crate::chunk_plan::indexing::grid_join_reader::{
     assemble_batch_dataframe, flatten_reads,
 };
@@ -20,8 +19,6 @@ use crate::shared::ChunkedExpressionCompilerAsync;
 use crate::shared::HasMetadataBackendAsync;
 use crate::shared::IStr;
 use crate::shared::diagonal_concat_batches;
-use crate::shared::restructure_to_structs;
-
 /// Eager async scan: drives the [`GridJoinTree`] reader to exhaustion.
 pub(crate) async fn scan_with_backend_async<B>(
     backend: Arc<B>,
@@ -47,22 +44,11 @@ where
     const DEFAULT_MAX_CONCURRENCY: usize = 32;
     let meta = backend.metadata().await?;
 
-    let (grouped_plan, _stats) = backend
+    let (tree, _stats) = backend
         .clone()
-        .compile_expression_async(&expr)
+        .compile_expression_to_tree_async(&expr)
         .await?;
 
-    let emit_empty_schema_once =
-        expr_top_literal_bool(&expr)
-            == Some(false);
-
-    let groups = grouped_plan
-        .owned_grid_groups_for_io(
-            emit_empty_schema_once,
-            &meta,
-        )?;
-
-    let tree = GridJoinTree::build(groups);
     let batches = match &tree {
         Some(t) => build_batches(t, usize::MAX),
         None => Vec::new(),
@@ -151,11 +137,8 @@ where
     }
 
     let result = if batch_dfs.is_empty() {
-        let keys: Vec<IStr> = grouped_plan
-            .var_to_grid()
-            .keys()
-            .cloned()
-            .collect();
+        let keys: Vec<IStr> =
+            meta.tidy_column_order(None);
         polars::prelude::DataFrame::empty_with_schema(
             &meta.tidy_schema(Some(keys.as_slice())),
         )
@@ -163,11 +146,5 @@ where
         diagonal_concat_batches(batch_dfs)?
     };
 
-    if meta.is_hierarchical() {
-        Ok(restructure_to_structs(
-            &result, &meta,
-        )?)
-    } else {
-        Ok(result)
-    }
+    Ok(result)
 }

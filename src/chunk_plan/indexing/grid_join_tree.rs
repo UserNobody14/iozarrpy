@@ -8,6 +8,9 @@
 //!   with `join_dims` the intersection of dims across every subtree.
 //! - [`GridJoinTree::Independent`] – subtrees with no shared dimensions
 //!   (top-level diagonal-concat).
+//! - [`GridJoinTree::Group`] – wraps a single child subtree under a named group,
+//!   used by the builder to mirror `meta.root.children` hierarchy. Treated
+//!   transparently by every traversal helper.
 //!
 //! The build algorithm partitions groups into connected components via union-find
 //! over their dimension sets. Within a component, if all groups share at least one
@@ -15,17 +18,94 @@
 //! split on the dim shared by the most groups, producing a balanced binary join tree.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::ops::Range;
+use std::sync::Arc;
 
 use smallvec::SmallVec;
 
-use super::plan::OwnedGridGroup;
+use super::types::ChunkGridSignature;
 use crate::shared::IStr;
+
+// =============================================================================
+// Chunk Subset
+// =============================================================================
+
+/// Per-chunk local bounding box: ranges in chunk-local coordinates.
+///
+/// Represents the portion of a chunk that intersects the user's selection.
+/// Used to constrain the `KeepMask` so only relevant elements are processed.
+#[derive(Debug, Clone)]
+pub struct ChunkSubset {
+    pub(crate) ranges: SmallVec<[Range<u64>; 4]>,
+}
+
+impl ChunkSubset {
+    /// Construct a [`ChunkSubset`] from explicit per-dim chunk-local ranges.
+    ///
+    /// Used by tests and benches that need to materialize a subset without
+    /// going through `compute_chunk_subset`.
+    pub fn from_ranges(
+        ranges: Vec<Range<u64>>,
+    ) -> Self {
+        Self {
+            ranges: ranges.into_iter().collect(),
+        }
+    }
+
+    pub(crate) fn is_full_chunk(
+        &self,
+        chunk_shape: &[u64],
+    ) -> bool {
+        self.ranges.iter().zip(chunk_shape).all(
+            |(r, &s)| r.start == 0 && r.end >= s,
+        )
+    }
+}
+
+// =============================================================================
+// Leaf Group
+// =============================================================================
+
+/// A grid group with deduplicated chunk indices, ready for reading.
+///
+/// Owned across the whole tree-driven read pipeline. Each [`GridJoinTree::Leaf`]
+/// owns exactly one [`LeafGroup`].
+#[derive(Debug)]
+pub struct LeafGroup {
+    pub sig: Arc<ChunkGridSignature>,
+    pub vars: Vec<IStr>,
+    pub chunk_indices: Vec<Vec<u64>>,
+    pub chunk_subsets: Vec<Option<ChunkSubset>>,
+    pub array_shape: Vec<u64>,
+}
+
+impl LeafGroup {
+    pub fn new(
+        sig: Arc<ChunkGridSignature>,
+        vars: Vec<IStr>,
+        chunk_indices: Vec<Vec<u64>>,
+        chunk_subsets: Vec<Option<ChunkSubset>>,
+        array_shape: Vec<u64>,
+    ) -> Self {
+        Self {
+            sig,
+            vars,
+            chunk_indices,
+            chunk_subsets,
+            array_shape,
+        }
+    }
+}
+
+// =============================================================================
+// Grid Join Tree
+// =============================================================================
 
 /// Tree shape that drives all batched zarr reads.
 #[derive(Debug)]
 pub enum GridJoinTree {
     /// One grid group's chunks, indexed by integer dim positions.
-    Leaf(OwnedGridGroup),
+    Leaf(LeafGroup),
     /// Multiple subtrees joined on the dimensions in `join_dims`.
     /// Every subtree's dim set contains every dim in `join_dims`.
     Join {
@@ -34,14 +114,25 @@ pub enum GridJoinTree {
     },
     /// Subtrees with no shared dims; combined via diagonal concat.
     Independent(Vec<GridJoinTree>),
+    /// Wraps `child`'s combined DataFrame into a struct column named `name`.
+    /// Inserted by the builder to mirror `meta.root.children` hierarchy.
+    /// Treated transparently by every traversal helper here — the variant is
+    /// purely a marker that affects the assembly layer (see `grid_join_reader`).
+    Group {
+        name: IStr,
+        child: Box<GridJoinTree>,
+    },
 }
 
 impl GridJoinTree {
     /// Build a join tree from a list of grid groups.
     ///
     /// Returns `None` if `groups` is empty.
+    ///
+    /// Note: `build` never produces a [`GridJoinTree::Group`] node — those are
+    /// inserted by the higher-level builder once the join structure is known.
     pub fn build(
-        groups: Vec<OwnedGridGroup>,
+        groups: Vec<LeafGroup>,
     ) -> Option<GridJoinTree> {
         if groups.is_empty() {
             return None;
@@ -51,15 +142,20 @@ impl GridJoinTree {
         let mut subtrees: Vec<GridJoinTree> =
             Vec::with_capacity(components.len());
         // Move groups into Option slots so we can take ownership in arbitrary order.
-        let mut owned: Vec<
-            Option<OwnedGridGroup>,
-        > = groups
-            .into_iter()
-            .map(Some)
-            .collect();
+        let mut owned: Vec<Option<LeafGroup>> =
+            groups
+                .into_iter()
+                .map(Some)
+                .collect();
         for comp in components {
-            let comp_groups: Vec<OwnedGridGroup> =
-                comp.into_iter().map(|i| owned[i].take().expect("group consumed twice")).collect();
+            let comp_groups: Vec<LeafGroup> =
+                comp.into_iter()
+                    .map(|i| {
+                        owned[i].take().expect(
+                        "group consumed twice",
+                    )
+                    })
+                    .collect();
             subtrees.push(build_component(
                 comp_groups,
             ));
@@ -72,7 +168,7 @@ impl GridJoinTree {
     }
 
     /// Iterate every leaf grid in left-to-right traversal order.
-    pub fn leaves(&self) -> Vec<&OwnedGridGroup> {
+    pub fn leaves(&self) -> Vec<&LeafGroup> {
         let mut out = Vec::new();
         self.collect_leaves(&mut out);
         out
@@ -80,7 +176,7 @@ impl GridJoinTree {
 
     fn collect_leaves<'a>(
         &'a self,
-        out: &mut Vec<&'a OwnedGridGroup>,
+        out: &mut Vec<&'a LeafGroup>,
     ) {
         match self {
             GridJoinTree::Leaf(g) => out.push(g),
@@ -95,12 +191,17 @@ impl GridJoinTree {
                     s.collect_leaves(out);
                 }
             }
+            GridJoinTree::Group {
+                child, ..
+            } => {
+                child.collect_leaves(out);
+            }
         }
     }
 }
 
 fn build_component(
-    mut groups: Vec<OwnedGridGroup>,
+    mut groups: Vec<LeafGroup>,
 ) -> GridJoinTree {
     if groups.len() == 1 {
         return GridJoinTree::Leaf(
@@ -125,8 +226,8 @@ fn build_component(
     // and emit a binary Join over the two halves when they still share something.
     let split_dim = pick_majority_dim(&groups);
     let (with_dim, without_dim): (
-        Vec<OwnedGridGroup>,
-        Vec<OwnedGridGroup>,
+        Vec<LeafGroup>,
+        Vec<LeafGroup>,
     ) = groups.into_iter().partition(|g| {
         g.sig
             .dims()
@@ -165,7 +266,7 @@ fn build_component(
 }
 
 fn dim_intersection(
-    groups: &[OwnedGridGroup],
+    groups: &[LeafGroup],
 ) -> SmallVec<[IStr; 4]> {
     let mut iter = groups.iter();
     let first = match iter.next() {
@@ -246,7 +347,7 @@ fn subtree_intersection(
 }
 
 fn pick_majority_dim(
-    groups: &[OwnedGridGroup],
+    groups: &[LeafGroup],
 ) -> IStr {
     let mut counts: BTreeMap<IStr, usize> =
         BTreeMap::new();
@@ -264,7 +365,7 @@ fn pick_majority_dim(
 
 /// Union-find connected-components over the shared-dim graph.
 fn connected_components(
-    groups: &[OwnedGridGroup],
+    groups: &[LeafGroup],
 ) -> Vec<Vec<usize>> {
     let n = groups.len();
     let mut parent: Vec<usize> = (0..n).collect();
@@ -320,16 +421,13 @@ fn connected_components(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
     use super::*;
-    use crate::chunk_plan::ChunkGridSignature;
     use crate::shared::IntoIStr;
 
     fn mk(
         name: &str,
         dims: &[&str],
-    ) -> OwnedGridGroup {
+    ) -> LeafGroup {
         let dim_istrs: SmallVec<[IStr; 4]> = dims
             .iter()
             .map(|d| (*d).istr())
@@ -339,7 +437,7 @@ mod tests {
                 dim_istrs.clone(),
             ),
         );
-        OwnedGridGroup::new(
+        LeafGroup::new(
             sig,
             vec![name.istr()],
             vec![vec![0; dims.len()]],
@@ -454,5 +552,20 @@ mod tests {
                 "expected single Join on blah, got {other:?}"
             ),
         }
+    }
+
+    #[test]
+    fn group_wraps_leaf_transparently() {
+        let leaf = mk("a", &["t"]);
+        let inner_var = leaf.vars[0];
+        let tree = GridJoinTree::Group {
+            name: "model_a".istr(),
+            child: Box::new(GridJoinTree::Leaf(
+                leaf,
+            )),
+        };
+        let leaves = tree.leaves();
+        assert_eq!(leaves.len(), 1);
+        assert_eq!(leaves[0].vars[0], inner_var);
     }
 }

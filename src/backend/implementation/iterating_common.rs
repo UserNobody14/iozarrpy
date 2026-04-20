@@ -15,8 +15,6 @@ use crate::errors::{BackendError, PolarsSnafu};
 use crate::meta::ZarrMeta;
 use crate::shared::FromManyIstrs;
 use crate::shared::IStr;
-use crate::shared::restructure_to_structs;
-
 /// Default batch size in rows when not specified.
 pub(crate) const DEFAULT_BATCH_SIZE: usize =
     10_000;
@@ -214,15 +212,6 @@ pub(crate) fn postprocess_batch(
 
     state.total_rows_yielded += result.height();
 
-    let result = if state.meta.is_hierarchical() {
-        restructure_to_structs(
-            &result,
-            &state.meta,
-        )?
-    } else {
-        result
-    };
-
     project_to_polars_output(
         result,
         state.output_columns.as_deref(),
@@ -245,11 +234,6 @@ pub(crate) fn empty_streaming_schema_batch(
             .meta
             .tidy_schema(Some(keys.as_slice())),
     );
-    let df = if state.meta.is_hierarchical() {
-        restructure_to_structs(&df, &state.meta)?
-    } else {
-        df
-    };
     project_to_polars_output(
         df,
         state.output_columns.as_deref(),
