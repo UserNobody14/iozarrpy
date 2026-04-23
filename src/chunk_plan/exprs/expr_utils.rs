@@ -1,7 +1,7 @@
 use super::expr_walk::walk_expr;
 use super::literals::strip_wrappers;
 use crate::chunk_plan::prelude::*;
-use crate::{IStr, IntoIStr};
+use crate::shared::{IStr, IntoIStr};
 
 pub(super) fn expr_to_col_name(
     e: &Expr,

@@ -10,7 +10,7 @@ use crate::chunk_plan::indexing::types::ChunkGridSignature;
 use crate::errors::{
     BackendError, BackendResult,
 };
-use crate::{IStr, IntoIStr};
+use crate::shared::{IStr, IntoIStr};
 use snafu::prelude::*;
 
 // =============================================================================
@@ -27,6 +27,18 @@ pub struct ChunkSubset {
 }
 
 impl ChunkSubset {
+    /// Construct a [`ChunkSubset`] from explicit per-dim chunk-local ranges.
+    ///
+    /// Used by tests and benches that need to materialize a subset without
+    /// going through [`compute_chunk_subset`].
+    pub fn from_ranges(
+        ranges: Vec<Range<u64>>,
+    ) -> Self {
+        Self {
+            ranges: ranges.into_iter().collect(),
+        }
+    }
+
     fn is_full_chunk(
         &self,
         chunk_shape: &[u64],
@@ -118,27 +130,21 @@ fn compute_chunk_subset(
 // =============================================================================
 
 /// A grid group with deduplicated chunk indices, ready for reading.
-///
-/// Produced by [`GroupedChunkPlan::iter_consolidated_chunks`]. Callers that need
-/// owned signatures and execution-time filters should use
-/// `GroupedChunkPlan::owned_grid_groups_for_io` (`grid_execution` module).
-pub struct ConsolidatedGridGroup<'a> {
-    /// The chunk grid signature for this group.
-    pub sig: &'a ChunkGridSignature,
-    /// Variables sharing this chunk grid.
+/// Owned version of the grid group.
+#[derive(Debug)]
+pub struct OwnedGridGroup {
+    pub sig: Arc<
+        crate::chunk_plan::ChunkGridSignature,
+    >,
     pub vars: Vec<IStr>,
-    /// Deduplicated, sorted chunk indices.
     pub chunk_indices: Vec<Vec<u64>>,
-    /// Per-chunk local subset (parallel to `chunk_indices`).
-    /// `None` entries mean "full chunk" -- no subsetting needed.
     pub chunk_subsets: Vec<Option<ChunkSubset>>,
-    /// Array shape from the chunk grid.
     pub array_shape: Vec<u64>,
 }
 
-impl<'a> ConsolidatedGridGroup<'a> {
+impl OwnedGridGroup {
     pub fn new(
-        sig: &'a ChunkGridSignature,
+        sig: Arc<ChunkGridSignature>,
         vars: Vec<IStr>,
         chunk_indices: Vec<Vec<u64>>,
         chunk_subsets: Vec<Option<ChunkSubset>>,
@@ -153,6 +159,7 @@ impl<'a> ConsolidatedGridGroup<'a> {
         }
     }
 }
+
 /// Grouped chunk plan - maps chunk grid signatures to plans.
 ///
 /// This allows heterogeneous chunk layouts: variables with the same dimensions
@@ -243,9 +250,7 @@ impl GroupedChunkPlan {
     pub fn iter_consolidated_chunks(
         &self,
     ) -> impl Iterator<
-        Item = BackendResult<
-            ConsolidatedGridGroup<'_>,
-        >,
+        Item = BackendResult<OwnedGridGroup>,
     > + '_ {
         self.by_grid.iter().map(
             move |(sig, subsets)| {
@@ -260,7 +265,7 @@ impl GroupedChunkPlan {
                     })?;
                 let array_shape =
                     chunkgrid.array_shape().to_vec();
-                let chunk_shape = sig.chunk_shape();
+                let chunk_shape = sig.retrieval_shape();
 
                 let mut seen: BTreeSet<Vec<u64>> =
                     BTreeSet::new();
@@ -306,9 +311,73 @@ impl GroupedChunkPlan {
                     })
                     .collect();
 
-                Ok(ConsolidatedGridGroup::new(sig, vars, chunk_indices, chunk_subsets, array_shape))
+                Ok(OwnedGridGroup::new(
+                    sig.clone(),
+                    vars,
+                    chunk_indices,
+                    chunk_subsets,
+                    array_shape,
+                ))
             },
         )
+    }
+
+    /// Consolidated groups, optionally clearing for a literal-false predicate.
+    ///
+    /// Drops "redundant dim coordinate" groups: a 1D group whose only variable
+    /// has the same name as its dim **and** that dim already appears in a
+    /// higher-dim variable in `meta`. The higher-dim group materializes the
+    /// dim column via
+    /// [`crate::scan::column_policy::DimMaterialization::FromArray`], so
+    /// scheduling the standalone dim-coord group adds duplicate reads and
+    /// forces an extra `Independent` subtree at plan time.
+    ///
+    /// Auxiliary 1D coords sharing a dim with a larger grid (e.g. `latitude`,
+    /// `longitude`, `station_id` along `point`) are *kept* because the larger
+    /// grid does not materialize them.
+    pub(crate) fn owned_grid_groups_for_io(
+        &self,
+        literal_false_clear: bool,
+        meta: &crate::meta::ZarrMeta,
+    ) -> BackendResult<Vec<OwnedGridGroup>> {
+        if literal_false_clear {
+            return Ok(Vec::new());
+        }
+        let multi_dim_dim_set: BTreeSet<IStr> =
+            meta.all_array_paths()
+                .into_iter()
+                .filter_map(|p| {
+                    meta.array_by_path(p)
+                })
+                .filter(|m| m.dims.len() > 1)
+                .flat_map(|m| {
+                    m.dims
+                        .iter()
+                        .copied()
+                        .collect::<Vec<_>>()
+                })
+                .collect();
+        let groups: Vec<OwnedGridGroup> = self
+            .iter_consolidated_chunks()
+            .collect::<BackendResult<_>>()?;
+        Ok(groups
+            .into_iter()
+            .filter(|g| {
+                let dims = g.sig.dims();
+                if dims.len() != 1 {
+                    return true;
+                }
+                let dim = dims[0];
+                if !multi_dim_dim_set
+                    .contains(&dim)
+                {
+                    return true;
+                }
+                // Only drop when the group is exactly the dim's coordinate.
+                !(g.vars.len() == 1
+                    && g.vars[0] == dim)
+            })
+            .collect())
     }
 
     /// Get the internal var_to_grid map.

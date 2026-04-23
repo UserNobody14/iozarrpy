@@ -11,7 +11,7 @@ use smallvec::SmallVec;
 use super::grouped_selection::ArraySelectionType;
 use super::selection::Emptyable;
 use super::types::ValueRangePresent;
-use crate::IStr;
+use crate::shared::IStr;
 use std::ops::Range;
 
 /// A per-dimension constraint in value-space (deferred resolution).

@@ -3,7 +3,6 @@
 //! This module provides sync functions to convert zarr chunks into Polars DataFrames,
 //! using a generic backend interface that can work with any implementation.
 
-use crate::IStr;
 use crate::chunk_plan::{
     ChunkGridSignature, ChunkSubset,
 };
@@ -24,6 +23,7 @@ use crate::scan::shared::{
     compute_in_bounds_mask,
 };
 use crate::shared::ChunkedDataBackendSync;
+use crate::shared::IStr;
 use polars::prelude::*;
 use snafu::ResultExt;
 
@@ -156,7 +156,7 @@ pub fn chunk_to_df_from_grid_with_backend<
     chunk_subset: Option<&ChunkSubset>,
     meta: &ZarrMeta,
 ) -> BackendResult<DataFrame> {
-    let chunk_shape = sig.chunk_shape();
+    let chunk_shape = sig.retrieval_shape();
     let dims = sig.dims();
 
     // Compute origin from chunk indices

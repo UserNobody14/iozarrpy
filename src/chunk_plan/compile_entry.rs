@@ -2,8 +2,8 @@
 //!
 //! Provides `compute_dims_and_lengths_unified` used during expression compilation.
 
-use crate::IStr;
 use crate::meta::ZarrMeta;
+use crate::shared::IStr;
 
 pub fn compute_dims_and_lengths_unified(
     meta: &ZarrMeta,
