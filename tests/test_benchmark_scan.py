@@ -84,8 +84,11 @@ def _bench_rainbear_scan_zarr_async(path: str) -> pl.DataFrame:
     ],
 )
 def test_bench_orography_chunked_10x10_subset(
-    benchmark, bench_dataset_path: str, impl: str
+    benchmark, bench_dataset_path: str, impl: str, skip_xarray_benchmarks: bool
 ) -> None:
+    if skip_xarray_benchmarks and impl == "xarray_to_polars":
+        pytest.skip("xarray comparison benchmarks disabled")
+
     # Keep results alive so benchmark can't optimize away work.
     fn = {
         "xarray_to_polars": _bench_xarray_to_polars,

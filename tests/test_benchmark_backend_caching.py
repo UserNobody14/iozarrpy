@@ -35,6 +35,11 @@ from tests.zarr_generators import get_list_of_variables
 # ---------------------------------------------------------------------------
 
 
+def _skip_if_xarray_benchmarks_disabled(skip_xarray_benchmarks: bool) -> None:
+    if skip_xarray_benchmarks:
+        pytest.skip("xarray comparison benchmarks disabled")
+
+
 @pytest.fixture(scope="module")
 def bench_dataset_path() -> str:
     """Get the benchmark dataset path.
@@ -49,8 +54,9 @@ def bench_dataset_path() -> str:
 
 
 @pytest.fixture(scope="module")
-def xarray_dataset(bench_dataset_path: str):
+def xarray_dataset(bench_dataset_path: str, skip_xarray_benchmarks: bool):
     """Open xarray dataset once, reuse for all iterations."""
+    _skip_if_xarray_benchmarks_disabled(skip_xarray_benchmarks)
     ds = xr.open_zarr(bench_dataset_path, chunks=None)
     yield ds
     ds.close()
@@ -69,8 +75,9 @@ def multivar_grid_path(baseline_datasets: dict[str, str]) -> str:
 
 
 @pytest.fixture(scope="module")
-def multivar_xarray_dataset(multivar_grid_path: str):
+def multivar_xarray_dataset(multivar_grid_path: str, skip_xarray_benchmarks: bool):
     """Pre-opened xarray handle for the multi-variable grid."""
+    _skip_if_xarray_benchmarks_disabled(skip_xarray_benchmarks)
     ds = xr.open_zarr(multivar_grid_path, chunks=None)
     yield ds
     ds.close()
@@ -263,8 +270,11 @@ def test_bench_single_xarray_reused(benchmark, xarray_dataset) -> None:
 
 
 @pytest.mark.benchmark(group="single_query")
-def test_bench_single_xarray_fresh(benchmark, bench_dataset_path: str) -> None:
+def test_bench_single_xarray_fresh(
+    benchmark, bench_dataset_path: str, skip_xarray_benchmarks: bool
+) -> None:
     """Single query opening fresh xarray each time."""
+    _skip_if_xarray_benchmarks_disabled(skip_xarray_benchmarks)
     out = benchmark(impl_xarray_fresh, bench_dataset_path)
     assert "geopotential_height" in out.columns
 
@@ -305,8 +315,11 @@ def test_bench_multivar_single_xarray_reused(
 
 
 @pytest.mark.benchmark(group="multivar_single")
-def test_bench_multivar_single_xarray_fresh(benchmark, multivar_grid_path: str) -> None:
+def test_bench_multivar_single_xarray_fresh(
+    benchmark, multivar_grid_path: str, skip_xarray_benchmarks: bool
+) -> None:
     """Single multi-variable query opening fresh xarray each time."""
+    _skip_if_xarray_benchmarks_disabled(skip_xarray_benchmarks)
     out = benchmark(impl_multivar_xarray_fresh, multivar_grid_path)
     assert len(out.columns) == len(_MULTIVAR_COLUMNS)
 
@@ -543,8 +556,9 @@ def remote_backend(remote_dataset_path: str | None):
 
 
 @pytest.fixture(scope="module")
-def remote_xarray_dataset(remote_dataset_path: str | None):
+def remote_xarray_dataset(remote_dataset_path: str | None, skip_xarray_benchmarks: bool):
     """Open remote xarray dataset once, reuse for all iterations."""
+    _skip_if_xarray_benchmarks_disabled(skip_xarray_benchmarks)
     if not remote_dataset_path:
         pytest.skip("Set RAINBEAR_REMOTE_MEM for remote benchmarks")
     ds = xr.open_zarr(remote_dataset_path, chunks=None)
@@ -635,8 +649,11 @@ def impl_remote_backend_cached(backend: rainbear.ZarrBackend) -> pl.DataFrame:
 # Single query benchmarks - remote
 
 @pytest.mark.benchmark(group="remote_single")
-def test_bench_remote_xarray_fresh(benchmark, remote_dataset_path: str | None) -> None:
+def test_bench_remote_xarray_fresh(
+    benchmark, remote_dataset_path: str | None, skip_xarray_benchmarks: bool
+) -> None:
     """Single remote query opening fresh xarray each time."""
+    _skip_if_xarray_benchmarks_disabled(skip_xarray_benchmarks)
     if not remote_dataset_path:
         pytest.skip("Set RAINBEAR_REMOTE_MEM for remote benchmarks")
     out = benchmark(impl_remote_xarray_fresh, remote_dataset_path)
@@ -718,8 +735,11 @@ def _remote_multi_query_backend(backend: rainbear.ZarrBackend, n: int = 3) -> li
 
 
 @pytest.mark.benchmark(group="remote_multi_3x")
-def test_bench_remote_multi_xarray_fresh(benchmark, remote_dataset_path: str | None) -> None:
+def test_bench_remote_multi_xarray_fresh(
+    benchmark, remote_dataset_path: str | None, skip_xarray_benchmarks: bool
+) -> None:
     """3 remote queries opening fresh xarray each time (worst case)."""
+    _skip_if_xarray_benchmarks_disabled(skip_xarray_benchmarks)
     if not remote_dataset_path:
         pytest.skip("Set RAINBEAR_REMOTE_MEM for remote benchmarks")
     out = benchmark(_remote_multi_query_xarray_fresh, remote_dataset_path)
