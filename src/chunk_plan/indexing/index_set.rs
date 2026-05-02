@@ -97,6 +97,87 @@ impl RectangleSet {
         }
     }
 
+    /// Restrict one dim to `ranges`, leaving every other dim unconstrained
+    /// (full extent). Returns the empty set if `ranges` is empty.
+    pub(crate) fn from_dim_constraint(
+        dims: SmallVec<[IStr; 4]>,
+        shape: SmallVec<[u64; 4]>,
+        dim: IStr,
+        ranges: Vec<Range<u64>>,
+    ) -> Self {
+        if ranges.is_empty() {
+            return Self::empty(dims, shape);
+        }
+        let dim_idx = dims
+            .iter()
+            .position(|d| *d == dim)
+            .expect("dim must be in universe");
+        let per_dim: SmallVec<
+            [Vec<Range<u64>>; 4],
+        > = dims
+            .iter()
+            .enumerate()
+            .map(|(i, _)| {
+                if i == dim_idx {
+                    ranges.clone()
+                } else {
+                    vec![0..shape[i]]
+                }
+            })
+            .collect();
+        Self::from_per_dim(dims, shape, per_dim)
+    }
+
+    /// Project onto a subset of dims (drop the rest). Constraints on
+    /// dropped dims are forgotten — equivalent to a Minkowski projection
+    /// (∃-quantifying the dropped axes), which is what the per-array chunk
+    /// selection wants.
+    pub(crate) fn project(
+        &self,
+        target_dims: &[IStr],
+    ) -> Self {
+        let target_indices: SmallVec<[usize; 4]> =
+            target_dims
+                .iter()
+                .map(|td| {
+                    self.dims
+                        .iter()
+                        .position(|d| d == td)
+                        .expect(
+                            "target dim must be a \
+                             subset of source dims",
+                        )
+                })
+                .collect();
+        let new_dims: SmallVec<[IStr; 4]> =
+            target_dims.iter().copied().collect();
+        let new_shape: SmallVec<[u64; 4]> =
+            target_indices
+                .iter()
+                .map(|&i| self.shape[i])
+                .collect();
+        let new_rects: Vec<HyperRectangle> = self
+            .rects
+            .iter()
+            .map(|r| {
+                let per_dim: SmallVec<
+                    [Vec<Range<u64>>; 4],
+                > = target_indices
+                    .iter()
+                    .map(|&i| {
+                        r.per_dim[i].clone()
+                    })
+                    .collect();
+                HyperRectangle { per_dim }
+            })
+            .collect();
+        Self {
+            dims: new_dims,
+            shape: new_shape,
+            rects: new_rects,
+        }
+    }
+
     /// True when no cells are represented.
     pub(crate) fn is_empty(&self) -> bool {
         self.rects.is_empty()

@@ -332,12 +332,80 @@ impl ZarrMeta {
         &self,
         variables: Option<&[IStr]>,
     ) -> Vec<IStr> {
-        self.tidy_schema(variables)
-            .iter()
-            .map(|(name, _)| {
-                name.as_str().to_string().istr()
-            })
-            .collect()
+        let var_set: Option<BTreeSet<&str>> =
+            variables.map(|v| {
+                v.iter()
+                    .map(|s| s.as_ref())
+                    .collect()
+            });
+
+        let mut out: Vec<IStr> = Vec::new();
+        let mut seen: BTreeSet<IStr> =
+            BTreeSet::new();
+
+        for dim in &self.dim_analysis.all_dims {
+            out.push(*dim);
+            seen.insert(*dim);
+        }
+
+        for var in &self.root.data_vars {
+            let var_str: &str = var.as_ref();
+            if var_set.as_ref().is_none_or(|vs| {
+                vs.contains(var_str)
+            }) && self
+                .root
+                .arrays
+                .contains_key(var)
+            {
+                out.push(*var);
+                seen.insert(*var);
+            }
+        }
+
+        for var in self.root.arrays.keys() {
+            let var_str: &str = var.as_ref();
+            if seen.contains(var) {
+                continue;
+            }
+            if var_set.as_ref().is_none_or(|vs| {
+                vs.contains(var_str)
+            }) {
+                out.push(*var);
+                seen.insert(*var);
+            }
+        }
+
+        for (child_name, child_node) in
+            &self.root.children
+        {
+            let child_name_str: &str =
+                child_name.as_ref();
+            let should_include =
+                var_set.as_ref().is_none_or(|vs| {
+                    vs.contains(child_name_str)
+                        || child_node.data_vars.iter().any(
+                            |v| {
+                                let v_str: &str =
+                                    v.as_ref();
+                                vs.contains(v_str)
+                                    || vs.contains(
+                                        &format!(
+                                            "{}/{}",
+                                            child_name_str,
+                                            v_str
+                                        )
+                                        .as_str(),
+                                    )
+                            },
+                        )
+                });
+
+            if should_include {
+                out.push(*child_name);
+            }
+        }
+
+        out
     }
 }
 
