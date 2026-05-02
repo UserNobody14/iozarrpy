@@ -7,6 +7,7 @@ use snafu::ensure;
 use crate::backend::implementation::iterating_common::{
     build_batches, distinct_chunks_in_batches,
 };
+use crate::chunk_plan::compile_to_tree_async;
 use crate::chunk_plan::indexing::grid_join_reader::{
     assemble_batch_dataframe, flatten_reads,
 };
@@ -15,9 +16,7 @@ use crate::errors::MaxChunksToReadExceededSnafu;
 use crate::meta::ZarrMeta;
 use crate::scan::async_scan::chunk_to_df_from_grid_with_backend;
 use crate::shared::ChunkedDataBackendAsync;
-use crate::shared::ChunkedExpressionCompilerAsync;
 use crate::shared::HasMetadataBackendAsync;
-use crate::shared::IStr;
 use crate::shared::diagonal_concat_batches;
 /// Eager async scan: drives the [`GridJoinTree`] reader to exhaustion.
 pub(crate) async fn scan_with_backend_async<B>(
@@ -32,7 +31,6 @@ pub(crate) async fn scan_with_backend_async<B>(
 where
     B: ChunkedDataBackendAsync
         + HasMetadataBackendAsync<ZarrMeta>
-        + ChunkedExpressionCompilerAsync
         + Send
         + Sync,
 {
@@ -44,10 +42,12 @@ where
     const DEFAULT_MAX_CONCURRENCY: usize = 32;
     let meta = backend.metadata().await?;
 
-    let (tree, _stats) = backend
-        .clone()
-        .compile_expression_to_tree_async(&expr)
-        .await?;
+    let (tree, _stats) = compile_to_tree_async(
+        &expr,
+        &meta,
+        backend.as_ref(),
+    )
+    .await?;
 
     let batches = match &tree {
         Some(t) => build_batches(t, usize::MAX),
@@ -137,10 +137,8 @@ where
     }
 
     let result = if batch_dfs.is_empty() {
-        let keys: Vec<IStr> =
-            meta.tidy_column_order(None);
         polars::prelude::DataFrame::empty_with_schema(
-            &meta.tidy_schema(Some(keys.as_slice())),
+            &meta.tidy_schema(None),
         )
     } else {
         diagonal_concat_batches(batch_dfs)?

@@ -12,11 +12,10 @@ use crate::backend::implementation::iterating_common::{
 use crate::chunk_plan::indexing::grid_join_reader::{
     assemble_batch_dataframe, flatten_reads,
 };
+use crate::chunk_plan::compile_to_tree_sync;
 use crate::errors::BackendError;
 use crate::errors::MaxChunksToReadExceededSnafu;
-use crate::scan::column_policy::ResolvedColumnPolicy;
 use crate::scan::sync_scan::chunk_to_df_from_grid_with_backend;
-use crate::shared::ChunkedExpressionCompilerSync;
 use crate::shared::FullyCachedZarrBackendSync;
 use crate::shared::IStr;
 use crate::shared::MaybeParIter;
@@ -49,21 +48,10 @@ pub fn scan_zarr_with_backend_sync(
                 cols, &meta,
             )
         });
-    let _enrich_policy =
-        ResolvedColumnPolicy::new(
-            with_columns.clone().or_else(|| {
-                Some(
-                    meta.tidy_column_order(None)
-                        .into_iter()
-                        .collect(),
-                )
-            }),
-            &expr,
-            &meta,
-        );
 
-    let (tree, _stats) = backend
-        .compile_expression_to_tree_sync(&expr)?;
+    let (tree, _stats) = compile_to_tree_sync(
+        &expr, &meta, backend,
+    )?;
 
     // For eager scans we materialize the entire dataset at once, so let each
     // batch be as large as it needs to be. The planner still applies geometry
@@ -122,17 +110,19 @@ pub fn scan_zarr_with_backend_sync(
     }
 
     let result = if batch_dfs.is_empty() {
-        let keys: Vec<IStr> = match &with_columns {
+        let schema = match &with_columns {
             Some(cols) => {
-                cols.iter().cloned().collect()
+                let keys: Vec<IStr> = cols
+                    .iter()
+                    .cloned()
+                    .collect();
+                meta.tidy_schema(Some(
+                    keys.as_slice(),
+                ))
             }
-            None => meta.tidy_column_order(None),
+            None => meta.tidy_schema(None),
         };
-        DataFrame::empty_with_schema(
-            &meta.tidy_schema(Some(
-                keys.as_slice(),
-            )),
-        )
+        DataFrame::empty_with_schema(&schema)
     } else {
         diagonal_concat_batches(batch_dfs)?
     };
