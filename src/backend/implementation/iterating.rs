@@ -13,6 +13,7 @@ use pyo3::PyErr;
 use pyo3::prelude::*;
 use snafu::ensure;
 
+use crate::chunk_plan::compile_to_tree_sync;
 use crate::chunk_plan::indexing::grid_join_reader::{
     assemble_batch_dataframe, flatten_reads,
 };
@@ -22,9 +23,7 @@ use crate::scan::column_policy::ResolvedColumnPolicy;
 use crate::shared::HasMetadataBackendSync;
 use crate::shared::IStr;
 use crate::shared::MaybeParIter;
-use crate::shared::{
-    ChunkedExpressionCompilerSync, FullyCachedZarrBackendSync,
-};
+use crate::shared::FullyCachedZarrBackendSync;
 
 /// Below this many chunk reads per batch the rayon scheduling overhead exceeds
 /// the gain from parallel decode (single-chunk batches in particular regress
@@ -126,10 +125,11 @@ impl ZarrIteratorInner {
         let expanded_with_columns =
             policy.physical_superset().cloned();
 
-        let (tree, _stats) = self
-            .backend
-            .compile_expression_to_tree_sync(
+        let (tree, _stats) =
+            compile_to_tree_sync(
                 &self.expr,
+                &meta,
+                self.backend.as_ref(),
             )?;
 
         let literal_false =

@@ -17,6 +17,7 @@ use snafu::ResultExt;
 use snafu::ensure;
 use tokio::sync::Semaphore;
 
+use crate::chunk_plan::compile_to_tree_async;
 use crate::chunk_plan::indexing::grid_join_reader::{
     assemble_batch_dataframe, flatten_reads,
 };
@@ -25,7 +26,6 @@ use crate::errors::CreateTokioRuntimeForSyncStoreSnafu;
 use crate::errors::MaxChunksToReadExceededSnafu;
 use crate::scan::async_scan::chunk_to_df_from_grid_with_backend;
 use crate::scan::column_policy::ResolvedColumnPolicy;
-use crate::shared::ChunkedExpressionCompilerAsync;
 use crate::shared::HasMetadataBackendAsync;
 use crate::shared::IStr;
 
@@ -118,8 +118,12 @@ impl IcechunkIterator {
                 );
                 let expanded_with_columns = policy.physical_superset().cloned();
 
-                let (tree, _stats) = backend
-                    .compile_expression_to_tree_async(&expr)
+                let (tree, _stats) =
+                    compile_to_tree_async(
+                        &expr,
+                        &meta,
+                        backend.as_ref(),
+                    )
                     .await?;
 
                 let literal_false =
