@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime
+import os
 import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -15,6 +16,41 @@ from zarr.codecs import BloscCodec, BloscShuffle
 OUTPUT_DIR = Path(__file__).resolve().parent / "output-datasets"
 
 BLOSC_ZSTD = BloscCodec(cname="zstd", clevel=5, shuffle=BloscShuffle.shuffle)
+
+
+def _skip_xarray_benchmarks_enabled(config: pytest.Config) -> bool:
+    env_value = os.environ.get("RAINBEAR_SKIP_XARRAY_BENCHMARKS", "")
+    return bool(config.getoption("--rainbear-skip-xarray-benchmarks")) or env_value.lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def pytest_addoption(parser: pytest.Parser) -> None:
+    parser.addoption(
+        "--rainbear-skip-xarray-benchmarks",
+        action="store_true",
+        default=False,
+        help="Skip xarray comparison benchmarks when profiling rainbear itself.",
+    )
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    if not _skip_xarray_benchmarks_enabled(config):
+        return
+
+    skip_marker = pytest.mark.skip(reason="xarray comparison benchmarks disabled")
+    for item in items:
+        if item.get_closest_marker("benchmark") and "xarray" in item.nodeid.lower():
+            item.add_marker(skip_marker)
+
+
+@pytest.fixture(scope="session")
+def skip_xarray_benchmarks(request: pytest.FixtureRequest) -> bool:
+    return _skip_xarray_benchmarks_enabled(request.config)
+
 
 @pytest.fixture
 def output_dir() -> Path:
