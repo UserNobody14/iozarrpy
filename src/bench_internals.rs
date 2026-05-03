@@ -25,8 +25,8 @@ pub use crate::shared::{
 
 pub use crate::chunk_plan::exprs::expr_plan::ExprPlan;
 pub use crate::chunk_plan::{
-    ChunkGridSignature, ChunkSubset, LazyCompileCtx,
-    compile_expr,
+    ChunkGridSignature, ChunkSubset,
+    LazyCompileCtx, compile_expr,
     compute_dims_and_lengths_unified,
 };
 

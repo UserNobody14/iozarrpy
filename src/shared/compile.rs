@@ -48,7 +48,8 @@ pub trait ChunkedExpressionCompilerAsync:
         Self: Sized,
     {
         let meta = self.metadata().await?;
-        compile_to_tree_async(expr, &meta, self).await
+        compile_to_tree_async(expr, &meta, self)
+            .await
     }
 }
 

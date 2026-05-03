@@ -58,12 +58,12 @@ where
     fn from_istrs(
         istrs: impl IntoIterator<Item = &'a IStr>,
     ) -> [T; COUNT] {
-        return istrs
+        istrs
             .into_iter()
             .map(|istr| T::from_istr(*istr))
             .collect::<Vec<T>>()
             .try_into()
-            .unwrap_or_else(|_| panic!("Expected exactly COUNT elements"));
+            .unwrap_or_else(|_| panic!("Expected exactly COUNT elements"))
     }
 }
 
@@ -84,13 +84,13 @@ impl<T: FromIStr, I: Borrow<IStr>, const N: usize>
     fn from_istrs(
         istrs: impl IntoIterator<Item = I>,
     ) -> SmallVec<[T; N]> {
-        return istrs
+        istrs
             .into_iter()
             .map(|istr| {
                 T::from_istr(*istr.borrow())
             })
             .collect::<Vec<T>>()
-            .into();
+            .into()
     }
 }
 

@@ -856,8 +856,10 @@ fn nest_columns_recursively(
     use std::collections::BTreeMap;
 
     let mut leaves: Vec<Column> = Vec::new();
-    let mut groups: BTreeMap<String, Vec<Column>> =
-        BTreeMap::new();
+    let mut groups: BTreeMap<
+        String,
+        Vec<Column>,
+    > = BTreeMap::new();
     for col in cols {
         let name: &str = col.name().as_str();
         if let Some((head, tail)) =
@@ -1064,10 +1066,11 @@ mod tests {
         let l1_struct = l1.struct_().unwrap();
         let l1_field_series =
             l1_struct.fields_as_series();
-        let l1_fields: Vec<&str> = l1_field_series
-            .iter()
-            .map(|s| s.name().as_str())
-            .collect();
+        let l1_fields: Vec<&str> =
+            l1_field_series
+                .iter()
+                .map(|s| s.name().as_str())
+                .collect();
         assert!(l1_fields.contains(&"level_2"));
         assert!(l1_fields.contains(&"level_3"));
     }
