@@ -7,6 +7,7 @@ mod traits;
 mod zarr;
 
 pub use options::BackendOptions;
+pub(crate) use options::AssumeSortedDims;
 pub(crate) use parallel::MaybeParIter;
 
 // Re-export commonly used traits
