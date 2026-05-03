@@ -20,12 +20,23 @@ Environment:
   RUSTFLAGS     Rust flags used while running benchmarks. Default: -C debuginfo=1
   RAINBEAR_SKIP_XARRAY_BENCHMARKS
                 Set to 1/true/yes/on to skip xarray comparison benchmarks.
+  RAINBEAR_REUSE_TEST_DATASETS
+                Set to 1/true/yes/on after pre-generating datasets to keep
+                xarray/zarr dataset creation out of the perf recording.
+  RAINBEAR_PREGENERATE_TEST_DATASETS
+                Set to 1/true/yes/on to generate benchmark datasets before
+                perf recording and then run with RAINBEAR_REUSE_TEST_DATASETS=1.
+  RAINBEAR_GENERATE_TEST_DATASET_GROUPS
+                Dataset groups for pre-generation. Default: benchmark.
 
 Examples:
   scripts/profile-benchmarks.sh
   PERCENT_LIMIT=0.1 scripts/profile-benchmarks.sh -- uv run pytest tests/test_benchmark_novel_queries.py -m benchmark
   DSO_FILTER=_core.abi3.so scripts/profile-benchmarks.sh -- uv run pytest -m benchmark -k concurrent_10q
   RAINBEAR_SKIP_XARRAY_BENCHMARKS=1 scripts/profile-benchmarks.sh -- uv run pytest -m benchmark
+  uv run pytest --rainbear-generate-test-datasets-only
+  RAINBEAR_PREGENERATE_TEST_DATASETS=1 RAINBEAR_SKIP_XARRAY_BENCHMARKS=1 scripts/profile-benchmarks.sh
+  RAINBEAR_REUSE_TEST_DATASETS=1 RAINBEAR_SKIP_XARRAY_BENCHMARKS=1 scripts/profile-benchmarks.sh -- uv run pytest -m benchmark
 EOF
 }
 
@@ -68,6 +79,14 @@ summary="${out_dir}/profile-summary.md"
 echo "Output directory: ${out_dir}"
 echo "Benchmark command: ${bench_cmd[*]}"
 echo "RUSTFLAGS=${RUSTFLAGS}"
+
+case "${RAINBEAR_PREGENERATE_TEST_DATASETS:-}" in
+  1|true|TRUE|yes|YES|on|ON)
+    echo "Pre-generating test datasets outside perf recording..."
+    uv run pytest --rainbear-generate-test-datasets-only
+    export RAINBEAR_REUSE_TEST_DATASETS=1
+    ;;
+esac
 
 perf record \
   -F "${perf_freq}" \

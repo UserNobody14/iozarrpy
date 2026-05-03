@@ -858,13 +858,7 @@ fn drop_redundant_dim_coord_groups(
     let multi_dim_dims: BTreeSet<IStr> = groups
         .iter()
         .filter(|g| g.sig.dims().len() > 1)
-        .flat_map(|g| {
-            g.sig
-                .dims()
-                .iter()
-                .copied()
-                .collect::<Vec<_>>()
-        })
+        .flat_map(|g| g.sig.dims().to_vec())
         .collect();
     groups
         .into_iter()

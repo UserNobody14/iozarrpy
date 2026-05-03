@@ -20,4 +20,6 @@ pub use builder::{
     PlannerStats, compile_to_tree_async,
     compile_to_tree_sync,
 };
-pub use grid_join_tree::{ChunkSubset, GridJoinTree};
+pub use grid_join_tree::{
+    ChunkSubset, GridJoinTree,
+};

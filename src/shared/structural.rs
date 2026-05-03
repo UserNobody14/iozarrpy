@@ -3,8 +3,8 @@ use snafu::ResultExt;
 use std::collections::BTreeSet;
 
 use crate::errors::{BackendResult, PolarsSnafu};
-use crate::meta::path::ZarrPath;
 use crate::meta::ZarrMeta;
+use crate::meta::path::ZarrPath;
 use crate::shared::{IStr, IntoIStr};
 
 /// Diagonal-concatenate batch DataFrames produced by the

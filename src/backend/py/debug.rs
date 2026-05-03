@@ -141,7 +141,9 @@ fn build_group_chunks(
 }
 
 fn grids_from_tree(
-    tree: Option<&crate::chunk_plan::GridJoinTree>,
+    tree: Option<
+        &crate::chunk_plan::GridJoinTree,
+    >,
 ) -> Vec<GridInfo> {
     let Some(tree) = tree else {
         return Vec::new();

@@ -17,7 +17,7 @@ use crate::shared::FromManyIstrs;
 use crate::shared::IStr;
 /// Default batch size in rows when not specified.
 pub(crate) const DEFAULT_BATCH_SIZE: usize =
-    10_000;
+    50_000;
 
 /// Top-level boolean literal after stripping [`Expr::Alias`], if any.
 pub(crate) fn expr_top_literal_bool(
