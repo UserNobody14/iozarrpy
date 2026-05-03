@@ -103,22 +103,16 @@ impl ZarrIteratorInner {
         &mut self,
     ) -> Result<(), PyErr> {
         let meta = self.backend.metadata()?;
-        let effective_with_columns = self
-            .with_columns
-            .clone()
-            .or_else(|| {
+        let with_set: Option<BTreeSet<IStr>> =
+            if let Some(cols) = &self.with_columns {
+                Some(cols.iter().copied().collect())
+            } else {
                 Some(
                     meta.tidy_column_order(None)
                         .into_iter()
                         .collect(),
                 )
-            });
-        let with_set: Option<BTreeSet<IStr>> =
-            effective_with_columns.as_ref().map(
-                |cols| {
-                    cols.iter().cloned().collect()
-                },
-            );
+            };
         let policy = ResolvedColumnPolicy::new(
             with_set, &self.expr, &meta,
         );
@@ -240,23 +234,23 @@ impl ZarrIteratorInner {
                 continue;
             }
 
-            let backend = self.backend.clone();
+            let backend = Arc::clone(&self.backend);
             let expanded_with_columns = state
                 .expanded_with_columns
                 .clone();
-            let meta = state.meta.clone();
+            let meta = Arc::clone(&state.meta);
 
             let chunk_dfs: Vec<(usize, DataFrame)> = reads
                 .maybe_par_iter(PARALLEL_CHUNK_READS)
                 .map_collect(|r| {
                     let df = chunk_to_df_from_grid_with_backend_sync(
                         backend.as_ref(),
-                        r.idx.clone(),
+                        r.idx.as_ref(),
                         r.sig.as_ref(),
-                        &r.array_shape,
-                        &r.vars,
+                        r.array_shape.as_ref(),
+                        r.vars.as_ref(),
                         expanded_with_columns.as_ref(),
-                        r.subset.as_ref(),
+                        r.subset.as_deref(),
                         &meta,
                     )?;
                     Ok::<_, crate::errors::BackendError>((r.leaf_idx, df))

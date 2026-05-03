@@ -88,7 +88,7 @@ pub(crate) fn output_columns_for_streaming_batch(
         .dim_analysis
         .all_dims
         .iter()
-        .cloned()
+        .copied()
         .collect();
 
     let append_from_expanded =
@@ -130,7 +130,7 @@ pub(crate) fn output_columns_for_streaming_batch(
             let mut out =
                 meta.tidy_column_order(None);
             let mut seen: BTreeSet<IStr> =
-                out.iter().cloned().collect();
+                out.iter().copied().collect();
             append_from_expanded(
                 &mut out, &mut seen,
             );
@@ -138,9 +138,9 @@ pub(crate) fn output_columns_for_streaming_batch(
         }
         Some(req) => {
             let mut out: Vec<IStr> =
-                req.iter().cloned().collect();
+                req.iter().copied().collect();
             let mut seen: BTreeSet<IStr> =
-                out.iter().cloned().collect();
+                out.iter().copied().collect();
             append_from_expanded(
                 &mut out, &mut seen,
             );
@@ -162,7 +162,7 @@ pub(crate) fn project_to_polars_output(
     }
     let names: Vec<PlSmallStr> =
         Vec::<PlSmallStr>::from_istrs(
-            cols.iter().cloned(),
+            cols.iter().copied(),
         );
     let filtered_names: Vec<PlSmallStr> = names
         .into_iter()

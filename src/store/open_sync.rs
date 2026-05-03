@@ -38,7 +38,7 @@ impl OpenedStore {
         >,
     ) -> Result<OpenedArraySync, BackendError>
     {
-        let strtraits = self.store.clone();
+        let strtraits = Arc::clone(&self.store);
         let norm = normalize_path(var);
 
         let array = if let Some(metadata) =

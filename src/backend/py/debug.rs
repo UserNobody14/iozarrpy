@@ -41,7 +41,7 @@ pub(crate) struct GridInfo {
 fn shard_info_from_outer_grid(
     outer_idx: &[u64],
     outer_shape: &[u64],
-    array_shape: Option<&Vec<u64>>,
+    array_shape: Option<&[u64]>,
 ) -> ShardInfo {
     let indices = outer_idx.to_vec();
     let origin: Vec<u64> = outer_idx
@@ -77,14 +77,15 @@ fn shard_info_from_outer_grid(
 }
 
 fn build_group_chunks(
-    inner_chunk_indices: &[Vec<u64>],
+    inner_chunk_indices: &[Arc<[u64]>],
     inner_chunk_shape: &[u64],
     sig: &ChunkGridSignature,
-    array_shape: &Option<Vec<u64>>,
+    array_shape: Option<&[u64]>,
 ) -> Vec<ChunkInfo> {
     let mut chunks: Vec<ChunkInfo> = Vec::new();
     let is_sharded = sig.is_sharded();
     for inner_idx in inner_chunk_indices {
+        let inner_idx = inner_idx.as_ref();
         if is_sharded {
             let outer_shape =
                 sig.outer_chunk_shape();
@@ -112,7 +113,7 @@ fn build_group_chunks(
                 shard_info_from_outer_grid(
                     &outer_idx,
                     outer_shape,
-                    array_shape.as_ref(),
+                    array_shape,
                 );
 
             let origin: Vec<u64> = inner_idx
@@ -122,7 +123,7 @@ fn build_group_chunks(
                 .collect();
 
             chunks.push(ChunkInfo {
-                indices: inner_idx.clone(),
+                indices: inner_idx.to_vec(),
                 origin,
                 shape: inner_chunk_shape.to_vec(),
                 shards: vec![shard],
@@ -134,7 +135,7 @@ fn build_group_chunks(
                 .map(|(&i, &s)| i * s)
                 .collect();
             chunks.push(ChunkInfo {
-                indices: inner_idx.clone(),
+                indices: inner_idx.to_vec(),
                 origin,
                 shape: inner_chunk_shape.to_vec(),
                 shards: vec![],
@@ -154,7 +155,7 @@ fn grids_from_tree(
     };
     let mut grids: Vec<GridInfo> = Vec::new();
     for leaf in tree.leaves() {
-        let sig = leaf.sig.clone();
+        let sig = Arc::clone(&leaf.sig);
         let dims: Vec<String> = sig
             .dims()
             .iter()
@@ -171,7 +172,7 @@ fn grids_from_tree(
             &leaf.chunk_indices,
             &inner_chunk_shape,
             &sig,
-            &Some(leaf.array_shape.clone()),
+            Some(leaf.array_shape.as_ref()),
         );
         grids.push(GridInfo {
             dims,
@@ -190,8 +191,7 @@ pub(crate) async fn extract_grids<
     backend: Arc<B>,
     expr: polars::prelude::Expr,
 ) -> PyResult<(Vec<GridInfo>, u64)> {
-    let (tree, _stats) = backend
-        .clone()
+    let (tree, _stats) = Arc::clone(&backend)
         .compile_expression_to_tree_async(&expr)
         .await?;
     Ok((grids_from_tree(tree.as_ref()), 0))
@@ -205,8 +205,7 @@ pub(crate) fn extract_grids_sync<
     backend: Arc<B>,
     expr: polars::prelude::Expr,
 ) -> PyResult<(Vec<GridInfo>, u64)> {
-    let (tree, _stats) = backend
-        .clone()
+    let (tree, _stats) = Arc::clone(&backend)
         .compile_expression_to_tree_sync(&expr)?;
     Ok((grids_from_tree(tree.as_ref()), 0))
 }
