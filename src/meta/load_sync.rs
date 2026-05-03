@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use crate::errors::BackendResult;
 use crate::meta::shared::load_zarr_meta_inner;
 
@@ -14,12 +16,12 @@ pub fn load_zarr_meta_from_opened(
 ) -> BackendResult<ZarrMeta> {
     crate::codec_compat::ensure_zarr_compat_registered();
 
-    let store = opened.store.clone();
+    let store = Arc::clone(&opened.store);
     let root_path = opened.root.clone();
     let root_path_str: &str = root_path.as_ref();
 
     let group = zarrs::group::Group::open(
-        store.clone(),
+        Arc::clone(&store),
         &root_path,
     )?;
     let nodes = group.traverse()?;

@@ -384,7 +384,7 @@ impl<'a, B> GridJoinTreeBuilder<'a, B> {
             } => {
                 let mut dim_set: BTreeSet<IStr> =
                     BTreeSet::new();
-                for rect in &rects.rects {
+                for rect in rects.rects.iter() {
                     for (i, dim_ranges) in rect
                         .per_dim
                         .iter()
@@ -733,10 +733,11 @@ fn group_vars_by_signature(
             outer_chunk_shape,
             inner_chunk_shape,
         )?;
-        let sig_arc = sig_cache
-            .entry(sig.clone())
-            .or_insert_with(|| Arc::new(sig))
-            .clone();
+        let sig_arc = Arc::clone(
+            sig_cache
+                .entry(sig.clone())
+                .or_insert_with(|| Arc::new(sig)),
+        );
         by_sig
             .entry(sig_arc)
             .or_default()
@@ -794,13 +795,13 @@ fn build_one_group(
         })?;
     let chunk_grid: Arc<ChunkGrid> =
         match &arr_meta.inner_chunk_grid {
-            Some(g) => g.clone(),
+            Some(g) => Arc::clone(g),
             None => {
-                arr_meta.outer_chunk_grid.clone()
+                Arc::clone(&arr_meta.outer_chunk_grid)
             }
         };
-    let array_shape: Vec<u64> =
-        chunk_grid.array_shape().to_vec();
+    let array_shape: std::sync::Arc<[u64]> =
+        chunk_grid.array_shape().to_vec().into();
     let chunk_shape: Vec<u64> = arr_meta
         .chunk_shape
         .iter()
@@ -825,24 +826,26 @@ fn build_one_group(
             seen.insert(idx.to_vec());
         }
     }
-    let chunk_indices: Vec<Vec<u64>> =
-        seen.into_iter().collect();
-    let chunk_subsets: Vec<Option<ChunkSubset>> =
-        chunk_indices
-            .iter()
-            .map(|idx| {
-                compute_chunk_subset(
-                    idx,
-                    &chunk_shape,
-                    &array_shape,
-                    &subsets,
-                )
-            })
-            .collect();
+    let chunk_indices: Vec<std::sync::Arc<[u64]>> =
+        seen.into_iter().map(Into::into).collect();
+    let chunk_subsets: Vec<
+        Option<std::sync::Arc<ChunkSubset>>,
+    > = chunk_indices
+        .iter()
+        .map(|idx| {
+            compute_chunk_subset(
+                idx.as_ref(),
+                &chunk_shape,
+                array_shape.as_ref(),
+                &subsets,
+            )
+            .map(std::sync::Arc::new)
+        })
+        .collect();
 
     Ok(Some(OwnedGridGroup::new(
         sig,
-        sig_vars,
+        sig_vars.into(),
         chunk_indices,
         chunk_subsets,
         array_shape,
@@ -898,10 +901,11 @@ fn compute_chunk_subset(
         .collect();
 
     // Bounding box of the union of subset∩chunk intervals, per dim.
+    // Initialize with inverse bounds so first intersection updates them.
     let mut bbox_start: Vec<u64> =
-        chunk_end.clone();
+        std::iter::repeat(u64::MAX).take(ndim).collect();
     let mut bbox_end: Vec<u64> =
-        chunk_start.clone();
+        std::iter::repeat(0u64).take(ndim).collect();
 
     for subset in subsets {
         let ranges = subset.to_ranges();

@@ -274,7 +274,7 @@ impl PyIcechunkBackend {
         let expr = extract_expr(predicate)?;
         let expr2 = expr.clone();
 
-        let backend = self.inner.clone();
+        let backend = Arc::clone(&self.inner);
 
         future_into_py(py, async move {
             let df = scan_with_backend_async(
@@ -347,7 +347,7 @@ impl PyIcechunkBackend {
         });
 
         IcechunkIterator::new(
-            self.inner.clone(),
+            Arc::clone(&self.inner),
             prd,
             with_cols_set,
             max_chunks_to_read,
@@ -397,7 +397,7 @@ impl PyIcechunkBackend {
         py: Python<'py>,
         predicate: &Bound<'py, PyAny>,
     ) -> PyResult<Py<PyAny>> {
-        let backend = self.inner.clone();
+        let backend = Arc::clone(&self.inner);
         let expr = extract_expr(predicate)?;
 
         // Create a runtime to block on async operations (same pattern as schema())
@@ -423,7 +423,7 @@ impl PyIcechunkBackend {
         &self,
         py: Python<'py>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let backend = self.inner.clone();
+        let backend = Arc::clone(&self.inner);
         future_into_py(py, async move {
             backend.clear().await;
             Ok(())
@@ -435,7 +435,7 @@ impl PyIcechunkBackend {
         &self,
         py: Python<'py>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let backend = self.inner.clone();
+        let backend = Arc::clone(&self.inner);
         future_into_py(py, async move {
             backend.clear_all_caches().await;
             Ok(())
@@ -447,7 +447,7 @@ impl PyIcechunkBackend {
         &self,
         py: Python<'py>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let backend = self.inner.clone();
+        let backend = Arc::clone(&self.inner);
         future_into_py(py, async move {
             let stats =
                 backend.cache_stats().await;

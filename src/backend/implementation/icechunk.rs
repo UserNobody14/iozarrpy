@@ -103,7 +103,7 @@ impl ChunkedDataBackendAsync
         chunk_idx: &[u64],
     ) -> Result<Arc<ColumnData>, BackendError>
     {
-        let store = self.store.clone();
+        let store = Arc::clone(&self.store);
 
         // Clone the Arc values and drop the guard before await to keep the future Send
         let existing = self
@@ -113,8 +113,8 @@ impl ChunkedDataBackendAsync
             .get(var)
             .map(|opened| {
                 (
-                    opened.array.clone(),
-                    opened.cache.clone(),
+                    Arc::clone(&opened.array),
+                    Arc::clone(&opened.cache),
                 )
             });
 

@@ -7,6 +7,7 @@
 //! and exposes `iter_subsets` to feed the chunk grid downstream.
 
 use std::ops::Range;
+use std::sync::Arc;
 
 use smallvec::SmallVec;
 use zarrs::array::ArraySubset;
@@ -26,11 +27,11 @@ pub(crate) struct HyperRectangle {
 /// A union of [`HyperRectangle`]s sharing the same dim ordering. Used by
 /// the new chunk-plan builder to accumulate index-range constraints across
 /// logical OR / AND / NOT.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub(crate) struct RectangleSet {
     pub(crate) dims: SmallVec<[IStr; 4]>,
     pub(crate) shape: SmallVec<[u64; 4]>,
-    pub(crate) rects: Vec<HyperRectangle>,
+    pub(crate) rects: Arc<[HyperRectangle]>,
 }
 
 impl HyperRectangle {
@@ -53,7 +54,7 @@ impl RectangleSet {
         Self {
             dims,
             shape,
-            rects: Vec::new(),
+            rects: Arc::from([] as [HyperRectangle; 0]),
         }
     }
 
@@ -73,7 +74,7 @@ impl RectangleSet {
         Self {
             dims,
             shape,
-            rects: vec![rect],
+            rects: Arc::from([rect]),
         }
     }
 
@@ -91,9 +92,9 @@ impl RectangleSet {
         Self {
             dims,
             shape,
-            rects: vec![HyperRectangle {
+            rects: Arc::from([HyperRectangle {
                 per_dim,
-            }],
+            }]),
         }
     }
 
@@ -174,7 +175,7 @@ impl RectangleSet {
         Self {
             dims: new_dims,
             shape: new_shape,
-            rects: new_rects,
+            rects: Arc::from(new_rects),
         }
     }
 
@@ -208,7 +209,7 @@ impl RectangleSet {
         Self {
             dims: self.dims.clone(),
             shape: self.shape.clone(),
-            rects,
+            rects: Arc::from(rects),
         }
     }
 
@@ -227,8 +228,8 @@ impl RectangleSet {
             "RectangleSet::intersect requires matching shape"
         );
         let mut rects = Vec::new();
-        for a in &self.rects {
-            for b in &other.rects {
+        for a in self.rects.iter() {
+            for b in other.rects.iter() {
                 let inter = intersect_rects(a, b);
                 if !inter.is_empty() {
                     rects.push(inter);
@@ -238,7 +239,7 @@ impl RectangleSet {
         Self {
             dims: self.dims.clone(),
             shape: self.shape.clone(),
-            rects,
+            rects: Arc::from(rects),
         }
     }
 
@@ -260,7 +261,7 @@ impl RectangleSet {
         let mut current: Vec<HyperRectangle> =
             self.rects.to_vec();
 
-        for s in &other.rects {
+        for s in other.rects.iter() {
             let mut next = Vec::new();
             for a in &current {
                 next.extend(
@@ -278,7 +279,7 @@ impl RectangleSet {
         Self {
             dims: self.dims.clone(),
             shape: self.shape.clone(),
-            rects: current,
+            rects: Arc::from(current),
         }
     }
 

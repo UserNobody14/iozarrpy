@@ -264,7 +264,7 @@ fn add_var_step(
         return Ok(());
     };
     let var_dims: Vec<IStr> =
-        var_meta.dims.iter().cloned().collect();
+        var_meta.dims.iter().copied().collect();
     let (chunk_indices, offsets) =
         compute_var_chunk_indices(
             primary_idx,
@@ -334,9 +334,9 @@ pub(crate) fn build_chunk_physical_plan(
     with_columns: Option<&BTreeSet<IStr>>,
 ) -> BackendResult<ChunkPhysicalPlan> {
     let sig_dims: BTreeSet<IStr> =
-        primary_dims.iter().cloned().collect();
+        primary_dims.iter().copied().collect();
     let vars_in_group: BTreeSet<IStr> =
-        group_vars.iter().cloned().collect();
+        group_vars.iter().copied().collect();
 
     let mut reads_acc: BTreeMap<IStr, ReadSpec> =
         BTreeMap::new();

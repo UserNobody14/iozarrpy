@@ -154,7 +154,7 @@ criterion = { version = "0.8", features = ["html_reports"] }
 default = ["extension-module"]
 # extension-module: Enable for Python extension builds (maturin), disable for cargo test
 extension-module = ["pyo3/extension-module"]
-tokio-console = ["dep:console-subscriber", "dep:tracing", "tokio/tracing"]
+tokio-console = ["console-subscriber", "tracing", "tokio/tracing"]
 bench = []
 
 [[bench]]
@@ -179,3 +179,15 @@ codegen-units = 1
 inherits = "dev"
 debug = "line-tables-only"
 codegen-units = 256
+
+# Patch zarrs to use the fork with consolidated metadata support
+[patch.crates-io]
+zarrs = { git = "https://github.com/UserNobody14/zarrs.git", branch = "main" }
+zarrs_storage = { git = "https://github.com/UserNobody14/zarrs.git", branch = "main" }
+zarrs_metadata = { git = "https://github.com/UserNobody14/zarrs.git", branch = "main" }
+zarrs_metadata_ext = { git = "https://github.com/UserNobody14/zarrs.git", branch = "main" }
+zarrs_data_type = { git = "https://github.com/UserNobody14/zarrs.git", branch = "main" }
+zarrs_chunk_grid = { git = "https://github.com/UserNobody14/zarrs.git", branch = "main" }
+zarrs_chunk_key_encoding = { git = "https://github.com/UserNobody14/zarrs.git", branch = "main" }
+zarrs_codec = { git = "https://github.com/UserNobody14/zarrs.git", branch = "main" }
+zarrs_plugin = { git = "https://github.com/UserNobody14/zarrs.git", branch = "main" }
