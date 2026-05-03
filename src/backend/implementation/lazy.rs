@@ -88,12 +88,12 @@ pub fn scan_zarr_with_backend_sync(
                 .map_collect(|r| {
                     let df = chunk_to_df_from_grid_with_backend(
                         backend,
-                        r.idx.clone(),
+                        r.idx.as_ref(),
                         r.sig.as_ref(),
-                        &r.array_shape,
-                        &r.vars,
+                        r.array_shape.as_ref(),
+                        r.vars.as_ref(),
                         chunk_expanded.as_ref(),
-                        r.subset.as_ref(),
+                        r.subset.as_deref(),
                         &meta,
                     )?;
                     Ok::<_, BackendError>((r.leaf_idx, df))
@@ -114,7 +114,7 @@ pub fn scan_zarr_with_backend_sync(
             Some(cols) => {
                 let keys: Vec<IStr> = cols
                     .iter()
-                    .cloned()
+                    .copied()
                     .collect();
                 meta.tidy_schema(Some(
                     keys.as_slice(),

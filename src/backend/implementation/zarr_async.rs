@@ -97,26 +97,25 @@ where
 
         let mut batch_futs = futures::stream::iter(batch_work)
         .map(|(batch_idx, plan, reads)| {
-            let backend = backend.clone();
-            let meta = meta.clone();
-            let semaphore = semaphore.clone();
+            let backend = Arc::clone(&backend);
+            let meta = Arc::clone(&meta);
+            let semaphore = Arc::clone(&semaphore);
 
             async move {
                 let mut futs =
                     FuturesUnordered::new();
                 for r in reads {
                     let sem =
-                        semaphore.clone();
-                    let backend = backend.clone();
-                    let meta = meta.clone();
+                        Arc::clone(&semaphore);
+                    let backend = Arc::clone(&backend);
+                    let meta = Arc::clone(&meta);
                     let leaf_idx = r.leaf_idx;
-                    let sig = r.sig.clone();
+                    let sig = Arc::clone(&r.sig);
                     let array_shape =
-                        r.array_shape.clone();
-                    let vars = r.vars.clone();
-                    let idx = r.idx.clone();
-                    let subset =
-                        r.subset.clone();
+                        Arc::clone(&r.array_shape);
+                    let vars = Arc::clone(&r.vars);
+                    let idx = Arc::clone(&r.idx);
+                    let subset = r.subset.clone();
 
                     futs.push(async move {
                         let _permit = sem
@@ -128,12 +127,12 @@ where
                         let df =
                             chunk_to_df_from_grid_with_backend(
                                 backend.as_ref(),
-                                idx,
+                                idx.as_ref(),
                                 sig.as_ref(),
-                                &array_shape,
-                                &vars,
+                                array_shape.as_ref(),
+                                vars.as_ref(),
                                 None,
-                                subset.as_ref(),
+                                subset.as_deref(),
                                 &meta,
                             )
                             .await?;

@@ -778,7 +778,7 @@ pub fn combine_per_leaf(
             };
             let restructured =
                 wrap_columns_into_group_struct(
-                    &child_df, *name,
+                    child_df, *name,
                 )?;
             Ok(Some(restructured))
         }
@@ -794,41 +794,48 @@ pub fn combine_per_leaf(
 /// the [`crate::shared::structural::restructure_to_structs`] semantics:
 /// `"level_1/level_2/var_2"` ends up as `level_1.level_2.var_2`.
 fn wrap_columns_into_group_struct(
-    df: &DataFrame,
+    df: DataFrame,
     group_name: IStr,
 ) -> BackendResult<DataFrame> {
     let group_str: &str = group_name.as_ref();
     let prefix = format!("{group_str}/");
+    let height = df.height();
+    let cols = df.into_columns();
 
     let mut kept: Vec<Column> = Vec::new();
     let mut grouped: Vec<Column> = Vec::new();
-    for col in df.columns() {
-        let name: &str = col.name().as_str();
+    for col in cols {
+        let full_name = col.name().to_string();
         if let Some(field_name) =
-            name.strip_prefix(&prefix)
+            full_name.strip_prefix(&prefix)
         {
             let field_pl: PlSmallStr =
                 field_name.into();
-            let renamed =
-                col.clone().with_name(field_pl);
+            let renamed = col.with_name(field_pl);
             grouped.push(renamed);
         } else {
-            kept.push(col.clone());
+            kept.push(col);
         }
     }
 
     if grouped.is_empty() {
-        return Ok(df.clone());
+        return DataFrame::new(height, kept).context(
+            PolarsSnafu {
+                message:
+                    "Error rebuilding DataFrame after group wrap"
+                        .to_string(),
+            },
+        );
     }
 
     let nested = nest_columns_recursively(
         grouped,
-        df.height(),
+        height,
     )?;
 
     let struct_col = StructChunked::from_columns(
         group_str.into(),
-        df.height(),
+        height,
         &nested,
     )
     .context(PolarsSnafu {
@@ -838,7 +845,7 @@ fn wrap_columns_into_group_struct(
     })?;
     kept.push(struct_col.into_column());
 
-    DataFrame::new(df.height(), kept).context(
+    DataFrame::new(height, kept).context(
         PolarsSnafu {
             message:
                 "Error building Group DataFrame"
@@ -861,13 +868,11 @@ fn nest_columns_recursively(
         Vec<Column>,
     > = BTreeMap::new();
     for col in cols {
-        let name: &str = col.name().as_str();
+        let full_name = col.name().to_string();
         if let Some((head, tail)) =
-            name.split_once('/')
+            full_name.split_once('/')
         {
-            let renamed = col
-                .clone()
-                .with_name(tail.into());
+            let renamed = col.with_name(tail.into());
             groups
                 .entry(head.to_string())
                 .or_default()
@@ -927,10 +932,10 @@ pub fn vstack_leaf(
 pub struct ChunkRead {
     pub leaf_idx: usize,
     pub sig: Arc<ChunkGridSignature>,
-    pub array_shape: Vec<u64>,
-    pub vars: Vec<IStr>,
-    pub idx: Vec<u64>,
-    pub subset: Option<ChunkSubset>,
+    pub array_shape: Arc<[u64]>,
+    pub vars: Arc<[IStr]>,
+    pub idx: Arc<[u64]>,
+    pub subset: Option<Arc<ChunkSubset>>,
 }
 
 /// Flatten a [`BatchPlan`]'s slabs into a list of individual chunk read tasks.
@@ -944,15 +949,13 @@ pub fn flatten_reads(
         for &slot in &slab.chunk_slots {
             out.push(ChunkRead {
                 leaf_idx: slab.leaf_idx,
-                sig: g.sig.clone(),
-                array_shape: g
-                    .array_shape
-                    .clone(),
-                vars: g.vars.clone(),
-                idx: g.chunk_indices[slot]
-                    .clone(),
+                sig: Arc::clone(&g.sig),
+                array_shape: Arc::clone(&g.array_shape),
+                vars: Arc::clone(&g.vars),
+                idx: Arc::clone(&g.chunk_indices[slot]),
                 subset: g.chunk_subsets[slot]
-                    .clone(),
+                    .as_ref()
+                    .map(Arc::clone),
             });
         }
     }
@@ -1009,7 +1012,7 @@ mod tests {
 
         let result =
             wrap_columns_into_group_struct(
-                &df,
+                df,
                 "model_a".istr(),
             )
             .unwrap();
@@ -1050,7 +1053,7 @@ mod tests {
         .unwrap();
         let result =
             wrap_columns_into_group_struct(
-                &df,
+                df,
                 "level_1".istr(),
             )
             .unwrap();
@@ -1085,7 +1088,7 @@ mod tests {
         .unwrap();
         let result =
             wrap_columns_into_group_struct(
-                &df,
+                df,
                 "nope".istr(),
             )
             .unwrap();

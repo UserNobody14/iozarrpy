@@ -540,12 +540,12 @@ impl<
         if let Ok(g) = self.metadata.read()
             && let Some(m) = g.as_ref()
         {
-            return Ok(m.clone());
+            return Ok(Arc::clone(m));
         }
 
         let metadata = self.backend.metadata()?;
         if let Ok(mut g) = self.metadata.write() {
-            *g = Some(metadata.clone());
+            *g = Some(Arc::clone(&metadata));
         }
         Ok(metadata)
     }
@@ -567,12 +567,12 @@ impl<
         if let Some(metadata) =
             &*self.metadata.read().await
         {
-            return Ok(metadata.clone());
+            return Ok(Arc::clone(metadata));
         }
         let metadata =
             self.backend.metadata().await?;
         *self.metadata.write().await =
-            Some(metadata.clone());
+            Some(Arc::clone(&metadata));
         Ok(metadata)
     }
 }

@@ -96,10 +96,8 @@ impl IcechunkIterator {
     fn initialize(
         &mut self,
     ) -> Result<(), PyErr> {
-        let backend = self.backend.clone();
+        let backend = Arc::clone(&self.backend);
         let expr = self.expr.clone();
-        let with_columns =
-            self.with_columns.clone();
         let max_chunks_to_read =
             self.max_chunks_to_read;
         let batch_size = self.batch_size;
@@ -107,9 +105,14 @@ impl IcechunkIterator {
         let (tree, batches, meta, expanded_with_columns, emit_empty_schema_once) =
             self.runtime.block_on(async {
                 let meta = backend.metadata().await?;
-                let effective_with_columns = with_columns.clone().or_else(|| {
-                    Some(meta.tidy_column_order(None).into_iter().collect())
-                });
+
+                // Compute effective columns without cloning the outer Option
+                let effective_with_columns: Option<BTreeSet<IStr>> =
+                    if let Some(ref cols) = self.with_columns {
+                        Some(cols.iter().copied().collect())
+                    } else {
+                        Some(meta.tidy_column_order(None).into_iter().collect())
+                    };
 
                 let policy = ResolvedColumnPolicy::new(
                     effective_with_columns.clone(),
@@ -160,7 +163,7 @@ impl IcechunkIterator {
         let output_columns =
             output_columns_for_streaming_batch(
                 meta.as_ref(),
-                with_columns.as_ref(),
+                self.with_columns.as_ref(),
                 expanded_with_columns.as_ref(),
             );
 
@@ -227,13 +230,13 @@ impl IcechunkIterator {
                 continue;
             }
 
-            let backend = self.backend.clone();
+            let backend = Arc::clone(&self.backend);
             let expanded_with_columns = state
                 .expanded_with_columns
                 .clone();
             let max_concurrency =
                 self.max_concurrency;
-            let meta = state.meta.clone();
+            let meta = Arc::clone(&state.meta);
 
             let chunk_dfs: Result<Vec<(usize, DataFrame)>, PyErr> =
                 self.runtime.block_on(async {
@@ -241,15 +244,16 @@ impl IcechunkIterator {
                     let mut futs = FuturesUnordered::new();
 
                     for r in reads {
-                        let sem = semaphore.clone();
-                        let backend = backend.clone();
+                        let sem = Arc::clone(&semaphore);
+                        let backend = Arc::clone(&backend);
                         let expanded = expanded_with_columns.clone();
-                        let meta = meta.clone();
+                        let meta = Arc::clone(&meta);
                         let leaf_idx = r.leaf_idx;
-                        let sig = r.sig.clone();
-                        let array_shape = r.array_shape.clone();
-                        let vars = r.vars.clone();
-                        let idx = r.idx.clone();
+                        let sig = Arc::clone(&r.sig);
+                        let array_shape =
+                            Arc::clone(&r.array_shape);
+                        let vars = Arc::clone(&r.vars);
+                        let idx = Arc::clone(&r.idx);
                         let subset = r.subset.clone();
 
                         futs.push(async move {
@@ -257,12 +261,12 @@ impl IcechunkIterator {
                                 sem.acquire().await.expect("semaphore closed");
                             let df = chunk_to_df_from_grid_with_backend(
                                 backend.as_ref(),
-                                idx,
+                                idx.as_ref(),
                                 sig.as_ref(),
-                                &array_shape,
-                                &vars,
+                                array_shape.as_ref(),
+                                vars.as_ref(),
                                 expanded.as_ref(),
-                                subset.as_ref(),
+                                subset.as_deref(),
                                 &meta,
                             )
                             .await?;

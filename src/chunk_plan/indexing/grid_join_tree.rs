@@ -73,19 +73,19 @@ impl ChunkSubset {
 #[derive(Debug)]
 pub struct LeafGroup {
     pub sig: Arc<ChunkGridSignature>,
-    pub vars: Vec<IStr>,
-    pub chunk_indices: Vec<Vec<u64>>,
-    pub chunk_subsets: Vec<Option<ChunkSubset>>,
-    pub array_shape: Vec<u64>,
+    pub vars: Arc<[IStr]>,
+    pub chunk_indices: Vec<Arc<[u64]>>,
+    pub chunk_subsets: Vec<Option<Arc<ChunkSubset>>>,
+    pub array_shape: Arc<[u64]>,
 }
 
 impl LeafGroup {
     pub fn new(
         sig: Arc<ChunkGridSignature>,
-        vars: Vec<IStr>,
-        chunk_indices: Vec<Vec<u64>>,
-        chunk_subsets: Vec<Option<ChunkSubset>>,
-        array_shape: Vec<u64>,
+        vars: Arc<[IStr]>,
+        chunk_indices: Vec<Arc<[u64]>>,
+        chunk_subsets: Vec<Option<Arc<ChunkSubset>>>,
+        array_shape: Arc<[u64]>,
     ) -> Self {
         Self {
             sig,
@@ -439,10 +439,10 @@ mod tests {
         );
         LeafGroup::new(
             sig,
-            vec![name.istr()],
-            vec![vec![0; dims.len()]],
+            vec![name.istr()].into(),
+            vec![vec![0u64; dims.len()].into()],
             vec![None],
-            dims.iter().map(|_| 1).collect(),
+            dims.iter().map(|_| 1u64).collect::<Vec<_>>().into(),
         )
     }
 

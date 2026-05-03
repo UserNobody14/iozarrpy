@@ -8,8 +8,9 @@ use crate::shared::IStr;
 pub fn compute_dims_and_lengths_unified(
     meta: &ZarrMeta,
 ) -> (Vec<IStr>, Vec<u64>) {
-    let dims = meta.dim_analysis.all_dims.clone();
-    let dim_lengths: Vec<u64> = dims
+    let dim_lengths: Vec<u64> = meta
+        .dim_analysis
+        .all_dims
         .iter()
         .map(|d| {
             meta.dim_analysis
@@ -19,5 +20,8 @@ pub fn compute_dims_and_lengths_unified(
                 .unwrap_or(1)
         })
         .collect();
-    (dims, dim_lengths)
+    (
+        meta.dim_analysis.all_dims.iter().copied().collect(),
+        dim_lengths,
+    )
 }

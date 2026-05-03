@@ -192,7 +192,7 @@ impl PyZarrBackendSync {
         });
 
         crate::backend::implementation::ZarrIterator::new(
-            self.inner.clone(),
+            Arc::clone(&self.inner),
             prd,
             with_cols_set,
             max_chunks_to_read,
@@ -239,7 +239,7 @@ impl PyZarrBackendSync {
         py: Python<'py>,
         predicate: &Bound<'py, PyAny>,
     ) -> PyResult<Py<PyAny>> {
-        let backend = self.inner.clone();
+        let backend = Arc::clone(&self.inner);
         let expr = extract_expr(predicate)?;
 
         let (grids, coord_reads) =
@@ -258,7 +258,7 @@ impl PyZarrBackendSync {
         &self,
         py: Python<'py>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let backend = self.inner.clone();
+        let backend = Arc::clone(&self.inner);
         future_into_py(py, async move {
             backend.clear();
             Ok(())
@@ -270,7 +270,7 @@ impl PyZarrBackendSync {
         &self,
         py: Python<'py>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let backend = self.inner.clone();
+        let backend = Arc::clone(&self.inner);
         future_into_py(py, async move {
             backend.clear_all_caches();
             Ok(())
@@ -282,7 +282,7 @@ impl PyZarrBackendSync {
         &self,
         py: Python<'py>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let backend = self.inner.clone();
+        let backend = Arc::clone(&self.inner);
         future_into_py(py, async move {
             let stats = backend.cache_stats();
             let has_metadata =

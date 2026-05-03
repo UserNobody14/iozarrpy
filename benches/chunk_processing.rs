@@ -553,7 +553,7 @@ fn bench_chunk_to_df(c: &mut Criterion) {
         b.iter(|| {
             chunk_to_df_from_grid_with_backend(
                 black_box(&backend),
-                black_box(vec![2, 3, 1]),
+                black_box(&[2u64, 3, 1][..]),
                 black_box(&sig),
                 black_box(&array_shape),
                 black_box(&vars),
@@ -570,7 +570,7 @@ fn bench_chunk_to_df(c: &mut Criterion) {
         b.iter(|| {
             chunk_to_df_from_grid_with_backend(
                 black_box(&backend),
-                black_box(vec![9, 9, 4]),
+                black_box(&[9u64, 9, 4][..]),
                 black_box(&sig),
                 black_box(&array_shape),
                 black_box(&vars),
