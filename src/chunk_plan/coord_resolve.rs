@@ -12,8 +12,8 @@ use std::ops::{Bound, Range};
 use crate::meta::{TimeEncoding, ZarrMeta};
 use crate::reader::ColumnData;
 use crate::shared::{
-    ChunkedDataBackendAsync, ChunkedDataBackendSync,
-    IStr,
+    ChunkedDataBackendAsync,
+    ChunkedDataBackendSync, IStr, MaybeParIter,
 };
 
 use super::indexing::types::{
@@ -125,12 +125,15 @@ fn decode_chunk_into(
                 .copied()
                 .map(|x| decode_float(x as f64)),
         ),
-        _ => out.extend((0..chunk.len()).map(|i| {
-            super::exprs::apply_time_encoding(
-                chunk.get_i64(i).unwrap_or(0),
-                te,
-            )
-        })),
+        _ => {
+            out
+                .extend((0..chunk.len()).map(|i| {
+                super::exprs::apply_time_encoding(
+                    chunk.get_i64(i).unwrap_or(0),
+                    te,
+                )
+            }))
+        }
     }
 }
 
@@ -152,22 +155,34 @@ fn load_coord_array_sync<
     backend: &B,
     ctx: &DimCtx,
 ) -> Result<Vec<CoordScalar>, ResolutionError> {
+    let te = ctx.time_enc.as_ref();
+    let n_chunks = ctx.n_chunks() as usize;
+
+    // Load chunks concurrently using parallel iteration
+    const PARALLEL_CHUNK_THRESHOLD: usize = 2;
+
+    let chunks: Vec<_> = (0..n_chunks)
+        .collect::<Vec<_>>()
+        .maybe_par_iter(PARALLEL_CHUNK_THRESHOLD)
+        .map_collect(|ci| {
+            backend
+                .read_chunk_sync(
+                    &ctx.array_path,
+                    &[*ci as u64],
+                )
+                .map_err(|e| {
+                    ResolutionError::Unresolvable(
+                        e.to_string(),
+                    )
+                })
+        })?;
+
     let mut out =
         Vec::with_capacity(ctx.n as usize);
-    let te = ctx.time_enc.as_ref();
-    for ci in 0..ctx.n_chunks() {
-        let chunk = backend
-            .read_chunk_sync(
-                &ctx.array_path,
-                &[ci],
-            )
-            .map_err(|e| {
-                ResolutionError::Unresolvable(
-                    e.to_string(),
-                )
-            })?;
+    for chunk in chunks {
         decode_chunk_into(&chunk, &mut out, te);
     }
+
     out.truncate(ctx.n as usize);
     Ok(out)
 }
@@ -179,14 +194,16 @@ async fn load_coord_array_async<
     ctx: &DimCtx,
 ) -> Result<Vec<CoordScalar>, ResolutionError> {
     let chunks = futures::future::try_join_all(
-        (0..ctx.n_chunks()).map(|ci| async move {
-            backend
-                .read_chunk_async(
-                    &ctx.array_path,
-                    &[ci],
-                )
-                .await
-        }),
+        (0..ctx.n_chunks()).map(
+            |ci| async move {
+                backend
+                    .read_chunk_async(
+                        &ctx.array_path,
+                        &[ci],
+                    )
+                    .await
+            },
+        ),
     )
     .await
     .map_err(|e| {
@@ -233,19 +250,18 @@ fn detect_direction(
     coords: &[CoordScalar],
     assume_sorted: bool,
 ) -> Result<Dir, ResolutionError> {
-    let (first, last) = match (
-        coords.first(),
-        coords.last(),
-    ) {
-        (Some(f), Some(l)) => (f, l),
-        _ => {
-            return Err(
-                ResolutionError::Unresolvable(
-                    "empty coordinate array".into(),
-                ),
-            );
-        }
-    };
+    let (first, last) =
+        match (coords.first(), coords.last()) {
+            (Some(f), Some(l)) => (f, l),
+            _ => {
+                return Err(
+                    ResolutionError::Unresolvable(
+                        "empty coordinate array"
+                            .into(),
+                    ),
+                );
+            }
+        };
     let dir = Dir::from_endpoints(first, last)
         .ok_or_else(|| {
             ResolutionError::Unresolvable(
@@ -257,10 +273,12 @@ fn detect_direction(
         return Ok(dir);
     }
     let monotonic = match dir {
-        Dir::Ascending => coords
-            .is_sorted_by(|a, b| a <= b),
-        Dir::Descending => coords
-            .is_sorted_by(|a, b| a >= b),
+        Dir::Ascending => {
+            coords.is_sorted_by(|a, b| a <= b)
+        }
+        Dir::Descending => {
+            coords.is_sorted_by(|a, b| a >= b)
+        }
     };
     if monotonic {
         Ok(dir)
@@ -291,45 +309,47 @@ fn resolve_against_sorted(
     dir: Dir,
 ) -> Range<u64> {
     let (start_b, end_b) = match dir {
-        Dir::Ascending => (
-            vr.0.as_ref(),
-            vr.1.as_ref(),
-        ),
-        Dir::Descending => (
-            vr.1.as_ref(),
-            vr.0.as_ref(),
-        ),
+        Dir::Ascending => {
+            (vr.0.as_ref(), vr.1.as_ref())
+        }
+        Dir::Descending => {
+            (vr.1.as_ref(), vr.0.as_ref())
+        }
     };
     // partition_point walks while the predicate holds; these are direction-
     // aware "v is before target" predicates over `PartialOrd`. NaN/None
     // results return `false`, which keeps the search safely conservative.
-    let lt = |v: &CoordScalar, t: &CoordScalar| {
+    let lt = |v: &CoordScalar,
+              t: &CoordScalar| {
         match dir {
             Dir::Ascending => v < t,
             Dir::Descending => v > t,
         }
     };
-    let le = |v: &CoordScalar, t: &CoordScalar| {
+    let le = |v: &CoordScalar,
+              t: &CoordScalar| {
         match dir {
             Dir::Ascending => v <= t,
             Dir::Descending => v >= t,
         }
     };
 
-    let start = match start_b {
-        Bound::Included(t) => coords
-            .partition_point(|v| lt(v, t)),
-        Bound::Excluded(t) => coords
-            .partition_point(|v| le(v, t)),
-        Bound::Unbounded => 0,
-    };
-    let end = match end_b {
-        Bound::Included(t) => coords
-            .partition_point(|v| le(v, t)),
-        Bound::Excluded(t) => coords
-            .partition_point(|v| lt(v, t)),
-        Bound::Unbounded => coords.len(),
-    };
+    let start =
+        match start_b {
+            Bound::Included(t) => coords
+                .partition_point(|v| lt(v, t)),
+            Bound::Excluded(t) => coords
+                .partition_point(|v| le(v, t)),
+            Bound::Unbounded => 0,
+        };
+    let end =
+        match end_b {
+            Bound::Included(t) => coords
+                .partition_point(|v| le(v, t)),
+            Bound::Excluded(t) => coords
+                .partition_point(|v| lt(v, t)),
+            Bound::Unbounded => coords.len(),
+        };
     (start as u64)..(end.max(start) as u64)
 }
 
@@ -355,8 +375,9 @@ pub(crate) fn wrapping_ghost_ranges(
     primary: Range<u64>,
     n: u64,
 ) -> Vec<Range<u64>> {
-    let start =
-        primary.start.saturating_sub(GHOST_EXPANSION);
+    let start = primary
+        .start
+        .saturating_sub(GHOST_EXPANSION);
     let end =
         (primary.end + GHOST_EXPANSION).min(n);
     let mut ranges = Vec::with_capacity(3);
@@ -449,16 +470,21 @@ fn resolve_with_coords(
     if coords.is_empty() {
         return Ok(Vec::new());
     }
-    match detect_direction(coords, assume_sorted) {
+    match detect_direction(coords, assume_sorted)
+    {
         Ok(dir) => Ok(apply_expansion(
-            resolve_against_sorted(coords, vr, dir),
+            resolve_against_sorted(
+                coords, vr, dir,
+            ),
             dim_len,
             vr,
             expansion,
         )),
         // Non-monotonic coords: scan-everything is still safe for plain
         // filtering, but interpolation needs an actual ordering.
-        Err(_) if expansion == Expansion::Exact => {
+        Err(_)
+            if expansion == Expansion::Exact =>
+        {
             Ok(vec![0..dim_len])
         }
         Err(e) => Err(e),
@@ -559,7 +585,10 @@ mod tests {
     }
 
     fn desc(n: i64) -> Vec<CoordScalar> {
-        (0..n).rev().map(CoordScalar::I64).collect()
+        (0..n)
+            .rev()
+            .map(CoordScalar::I64)
+            .collect()
     }
 
     fn vr(
@@ -567,12 +596,16 @@ mod tests {
         end: Bound<i64>,
     ) -> ValueRangePresent {
         let map = |b: Bound<i64>| match b {
-            Bound::Included(v) => Bound::Included(
-                CoordScalar::I64(v),
-            ),
-            Bound::Excluded(v) => Bound::Excluded(
-                CoordScalar::I64(v),
-            ),
+            Bound::Included(v) => {
+                Bound::Included(CoordScalar::I64(
+                    v,
+                ))
+            }
+            Bound::Excluded(v) => {
+                Bound::Excluded(CoordScalar::I64(
+                    v,
+                ))
+            }
             Bound::Unbounded => Bound::Unbounded,
         };
         ValueRangePresent(map(start), map(end))
@@ -638,8 +671,12 @@ mod tests {
             .map(|i| CoordScalar::F64(i as f64))
             .collect();
         let v = ValueRangePresent(
-            Bound::Included(CoordScalar::F64(3.5)),
-            Bound::Included(CoordScalar::F64(7.5)),
+            Bound::Included(CoordScalar::F64(
+                3.5,
+            )),
+            Bound::Included(CoordScalar::F64(
+                7.5,
+            )),
         );
         let r = resolve_against_sorted(
             &coords,
@@ -701,8 +738,8 @@ mod tests {
             CoordScalar::I64(9),
             CoordScalar::I64(10),
         ];
-        let dir =
-            detect_direction(&coords, true).unwrap();
+        let dir = detect_direction(&coords, true)
+            .unwrap();
         assert_eq!(dir, Dir::Ascending);
     }
 
@@ -716,7 +753,8 @@ mod tests {
             CoordScalar::I64(10),
         ];
         assert!(
-            detect_direction(&coords, false).is_err()
+            detect_direction(&coords, false)
+                .is_err()
         );
     }
 
@@ -764,7 +802,8 @@ mod tests {
     }
 
     #[test]
-    fn ghost_ranges_small_dimension_both_ghosts() {
+    fn ghost_ranges_small_dimension_both_ghosts()
+    {
         let ranges =
             wrapping_ghost_ranges(2..4, 5);
         assert_eq!(ranges.len(), 3);
