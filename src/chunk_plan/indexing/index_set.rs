@@ -258,7 +258,7 @@ impl RectangleSet {
 
         // Start with all rectangles from self; subtract each rect of other.
         let mut current: Vec<HyperRectangle> =
-            self.rects.iter().cloned().collect();
+            self.rects.to_vec();
 
         for s in &other.rects {
             let mut next = Vec::new();

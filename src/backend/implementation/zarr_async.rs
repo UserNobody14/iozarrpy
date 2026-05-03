@@ -73,68 +73,115 @@ where
         tokio::sync::Semaphore::new(max_conc),
     );
 
-    let mut batch_dfs: Vec<
+    let mut batch_results: Vec<(
+        usize,
         polars::prelude::DataFrame,
-    > = Vec::new();
+    )> = Vec::new();
     if let Some(tree_ref) = tree.as_ref() {
         let leaves = tree_ref.leaves();
-        for plan in &batches {
+        let mut batch_work = Vec::new();
+        for (batch_idx, plan) in
+            batches.iter().enumerate()
+        {
             let reads =
                 flatten_reads(plan, &leaves);
             if reads.is_empty() {
                 continue;
             }
+            batch_work.push((
+                batch_idx,
+                plan.clone(),
+                reads,
+            ));
+        }
 
-            let mut futs =
-                FuturesUnordered::new();
-            for r in reads {
-                let sem = semaphore.clone();
-                let backend = backend.clone();
-                let meta = meta.clone();
-                let leaf_idx = r.leaf_idx;
-                let sig = r.sig.clone();
-                let array_shape =
-                    r.array_shape.clone();
-                let vars = r.vars.clone();
-                let idx = r.idx.clone();
-                let subset = r.subset.clone();
+        let mut batch_futs = futures::stream::iter(batch_work)
+        .map(|(batch_idx, plan, reads)| {
+            let backend = backend.clone();
+            let meta = meta.clone();
+            let semaphore = semaphore.clone();
 
-                futs.push(async move {
-                    let _permit =
-                        sem.acquire_owned().await.expect("semaphore closed");
-                    let df = chunk_to_df_from_grid_with_backend(
-                        backend.as_ref(),
-                        idx,
-                        sig.as_ref(),
-                        &array_shape,
-                        &vars,
-                        None,
-                        subset.as_ref(),
-                        &meta,
-                    )
-                    .await?;
-                    Ok::<_, BackendError>((leaf_idx, df))
-                });
+            async move {
+                let mut futs =
+                    FuturesUnordered::new();
+                for r in reads {
+                    let sem =
+                        semaphore.clone();
+                    let backend = backend.clone();
+                    let meta = meta.clone();
+                    let leaf_idx = r.leaf_idx;
+                    let sig = r.sig.clone();
+                    let array_shape =
+                        r.array_shape.clone();
+                    let vars = r.vars.clone();
+                    let idx = r.idx.clone();
+                    let subset =
+                        r.subset.clone();
+
+                    futs.push(async move {
+                        let _permit = sem
+                            .acquire_owned()
+                            .await
+                            .expect(
+                                "semaphore closed",
+                            );
+                        let df =
+                            chunk_to_df_from_grid_with_backend(
+                                backend.as_ref(),
+                                idx,
+                                sig.as_ref(),
+                                &array_shape,
+                                &vars,
+                                None,
+                                subset.as_ref(),
+                                &meta,
+                            )
+                            .await?;
+                        Ok::<_, BackendError>((
+                            leaf_idx, df,
+                        ))
+                    });
+                }
+
+                let mut chunk_dfs: Vec<(
+                    usize,
+                    polars::prelude::DataFrame,
+                )> = Vec::new();
+                while let Some(r) =
+                    futs.next().await
+                {
+                    chunk_dfs.push(r?);
+                }
+
+                let df =
+                    assemble_batch_dataframe(
+                        &plan, chunk_dfs,
+                    )?;
+                Ok::<_, BackendError>((
+                    batch_idx, df,
+                ))
             }
+        })
+        .buffer_unordered(max_conc);
 
-            let mut chunk_dfs: Vec<(
-                usize,
-                polars::prelude::DataFrame,
-            )> = Vec::new();
-            while let Some(r) = futs.next().await
-            {
-                chunk_dfs.push(r?);
-            }
-
-            if let Some(df) =
-                assemble_batch_dataframe(
-                    plan, chunk_dfs,
-                )?
-            {
-                batch_dfs.push(df);
+        while let Some(r) =
+            batch_futs.next().await
+        {
+            let (batch_idx, df) = r?;
+            if let Some(df) = df {
+                batch_results
+                    .push((batch_idx, df));
             }
         }
     }
+    batch_results
+        .sort_by_key(|(batch_idx, _)| *batch_idx);
+    let batch_dfs: Vec<
+        polars::prelude::DataFrame,
+    > = batch_results
+        .into_iter()
+        .map(|(_, df)| df)
+        .collect();
 
     let result = if batch_dfs.is_empty() {
         polars::prelude::DataFrame::empty_with_schema(

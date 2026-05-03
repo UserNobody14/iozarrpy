@@ -28,7 +28,7 @@ use crate::meta::ZarrNode;
 
 /// Build this many array nodes on the Rayon pool; below that, stay sequential to
 /// avoid thread-pool overhead on tiny hierarchies.
-const PARALLEL_ZARR_META_ARRAYS: usize = 8;
+const PARALLEL_ZARR_META_ARRAYS: usize = 2;
 
 struct ArrayMetaLoadJob {
     traverse_idx: usize,

@@ -18,14 +18,59 @@ OUTPUT_DIR = Path(__file__).resolve().parent / "output-datasets"
 BLOSC_ZSTD = BloscCodec(cname="zstd", clevel=5, shuffle=BloscShuffle.shuffle)
 
 
-def _skip_xarray_benchmarks_enabled(config: pytest.Config) -> bool:
-    env_value = os.environ.get("RAINBEAR_SKIP_XARRAY_BENCHMARKS", "")
-    return bool(config.getoption("--rainbear-skip-xarray-benchmarks")) or env_value.lower() in {
+def _env_flag(name: str) -> bool:
+    return os.environ.get(name, "").lower() in {
         "1",
         "true",
         "yes",
         "on",
     }
+
+
+def _skip_xarray_benchmarks_enabled(config: pytest.Config) -> bool:
+    return bool(config.getoption("--rainbear-skip-xarray-benchmarks")) or _env_flag(
+        "RAINBEAR_SKIP_XARRAY_BENCHMARKS"
+    )
+
+
+def _reuse_test_datasets_enabled(config: pytest.Config) -> bool:
+    return bool(config.getoption("--rainbear-reuse-test-datasets")) or _env_flag(
+        "RAINBEAR_REUSE_TEST_DATASETS"
+    )
+
+
+def _benchmark_dataset_groups(config: pytest.Config) -> set[str]:
+    raw = str(
+        config.getoption("--rainbear-generate-test-dataset-groups")
+        or os.environ.get("RAINBEAR_GENERATE_TEST_DATASET_GROUPS", "benchmark")
+    )
+    groups = {part.strip().lower() for part in raw.split(",") if part.strip()}
+    valid_groups = {"all", "benchmark", "baseline", "comprehensive", "multi_var", "datatree", "icechunk"}
+    unknown = groups - valid_groups
+    if unknown:
+        raise pytest.UsageError(
+            "unknown rainbear test dataset group(s): "
+            f"{', '.join(sorted(unknown))}. Expected one of: {', '.join(sorted(valid_groups))}."
+        )
+    if "all" in groups:
+        return valid_groups - {"all"}
+    return groups or {"benchmark"}
+
+
+def _require_dataset_path(path: Path) -> None:
+    if not path.exists():
+        raise pytest.UsageError(
+            f"prebuilt test dataset is missing: {path}. "
+            "Run `uv run pytest --rainbear-generate-test-datasets-only` first, "
+            "or unset RAINBEAR_REUSE_TEST_DATASETS."
+        )
+
+
+def _maybe_require_dataset_paths(paths: list[Path], config: pytest.Config) -> None:
+    if not _reuse_test_datasets_enabled(config):
+        return
+    for path in paths:
+        _require_dataset_path(path)
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
@@ -34,6 +79,58 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         action="store_true",
         default=False,
         help="Skip xarray comparison benchmarks when profiling rainbear itself.",
+    )
+    parser.addoption(
+        "--rainbear-reuse-test-datasets",
+        action="store_true",
+        default=False,
+        help=(
+            "Use existing tests/output-datasets stores instead of regenerating "
+            "session-scoped test datasets."
+        ),
+    )
+    parser.addoption(
+        "--rainbear-generate-test-datasets-only",
+        action="store_true",
+        default=False,
+        help=(
+            "Generate test datasets and exit before running tests. Useful before "
+            "profiling with RAINBEAR_REUSE_TEST_DATASETS=1."
+        ),
+    )
+    parser.addoption(
+        "--rainbear-generate-test-dataset-groups",
+        default=None,
+        help=(
+            "Comma-separated dataset groups for --rainbear-generate-test-datasets-only. "
+            "Use benchmark, baseline, comprehensive, multi_var, datatree, icechunk, or all. "
+            "Default: benchmark."
+        ),
+    )
+
+
+def pytest_sessionstart(session: pytest.Session) -> None:
+    config = session.config
+    if not bool(config.getoption("--rainbear-generate-test-datasets-only")) and not _env_flag(
+        "RAINBEAR_GENERATE_TEST_DATASETS_ONLY"
+    ):
+        return
+
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    groups = _benchmark_dataset_groups(config)
+    if "benchmark" in groups or "baseline" in groups:
+        _generate_baseline_datasets(OUTPUT_DIR)
+    if "benchmark" in groups or "comprehensive" in groups:
+        _generate_comprehensive_datasets(OUTPUT_DIR)
+    if "multi_var" in groups:
+        _generate_multi_var_dataset(OUTPUT_DIR)
+    if "datatree" in groups:
+        _generate_datatree_datasets(OUTPUT_DIR)
+    if "icechunk" in groups:
+        _generate_icechunk_datasets(OUTPUT_DIR)
+    pytest.exit(
+        f"Generated test dataset groups: {', '.join(sorted(groups))}",
+        returncode=0,
     )
 
 
@@ -429,10 +526,38 @@ def _generate_baseline_datasets(output_dir: Path) -> dict[str, str]:
     return paths
 
 
+def _baseline_dataset_paths(output_dir: Path) -> dict[str, str]:
+    """Return the expected baseline dataset paths without regenerating them."""
+    grid_default = output_dir / "grid_default.zarr"
+    paths: dict[str, Path] = {
+        "grid_default": grid_default,
+        "multi_var": grid_default,
+        "grid_chunked": output_dir / "grid_chunked.zarr",
+        "grid_sharded": output_dir / "grid_sharded.zarr",
+        "grid_constant_unconsolidated": output_dir / "grid_constant_unconsolidated.zarr",
+        "orography_chunked_10x10": output_dir / "orography_chunked_10x10.zarr",
+        "orography_chunked_5x5": output_dir / "orography_chunked_5x5.zarr",
+        "orography_sharded_small": output_dir / "orography_sharded_small.zarr",
+        "orography_sharded_large": output_dir / "orography_sharded_large.zarr",
+        "index_only_dims": output_dir / "index_only_dims.zarr",
+        "interp_4d_time_lead_latlon": output_dir / "interp_4d_time_lead_latlon.zarr",
+    }
+    from tests import zarr_generators
+
+    for var in zarr_generators.get_list_of_variables():
+        paths[f"wind_{var.replace('wind_', '')}"] = grid_default
+
+    return {name: str(path) for name, path in paths.items()}
+
+
 @pytest.fixture(scope="session")
-def baseline_datasets() -> dict[str, str]:
+def baseline_datasets(request: pytest.FixtureRequest) -> dict[str, str]:
     """Session-scoped fixture that generates all baseline test datasets once."""
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    if _reuse_test_datasets_enabled(request.config):
+        paths = _baseline_dataset_paths(OUTPUT_DIR)
+        _maybe_require_dataset_paths([Path(path) for path in set(paths.values())], request.config)
+        return paths
     return _generate_baseline_datasets(OUTPUT_DIR)
 
 
@@ -536,8 +661,38 @@ def _generate_comprehensive_datasets(output_dir: Path) -> dict[str, Comprehensiv
     return paths
 
 
+def _comprehensive_dataset_paths(output_dir: Path) -> dict[str, ComprehensiveDatasetInfo]:
+    """Return expected comprehensive dataset metadata without regenerating stores."""
+    return {
+        "comprehensive_3d_fallback": ComprehensiveDatasetInfo(
+            path=str(output_dir / "comprehensive_3d_fallback.zarr"),
+            chunk_grid=(7, 5, 3),
+            total_chunks=7 * 5 * 3,
+            chunk_size=10,
+            dim_lengths=(70, 50, 30),
+            coord_mode="fallback",
+        ),
+        "comprehensive_3d_cartopy": ComprehensiveDatasetInfo(
+            path=str(output_dir / "comprehensive_3d_cartopy.zarr"),
+            chunk_grid=(7, 5, 3),
+            total_chunks=7 * 5 * 3,
+            chunk_size=10,
+            dim_lengths=(70, 50, 30),
+            coord_mode="cartopy",
+        ),
+        "comprehensive_4d": ComprehensiveDatasetInfo(
+            path=str(output_dir / "comprehensive_4d.zarr"),
+            chunk_grid=(3, 5, 7, 4),  # type: ignore[arg-type]
+            total_chunks=3 * 5 * 7 * 4,
+            chunk_size=10,
+            dim_lengths=(6, 10, 70, 40),  # type: ignore[arg-type]
+            coord_mode="datetime",
+        ),
+    }
+
+
 @pytest.fixture(scope="session")
-def comprehensive_datasets() -> dict[str, ComprehensiveDatasetInfo]:
+def comprehensive_datasets(request: pytest.FixtureRequest) -> dict[str, ComprehensiveDatasetInfo]:
     """Session-scoped fixture providing comprehensive test datasets.
 
     Returns a dict with keys:
@@ -546,6 +701,10 @@ def comprehensive_datasets() -> dict[str, ComprehensiveDatasetInfo]:
     - 'comprehensive_4d': 4D dataset (3x5x7x4=420 chunks) with datetime/duration coords
     """
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    if _reuse_test_datasets_enabled(request.config):
+        paths = _comprehensive_dataset_paths(OUTPUT_DIR)
+        _maybe_require_dataset_paths([Path(info.path) for info in paths.values()], request.config)
+        return paths
     return _generate_comprehensive_datasets(OUTPUT_DIR)
 
 
@@ -621,8 +780,24 @@ def _generate_multi_var_dataset(output_dir: Path) -> MultiVarDatasetInfo:
     )
 
 
+def _multi_var_dataset_path(output_dir: Path) -> MultiVarDatasetInfo:
+    """Return expected multi-variable dataset metadata without regenerating the store."""
+    return MultiVarDatasetInfo(
+        path=str(output_dir / "multi_var.zarr"),
+        chunk_grid_3d=(5, 4, 3),
+        chunk_grid_2d=(4, 3),
+        total_chunks_3d=5 * 4 * 3,
+        total_chunks_2d=4 * 3,
+        chunk_size=10,
+        dim_lengths=(50, 40, 30),
+        vars_3d=["temp", "precip", "wind_u", "wind_v", "pressure"],
+        vars_2d=["surface"],
+        all_data_vars=["temp", "precip", "wind_u", "wind_v", "pressure", "surface"],
+    )
+
+
 @pytest.fixture(scope="session")
-def multi_var_dataset() -> MultiVarDatasetInfo:
+def multi_var_dataset(request: pytest.FixtureRequest) -> MultiVarDatasetInfo:
     """Session-scoped fixture providing multi-variable test dataset.
 
     Dataset has:
@@ -632,6 +807,10 @@ def multi_var_dataset() -> MultiVarDatasetInfo:
     - 2D chunk grid: 4x3 = 12 chunks
     """
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    if _reuse_test_datasets_enabled(request.config):
+        info = _multi_var_dataset_path(OUTPUT_DIR)
+        _maybe_require_dataset_paths([Path(info.path)], request.config)
+        return info
     return _generate_multi_var_dataset(OUTPUT_DIR)
 
 
@@ -754,8 +933,20 @@ def _generate_datatree_datasets(output_dir: Path) -> dict[str, str]:
     return paths
 
 
+def _datatree_dataset_paths(output_dir: Path) -> dict[str, str]:
+    """Return expected DataTree dataset paths without regenerating stores."""
+    return {
+        "simple_datatree": str(output_dir / "simple_datatree.zarr"),
+        "simple_datatree_unconsolidated": str(output_dir / "simple_datatree_unconsolidated.zarr"),
+        "ensemble_tree": str(output_dir / "ensemble_tree.zarr"),
+        "deep_tree_d4": str(output_dir / "deep_tree_d4.zarr"),
+        "heterogeneous_tree": str(output_dir / "heterogeneous_tree.zarr"),
+        "wide_tree_n10": str(output_dir / "wide_tree_n10.zarr"),
+    }
+
+
 @pytest.fixture(scope="session")
-def datatree_datasets() -> dict[str, str]:
+def datatree_datasets(request: pytest.FixtureRequest) -> dict[str, str]:
     """Session-scoped fixture that generates all DataTree test datasets once.
 
     Returns a dict with keys:
@@ -767,6 +958,10 @@ def datatree_datasets() -> dict[str, str]:
     - 'wide_tree_n10': Tree with 10 sibling children
     """
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    if _reuse_test_datasets_enabled(request.config):
+        paths = _datatree_dataset_paths(OUTPUT_DIR)
+        _maybe_require_dataset_paths([Path(path) for path in paths.values()], request.config)
+        return paths
     return _generate_datatree_datasets(OUTPUT_DIR)
 
 
@@ -934,8 +1129,57 @@ def _generate_icechunk_datasets(output_dir: Path) -> dict[str, IcechunkDatasetIn
     return datasets
 
 
+def _icechunk_dataset_paths(output_dir: Path) -> dict[str, IcechunkDatasetInfo]:
+    """Return expected Icechunk dataset metadata without regenerating repos."""
+    icechunk_dir = output_dir / "icechunk"
+    return {
+        "icechunk_orography": IcechunkDatasetInfo(
+            path=str(icechunk_dir / "orography.icechunk"),
+            chunk_grid=(2, 2),
+            total_chunks=4,
+            dims=["y", "x"],
+            data_vars=["geopotential_height", "latitude", "longitude"],
+        ),
+        "icechunk_comprehensive_3d": IcechunkDatasetInfo(
+            path=str(icechunk_dir / "comprehensive_3d.icechunk"),
+            chunk_grid=(7, 5, 3),
+            total_chunks=7 * 5 * 3,
+            dims=["a", "b", "c"],
+            data_vars=["data", "data2", "surface"],
+        ),
+        "icechunk_multi_var": IcechunkDatasetInfo(
+            path=str(icechunk_dir / "multi_var.icechunk"),
+            chunk_grid=(5, 4, 3),
+            total_chunks=5 * 4 * 3,
+            dims=["a", "b", "c"],
+            data_vars=["temp", "precip", "wind_u", "wind_v", "pressure", "surface"],
+        ),
+        "icechunk_zlib_float64_2d": IcechunkDatasetInfo(
+            path=str(icechunk_dir / "zlib_float64_2d.icechunk"),
+            chunk_grid=(2, 2),
+            total_chunks=4,
+            dims=["a", "b"],
+            data_vars=["temperature"],
+        ),
+        "icechunk_zlib_multidtype_3d": IcechunkDatasetInfo(
+            path=str(icechunk_dir / "zlib_multidtype_3d.icechunk"),
+            chunk_grid=(3, 2, 1),
+            total_chunks=6,
+            dims=["a", "b", "c"],
+            data_vars=["data_f64", "data_f32", "data_i32", "data_i16"],
+        ),
+        "icechunk_blosc_float64_2d": IcechunkDatasetInfo(
+            path=str(icechunk_dir / "blosc_float64_2d.icechunk"),
+            chunk_grid=(2, 2),
+            total_chunks=4,
+            dims=["a", "b"],
+            data_vars=["temperature"],
+        ),
+    }
+
+
 @pytest.fixture(scope="session")
-def icechunk_datasets() -> dict[str, IcechunkDatasetInfo]:
+def icechunk_datasets(request: pytest.FixtureRequest) -> dict[str, IcechunkDatasetInfo]:
     """Session-scoped fixture that generates Icechunk test datasets once.
 
     Returns a dict with keys:
@@ -947,6 +1191,10 @@ def icechunk_datasets() -> dict[str, IcechunkDatasetInfo]:
     - 'icechunk_blosc_float64_2d': 2D float64 dataset with blosc (control)
     """
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    if _reuse_test_datasets_enabled(request.config):
+        paths = _icechunk_dataset_paths(OUTPUT_DIR)
+        _maybe_require_dataset_paths([Path(info.path) for info in paths.values()], request.config)
+        return paths
     return _generate_icechunk_datasets(OUTPUT_DIR)
 
 
