@@ -17,7 +17,9 @@ use tokio::sync::RwLock;
 use crate::errors::BackendError;
 use crate::meta::ZarrMeta;
 use crate::reader::ColumnData;
-use crate::shared::options::BackendOptions;
+use crate::shared::options::{
+    AssumeSortedDims, BackendOptions,
+};
 use crate::shared::{IStr, IntoIStr};
 
 /// Build a moka sync cache with `max_entries` capacity (`0` = unbounded).
@@ -104,6 +106,13 @@ pub trait ChunkedDataBackendSync:
         var: &IStr,
         chunk_idx: &[u64],
     ) -> Result<Arc<ColumnData>, BackendError>;
+
+    /// Whether the caller has asserted that the coordinate array for `dim`
+    /// is monotonic. Lets the planner skip the sample-based monotonicity
+    /// probe and only sample the endpoints to recover sort direction.
+    fn assume_sorted_dim(&self, _dim: &IStr) -> bool {
+        false
+    }
 }
 
 /// Asynchronous chunked data backend trait.
@@ -127,6 +136,12 @@ pub trait ChunkedDataBackendAsync:
         var: &IStr,
         chunk_idx: &[u64],
     ) -> Result<Arc<ColumnData>, BackendError>;
+
+    /// Async counterpart of
+    /// [`ChunkedDataBackendSync::assume_sorted_dim`].
+    fn assume_sorted_dim(&self, _dim: &IStr) -> bool {
+        false
+    }
 }
 
 /// A backend that can retrieve metadata synchronously
@@ -183,6 +198,7 @@ pub struct ChunkedDataCacheSync<
     coord_paths: parking_lot::RwLock<
         Option<Arc<HashSet<IStr>>>,
     >,
+    assume_sorted: AssumeSortedDims,
 }
 
 /// Async cache for chunked data.
@@ -209,6 +225,7 @@ pub struct ChunkedDataCacheAsync<
     /// Memoized canonical coord paths, populated lazily on first read.
     coord_paths:
         RwLock<Option<Arc<HashSet<IStr>>>>,
+    assume_sorted: AssumeSortedDims,
 }
 
 /// Sync cache for metadata - delegates chunked data and store traits to backend
@@ -264,6 +281,7 @@ impl<BACKEND: ChunkedDataBackendSync>
             coord_paths: parking_lot::RwLock::new(
                 None,
             ),
+            assume_sorted: options.assume_sorted,
         }
     }
 }
@@ -289,6 +307,7 @@ impl<BACKEND: ChunkedDataBackendAsync>
                 options.var_cache_max_entries,
             ),
             coord_paths: RwLock::new(None),
+            assume_sorted: options.assume_sorted,
         }
     }
 }
@@ -451,6 +470,14 @@ impl<
                 )
             })
     }
+
+    fn assume_sorted_dim(
+        &self,
+        dim: &IStr,
+    ) -> bool {
+        self.assume_sorted.contains(dim)
+            || self.backend.assume_sorted_dim(dim)
+    }
 }
 
 #[async_trait::async_trait]
@@ -487,6 +514,14 @@ impl<
                     arc.to_string(),
                 )
             })
+    }
+
+    fn assume_sorted_dim(
+        &self,
+        dim: &IStr,
+    ) -> bool {
+        self.assume_sorted.contains(dim)
+            || self.backend.assume_sorted_dim(dim)
     }
 }
 
@@ -566,6 +601,13 @@ impl<
         self.backend
             .read_chunk_async(var, chunk_idx)
             .await
+    }
+
+    fn assume_sorted_dim(
+        &self,
+        dim: &IStr,
+    ) -> bool {
+        self.backend.assume_sorted_dim(dim)
     }
 }
 
@@ -675,6 +717,13 @@ impl<T: ChunkedDataBackendSync>
     {
         (**self).read_chunk_sync(var, chunk_idx)
     }
+
+    fn assume_sorted_dim(
+        &self,
+        dim: &IStr,
+    ) -> bool {
+        (**self).assume_sorted_dim(dim)
+    }
 }
 
 #[async_trait::async_trait]
@@ -690,6 +739,13 @@ impl<T: ChunkedDataBackendAsync>
         (**self)
             .read_chunk_async(var, chunk_idx)
             .await
+    }
+
+    fn assume_sorted_dim(
+        &self,
+        dim: &IStr,
+    ) -> bool {
+        (**self).assume_sorted_dim(dim)
     }
 }
 
