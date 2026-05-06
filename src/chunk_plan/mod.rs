@@ -18,7 +18,6 @@ pub(crate) mod indexing;
 
 mod selection;
 pub use compile_entry::compute_dims_and_lengths_unified;
-pub use exprs::LazyCompileCtx;
 pub use exprs::compile_expr;
 pub(crate) use exprs::compile_node::collect_column_refs;
 

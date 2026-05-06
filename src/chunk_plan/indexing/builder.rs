@@ -2,27 +2,20 @@
 //! a [`GridJoinTree`] with resolved per-dimension index ranges.
 //!
 //! Pipeline:
-//!
 //! 1. [`crate::chunk_plan::compile_expr`] walks the [`Expr`] and emits an
-//!    internal [`crate::chunk_plan::exprs::expr_plan::ExprPlan`] with a
-//!    [`LazyArraySelection`] tree of unresolved value-range constraints.
-//! 2. [`compile_into_builder_sync`] / [`compile_into_builder_async`] resolve
-//!    those constraints against the backend (binary search on cached
-//!    coordinate chunks) and accumulate the result as a [`RectangleSet`]
-//!    over the dataset's full dim universe inside a
-//!    [`GridJoinTreeBuilder`].
-//! 3. [`GridJoinTreeBuilder::finalize`] groups the resolved variables by
+//!    [`ExprPlan`] whose constraints are already resolved to a concrete
+//!    [`RectangleSet`] (resolution happens inline via the
+//!    [`crate::chunk_plan::exprs::compile_ctx::CoordResolver`] threaded
+//!    through compilation).
+//! 2. [`GridJoinTreeBuilder::apply_plan`] folds the resolved plan into the
+//!    builder state.
+//! 3. [`GridJoinTreeBuilder::finalize`] groups variables by
 //!    [`ChunkGridSignature`], projects the global rectangle set onto each
 //!    signature's dim subset, wraps [`GridJoinTree::Group`] nodes around
 //!    each top-level child of [`ZarrMeta::root`], and returns the
 //!    [`GridJoinTree`] consumed by the reader.
-//!
-//! All boolean set algebra (union/intersect/difference/negate/xor) is
-//! delegated to [`RectangleSet`] in [`crate::chunk_plan::indexing::index_set`];
-//! this file only translates from the lazy expression IR into builder calls
-//! and from the resolved global rectangle set into per-array chunk plans.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -31,8 +24,13 @@ use smallvec::SmallVec;
 use zarrs::array::{ArraySubset, ChunkGrid};
 
 use crate::chunk_plan::coord_resolve::{
-    Expansion, resolve_value_range_async,
+    CachedResolver, CollectingResolver, ResolveKey,
+    resolve_value_range_async,
     resolve_value_range_sync,
+};
+use crate::chunk_plan::exprs::compile_ctx::{
+    LazyCompileCtx, Universe, lookup_dim_len,
+    unknown_dim,
 };
 use crate::chunk_plan::exprs::expr_plan::{
     ExprPlan, VarSet as ExprVarSet,
@@ -42,18 +40,12 @@ use crate::chunk_plan::indexing::grid_join_tree::{
     LeafGroup as OwnedGridGroup,
 };
 use crate::chunk_plan::indexing::index_set::RectangleSet;
-use crate::chunk_plan::indexing::lazy_selection::{
-    LazyArraySelection, LazyDimConstraint,
-    LazyHyperRectangle,
-};
-use crate::chunk_plan::indexing::types::{
-    ChunkGridSignature, ValueRangePresent,
-};
+use crate::chunk_plan::indexing::types::ChunkGridSignature;
 use crate::errors::BackendError;
 use crate::meta::ZarrMeta;
 use crate::shared::{
-    ChunkedDataBackendAsync,
-    ChunkedDataBackendSync, IStr,
+    ChunkedDataBackendAsync, ChunkedDataBackendSync,
+    IStr, MaybeParIter,
 };
 
 // ============================================================================
@@ -61,57 +53,24 @@ use crate::shared::{
 // ============================================================================
 
 /// Statistics about a single planning run.
-///
-/// Returned alongside the [`GridJoinTree`] for diagnostics and tests; not
-/// inspected by the reader hot path.
 #[allow(dead_code)]
 #[derive(Debug, Default, Clone)]
 pub struct PlannerStats {
-    /// Number of distinct dims for which at least one constraint was
-    /// resolved against the backend (i.e., not full-extent).
     pub dims_resolved: usize,
-    /// Number of variables referenced by the predicate.
     pub vars_referenced: usize,
 }
 
 /// Variable selection accumulator.
-///
-/// Distinct from [`ExprVarSet`] because the builder is consumed by the
-/// reader, which needs an explicit `All` marker to expand at finalize time.
 #[derive(Debug, Clone)]
 pub enum VarSet {
     All,
     Specific(BTreeSet<IStr>),
 }
 
-impl VarSet {
-    fn union(&self, other: &VarSet) -> VarSet {
-        match (self, other) {
-            (VarSet::All, _)
-            | (_, VarSet::All) => VarSet::All,
-            (
-                VarSet::Specific(a),
-                VarSet::Specific(b),
-            ) => {
-                let mut out = a.clone();
-                out.extend(b.iter().copied());
-                VarSet::Specific(out)
-            }
-        }
-    }
-}
-
 // ============================================================================
 // Builder state
 // ============================================================================
 
-/// Internal builder state.
-///
-/// `NoConstraint` is the identity for intersect and the absorbing element
-/// for union; `Empty` is the absorbing element for intersect and the
-/// identity for union. Promoting to `Active` is delayed until at least one
-/// real constraint or var-reference is recorded so we don't allocate the
-/// full-cube rectangle set unnecessarily.
 #[derive(Debug, Clone)]
 enum BuilderState {
     NoConstraint,
@@ -123,60 +82,35 @@ enum BuilderState {
 // GridJoinTreeBuilder
 // ============================================================================
 
-/// Accumulator for a [`GridJoinTree`] under construction.
-///
-/// Generic over the backend so the same call sites work for both sync and
-/// async backends; `add_constraint*` is gated behind the appropriate
-/// trait bound. Internally everything operates on a single global
-/// [`RectangleSet`] over [`DimensionAnalysis::all_dims`] — per-array
-/// projection happens once at [`finalize`](Self::finalize).
-pub struct GridJoinTreeBuilder<'a, B> {
+/// Accumulator for a [`GridJoinTree`] under construction. The plan is
+/// already resolved by the time it reaches the builder, so the builder no
+/// longer touches the backend.
+pub struct GridJoinTreeBuilder<'a> {
     meta: &'a ZarrMeta,
-    backend: &'a B,
-    /// Global dim ordering used by the active [`RectangleSet`].
-    dims: SmallVec<[IStr; 4]>,
-    /// Length of each dim, in [`Self::dims`] order.
-    shape: SmallVec<[u64; 4]>,
+    universe: &'a Universe,
     state: BuilderState,
 }
 
-impl<'a, B> GridJoinTreeBuilder<'a, B> {
+impl<'a> GridJoinTreeBuilder<'a> {
     pub fn new(
         meta: &'a ZarrMeta,
-        backend: &'a B,
+        universe: &'a Universe,
     ) -> Self {
-        let dims: SmallVec<[IStr; 4]> = meta
-            .dim_analysis
-            .all_dims
-            .iter()
-            .copied()
-            .collect();
-        let shape: SmallVec<[u64; 4]> = dims
-            .iter()
-            .map(|d| {
-                lookup_dim_len(meta, d)
-                    .unwrap_or(0)
-            })
-            .collect();
         Self {
             meta,
-            backend,
-            dims,
-            shape,
+            universe,
             state: BuilderState::NoConstraint,
         }
     }
 
     fn full_set(&self) -> RectangleSet {
         RectangleSet::full(
-            self.dims.clone(),
-            self.shape.clone(),
+            self.universe.dims.clone(),
+            self.universe.shape.clone(),
         )
     }
 
-    /// Mark `name` as a referenced variable. Idempotent. No-op when the
-    /// builder is in [`BuilderState::Empty`].
-    pub fn add_var(&mut self, name: IStr) {
+    fn add_var(&mut self, name: IStr) {
         match &mut self.state {
             BuilderState::Empty => {}
             BuilderState::NoConstraint => {
@@ -191,16 +125,14 @@ impl<'a, B> GridJoinTreeBuilder<'a, B> {
             BuilderState::Active {
                 vars, ..
             } => {
-                if let VarSet::Specific(s) = vars
-                {
+                if let VarSet::Specific(s) = vars {
                     s.insert(name);
                 }
             }
         }
     }
 
-    /// Mark every dataset variable as referenced.
-    pub fn add_all_vars(&mut self) {
+    fn add_all_vars(&mut self) {
         match &mut self.state {
             BuilderState::Empty => {}
             BuilderState::NoConstraint => {
@@ -218,160 +150,68 @@ impl<'a, B> GridJoinTreeBuilder<'a, B> {
         }
     }
 
-    /// Force the builder into the empty state (selects nothing).
-    pub fn set_empty(&mut self) {
+    fn set_empty(&mut self) {
         self.state = BuilderState::Empty;
     }
 
-    /// AND of two constraint sets.
-    pub fn intersect(
+    /// Intersect a resolved [`RectangleSet`] into the builder's state.
+    fn intersect_rects(
         &mut self,
-        other: GridJoinTreeBuilder<'a, B>,
+        other: &RectangleSet,
     ) {
+        if other.is_empty() {
+            self.state = BuilderState::Empty;
+            return;
+        }
         let me = std::mem::replace(
             &mut self.state,
             BuilderState::Empty,
         );
-        self.state = match (me, other.state) {
-            (BuilderState::Empty, _)
-            | (_, BuilderState::Empty) => {
-                BuilderState::Empty
-            }
-            (BuilderState::NoConstraint, x)
-            | (x, BuilderState::NoConstraint) => {
-                x
-            }
-            (
+        self.state = match me {
+            BuilderState::Empty => BuilderState::Empty,
+            BuilderState::NoConstraint => {
                 BuilderState::Active {
-                    rects: a,
-                    vars: va,
-                },
-                BuilderState::Active {
-                    rects: b,
-                    vars: vb,
-                },
-            ) => {
-                let r = a.intersect(&b);
+                    rects: other.clone(),
+                    vars: VarSet::Specific(
+                        BTreeSet::new(),
+                    ),
+                }
+            }
+            BuilderState::Active {
+                rects,
+                vars,
+            } => {
+                let r = rects.intersect(other);
                 if r.is_empty() {
                     BuilderState::Empty
                 } else {
                     BuilderState::Active {
                         rects: r,
-                        vars: va.union(&vb),
+                        vars,
                     }
                 }
             }
         };
     }
 
-    /// OR of two constraint sets. A `NoConstraint` side dominates
-    /// (everything ∪ X = everything).
-    pub fn union(
-        &mut self,
-        other: GridJoinTreeBuilder<'a, B>,
-    ) {
-        let me = std::mem::replace(
-            &mut self.state,
-            BuilderState::Empty,
-        );
-        self.state = match (me, other.state) {
-            (BuilderState::NoConstraint, _)
-            | (_, BuilderState::NoConstraint) => {
-                BuilderState::NoConstraint
+    /// Apply a fully-resolved [`ExprPlan`] to the builder.
+    pub fn apply_plan(&mut self, plan: &ExprPlan) {
+        match plan {
+            ExprPlan::NoConstraint => {
+                self.add_all_vars();
             }
-            (BuilderState::Empty, x)
-            | (x, BuilderState::Empty) => x,
-            (
-                BuilderState::Active {
-                    rects: a,
-                    vars: va,
-                },
-                BuilderState::Active {
-                    rects: b,
-                    vars: vb,
-                },
-            ) => BuilderState::Active {
-                rects: a.union(&b),
-                vars: va.union(&vb),
-            },
-        };
+            ExprPlan::Empty => {
+                self.set_empty();
+            }
+            ExprPlan::Active { vars, rects } => {
+                apply_vars(self, vars);
+                if !rects.dims.is_empty() {
+                    self.intersect_rects(rects);
+                }
+            }
+        }
     }
 
-    /// `self \ other`.
-    pub fn difference(
-        &mut self,
-        other: GridJoinTreeBuilder<'a, B>,
-    ) {
-        let me = std::mem::replace(
-            &mut self.state,
-            BuilderState::Empty,
-        );
-        self.state = match (me, other.state) {
-            (BuilderState::Empty, _) => {
-                BuilderState::Empty
-            }
-            (x, BuilderState::Empty) => x,
-            (_, BuilderState::NoConstraint) => {
-                BuilderState::Empty
-            }
-            (BuilderState::NoConstraint, b) => {
-                let other_rects = match b {
-                    BuilderState::Active {
-                        rects,
-                        ..
-                    } => rects,
-                    _ => unreachable!(),
-                };
-                let r = self
-                    .full_set()
-                    .difference(&other_rects);
-                active_or_empty(
-                    r,
-                    VarSet::Specific(
-                        BTreeSet::new(),
-                    ),
-                )
-            }
-            (
-                BuilderState::Active {
-                    rects: a,
-                    vars: va,
-                },
-                BuilderState::Active {
-                    rects: b,
-                    vars: vb,
-                },
-            ) => active_or_empty(
-                a.difference(&b),
-                va.union(&vb),
-            ),
-        };
-    }
-
-    /// In-place complement of the current state.
-    pub fn negate(&mut self) {
-        let me = std::mem::replace(
-            &mut self.state,
-            BuilderState::Empty,
-        );
-        self.state = match me {
-            BuilderState::NoConstraint => {
-                BuilderState::Empty
-            }
-            BuilderState::Empty => {
-                BuilderState::NoConstraint
-            }
-            BuilderState::Active {
-                rects,
-                vars,
-            } => active_or_empty(
-                rects.negate(),
-                vars,
-            ),
-        };
-    }
-
-    /// Stats snapshot.
     pub fn stats(&self) -> PlannerStats {
         match &self.state {
             BuilderState::NoConstraint
@@ -392,10 +232,10 @@ impl<'a, B> GridJoinTreeBuilder<'a, B> {
                     {
                         if !is_full_dim(
                             dim_ranges,
-                            self.shape[i],
+                            self.universe.shape[i],
                         ) {
                             dim_set.insert(
-                                self.dims[i],
+                                self.universe.dims[i],
                             );
                         }
                     }
@@ -416,48 +256,25 @@ impl<'a, B> GridJoinTreeBuilder<'a, B> {
         }
     }
 
-    /// Materialize the accumulated state into a [`GridJoinTree`].
     pub fn finalize(
         self,
     ) -> Result<Option<GridJoinTree>, BackendError>
     {
         let GridJoinTreeBuilder {
             meta,
-            backend: _,
-            dims: _,
-            shape: _,
+            universe,
             state,
         } = self;
 
         let (rects, vars) = match state {
-            BuilderState::Empty => {
-                return Ok(None);
-            }
-            BuilderState::NoConstraint => {
-                // Treat an empty expression as "all variables, no
-                // constraints" so the reader emits one chunk per array.
-                let dims: SmallVec<[IStr; 4]> =
-                    meta.dim_analysis
-                        .all_dims
-                        .iter()
-                        .copied()
-                        .collect();
-                let shape: SmallVec<[u64; 4]> =
-                    dims.iter()
-                        .map(|d| {
-                            lookup_dim_len(
-                                meta, d,
-                            )
-                            .unwrap_or(0)
-                        })
-                        .collect();
-                (
-                    RectangleSet::full(
-                        dims, shape,
-                    ),
-                    VarSet::All,
-                )
-            }
+            BuilderState::Empty => return Ok(None),
+            BuilderState::NoConstraint => (
+                RectangleSet::full(
+                    universe.dims.clone(),
+                    universe.shape.clone(),
+                ),
+                VarSet::All,
+            ),
             BuilderState::Active {
                 rects,
                 vars,
@@ -479,145 +296,22 @@ impl<'a, B> GridJoinTreeBuilder<'a, B> {
     }
 }
 
-impl<'a, B: ChunkedDataBackendSync>
-    GridJoinTreeBuilder<'a, B>
-{
-    /// Resolve a value-range constraint synchronously and intersect into
-    /// the global rectangle set.
-    pub fn add_constraint(
-        &mut self,
-        dim: IStr,
-        vr: &ValueRangePresent,
-        expansion: Expansion,
-    ) -> Result<(), BackendError> {
-        let dim_len =
-            lookup_dim_len(self.meta, &dim)
-                .ok_or_else(|| {
-                    unknown_dim(dim)
-                })?;
-        let ranges = resolve_value_range_sync(
-            self.backend,
-            &dim,
-            self.meta,
-            dim_len,
-            vr,
-            expansion,
-        )
-        .map_err(|e| resolve_error(&dim, e))?;
-        self.intersect_dim(dim, ranges);
-        Ok(())
-    }
-}
-
-impl<'a, B: ChunkedDataBackendAsync>
-    GridJoinTreeBuilder<'a, B>
-{
-    /// Resolve a value-range constraint asynchronously.
-    pub async fn add_constraint_async(
-        &mut self,
-        dim: IStr,
-        vr: &ValueRangePresent,
-        expansion: Expansion,
-    ) -> Result<(), BackendError> {
-        let dim_len =
-            lookup_dim_len(self.meta, &dim)
-                .ok_or_else(|| {
-                    unknown_dim(dim)
-                })?;
-        let ranges = resolve_value_range_async(
-            self.backend,
-            &dim,
-            self.meta,
-            dim_len,
-            vr,
-            expansion,
-        )
-        .await
-        .map_err(|e| resolve_error(&dim, e))?;
-        self.intersect_dim(dim, ranges);
-        Ok(())
-    }
-}
-
-impl<'a, B> GridJoinTreeBuilder<'a, B> {
-    fn intersect_dim(
-        &mut self,
-        dim: IStr,
-        ranges: Vec<Range<u64>>,
-    ) {
-        if ranges.is_empty() {
-            self.state = BuilderState::Empty;
-            return;
-        }
-        let one =
-            RectangleSet::from_dim_constraint(
-                self.dims.clone(),
-                self.shape.clone(),
-                dim,
-                ranges,
-            );
-        match &mut self.state {
-            BuilderState::Empty => {}
-            BuilderState::NoConstraint => {
-                self.state =
-                    BuilderState::Active {
-                        rects: one,
-                        vars: VarSet::Specific(
-                            BTreeSet::new(),
-                        ),
-                    };
-            }
-            BuilderState::Active {
-                rects,
-                ..
-            } => {
-                let r = rects.intersect(&one);
-                if r.is_empty() {
-                    self.state =
-                        BuilderState::Empty;
-                } else {
-                    *rects = r;
+fn apply_vars(
+    builder: &mut GridJoinTreeBuilder<'_>,
+    vars: &ExprVarSet,
+) {
+    match vars {
+        ExprVarSet::All => builder.add_all_vars(),
+        ExprVarSet::Specific(items) => {
+            if items.is_empty() {
+                builder.set_empty();
+            } else {
+                for v in items {
+                    builder.add_var(*v);
                 }
             }
         }
     }
-}
-
-// ============================================================================
-// Helpers
-// ============================================================================
-
-fn lookup_dim_len(
-    meta: &ZarrMeta,
-    dim: &IStr,
-) -> Option<u64> {
-    meta.dim_analysis
-        .dim_lengths
-        .get(dim)
-        .copied()
-        .or_else(|| {
-            meta.array_by_path(*dim).and_then(
-                |a| a.shape.first().copied(),
-            )
-        })
-}
-
-fn unknown_dim(dim: IStr) -> BackendError {
-    BackendError::other(format!(
-        "unknown dim '{}' (no dim length in meta and no \
-         coordinate array)",
-        AsRef::<str>::as_ref(&dim),
-    ))
-}
-
-fn resolve_error<E: std::fmt::Display>(
-    dim: &IStr,
-    err: E,
-) -> BackendError {
-    BackendError::other(format!(
-        "value-range resolution failed for dim '{}': {err}",
-        AsRef::<str>::as_ref(dim),
-    ))
 }
 
 fn is_full_dim(
@@ -629,30 +323,10 @@ fn is_full_dim(
         && ranges[0].end == dim_len
 }
 
-fn active_or_empty(
-    rects: RectangleSet,
-    vars: VarSet,
-) -> BuilderState {
-    if rects.is_empty() {
-        BuilderState::Empty
-    } else {
-        BuilderState::Active { rects, vars }
-    }
-}
-
 // ============================================================================
 // Per-signature group construction
 // ============================================================================
 
-/// Materialize one [`OwnedGridGroup`] per chunk-grid signature.
-///
-/// Variables are grouped by `(dims, outer_chunk_shape, inner_chunk_shape)`;
-/// for each group the global [`RectangleSet`] is projected onto the
-/// signature's dim subset and converted into per-chunk [`ArraySubset`]s.
-/// 1D dim-coord groups whose dim is already covered by a multi-dim group
-/// in this plan are dropped (the multi-dim group's reader materializes the
-/// dim column from its coord array, so the standalone group adds duplicate
-/// reads and would force an extra `Independent` concat in the join tree).
 fn build_groups(
     meta: &ZarrMeta,
     rects: &RectangleSet,
@@ -687,8 +361,6 @@ fn build_groups(
     Ok(drop_redundant_dim_coord_groups(groups))
 }
 
-/// Group variables by their full `(dims, outer chunk shape, inner chunk
-/// shape)` signature so each group can share one chunk-index plan.
 fn group_vars_by_signature(
     meta: &ZarrMeta,
     vars: &[IStr],
@@ -852,9 +524,6 @@ fn build_one_group(
     )))
 }
 
-/// Drop 1D dim-coord-only groups whose dim is also covered by a multi-dim
-/// group in this plan; the multi-dim group's reader will materialize the
-/// dim column from the coord array.
 fn drop_redundant_dim_coord_groups(
     groups: Vec<OwnedGridGroup>,
 ) -> Vec<OwnedGridGroup> {
@@ -878,8 +547,6 @@ fn drop_redundant_dim_coord_groups(
         .collect()
 }
 
-/// Compute the chunk-local [`ChunkSubset`] for a chunk index. Returns
-/// `None` when the chunk is fully covered (no per-chunk slicing needed).
 fn compute_chunk_subset(
     chunk_idx: &[u64],
     chunk_shape: &[u64],
@@ -887,7 +554,6 @@ fn compute_chunk_subset(
     subsets: &[ArraySubset],
 ) -> Option<ChunkSubset> {
     let ndim = chunk_idx.len();
-
     let chunk_start: Vec<u64> = chunk_idx
         .iter()
         .zip(chunk_shape)
@@ -899,20 +565,15 @@ fn compute_chunk_subset(
         .zip(array_shape)
         .map(|((s, cs), a)| (s + cs).min(*a))
         .collect();
-
-    // Bounding box of the union of subset∩chunk intervals, per dim.
-    // Initialize with inverse bounds so first intersection updates them.
     let mut bbox_start: Vec<u64> =
         std::iter::repeat(u64::MAX).take(ndim).collect();
     let mut bbox_end: Vec<u64> =
         std::iter::repeat(0u64).take(ndim).collect();
-
     for subset in subsets {
         let ranges = subset.to_ranges();
         for d in 0..ndim {
-            let inter_start = ranges[d]
-                .start
-                .max(chunk_start[d]);
+            let inter_start =
+                ranges[d].start.max(chunk_start[d]);
             let inter_end =
                 ranges[d].end.min(chunk_end[d]);
             if inter_start < inter_end {
@@ -923,22 +584,17 @@ fn compute_chunk_subset(
             }
         }
     }
-
-    let local_ranges: Vec<Range<u64>> =
-        bbox_start
-            .iter()
-            .zip(bbox_end.iter())
-            .zip(chunk_start.iter())
-            .map(|((s, e), cs)| {
-                (s - cs)..(e - cs)
-            })
-            .collect();
+    let local_ranges: Vec<Range<u64>> = bbox_start
+        .iter()
+        .zip(bbox_end.iter())
+        .zip(chunk_start.iter())
+        .map(|((s, e), cs)| (s - cs)..(e - cs))
+        .collect();
     let actual_chunk_shape: Vec<u64> = chunk_end
         .iter()
         .zip(chunk_start.iter())
         .map(|(e, s)| e - s)
         .collect();
-
     let subset =
         ChunkSubset::from_ranges(local_ranges);
     if is_full_chunk(&subset, &actual_chunk_shape)
@@ -964,8 +620,6 @@ fn is_full_chunk(
 // meta.root.children -> GridJoinTree::Group wrapping
 // ============================================================================
 
-/// Wrap the tree with one [`GridJoinTree::Group`] node per top-level child of
-/// [`ZarrMeta::root`].
 fn wrap_root_groups(
     tree: GridJoinTree,
     meta: &ZarrMeta,
@@ -984,7 +638,17 @@ fn wrap_root_groups(
 // Top-level entry points
 // ============================================================================
 
+/// Threshold above which we dispatch coord resolution to rayon. A single
+/// dim resolves faster sequentially because rayon's pool entry cost is
+/// real; ≥ 2 dims means independent coord arrays so it's worth paying.
+const PARALLEL_RESOLVE_THRESHOLD: usize = 2;
+
 /// Compile a Polars [`Expr`] into a [`GridJoinTree`] synchronously.
+///
+/// Resolution is parallel across independent dims: a dry-run pass collects
+/// every `(dim, vr, expansion)` triple the expression touches, then rayon
+/// resolves them concurrently. The real compile then walks the expression
+/// against a lookup-only resolver.
 pub fn compile_to_tree_sync<
     B: ChunkedDataBackendSync,
 >(
@@ -995,13 +659,73 @@ pub fn compile_to_tree_sync<
     (Option<GridJoinTree>, PlannerStats),
     BackendError,
 > {
-    let plan = compile_expr_to_plan(expr, meta)?;
+    let universe = Universe::from_meta(meta);
+    let keys = collect_resolution_keys(
+        expr, meta, &universe,
+    );
+    let resolved: Vec<(
+        ResolveKey,
+        Vec<Range<u64>>,
+    )> = keys
+        .maybe_par_iter(PARALLEL_RESOLVE_THRESHOLD)
+        .map_collect(|key| {
+            let dim_len = lookup_dim_len(
+                meta, &key.dim,
+            )
+            .ok_or_else(|| unknown_dim(key.dim))?;
+            let r = resolve_value_range_sync(
+                backend,
+                &key.dim,
+                meta,
+                dim_len,
+                &key.vr,
+                key.expansion,
+            )?;
+            Ok::<_, BackendError>((
+                key.clone(),
+                r,
+            ))
+        })?;
+    let table: HashMap<
+        ResolveKey,
+        Vec<Range<u64>>,
+    > = resolved.into_iter().collect();
+    let resolver = CachedResolver::from_table(table);
+
+    let plan = compile_expr_to_plan(
+        expr,
+        meta,
+        &universe,
+        &resolver,
+    )?;
     let mut builder =
-        GridJoinTreeBuilder::new(meta, backend);
-    apply_plan_sync(&plan, &mut builder)?;
+        GridJoinTreeBuilder::new(meta, &universe);
+    builder.apply_plan(&plan);
     let stats = builder.stats();
     let tree = builder.finalize()?;
     Ok((tree, stats))
+}
+
+/// Run a pure dry-run compile to collect every `(dim, vr, expansion)`
+/// triple the expression would resolve, deduplicated.
+fn collect_resolution_keys(
+    expr: &Expr,
+    meta: &ZarrMeta,
+    universe: &Universe,
+) -> Vec<ResolveKey> {
+    let collector = CollectingResolver::new();
+    let _ = compile_expr_to_plan(
+        expr,
+        meta,
+        universe,
+        &collector,
+    );
+    let unique: HashMap<ResolveKey, ()> = collector
+        .into_keys()
+        .into_iter()
+        .map(|k| (k, ()))
+        .collect();
+    unique.into_keys().collect()
 }
 
 /// Async mirror of [`compile_to_tree_sync`].
@@ -1015,10 +739,76 @@ pub async fn compile_to_tree_async<
     (Option<GridJoinTree>, PlannerStats),
     BackendError,
 > {
-    let plan = compile_expr_to_plan(expr, meta)?;
+    let universe = Universe::from_meta(meta);
+    let keys = collect_resolution_keys(
+        expr, meta, &universe,
+    );
+
+    // For ≤ 1 key, sequential .await avoids try_join_all's BoxFuture and
+    // task-scheduler overhead. For larger N, parallel concurrency wins.
+    let resolved: Vec<(
+        ResolveKey,
+        Vec<Range<u64>>,
+    )> = if keys.len() <= 1 {
+        let mut out = Vec::with_capacity(keys.len());
+        for key in keys {
+            let dim_len = lookup_dim_len(
+                meta, &key.dim,
+            )
+            .ok_or_else(|| unknown_dim(key.dim))?;
+            let r = resolve_value_range_async(
+                backend,
+                &key.dim,
+                meta,
+                dim_len,
+                &key.vr,
+                key.expansion,
+            )
+            .await?;
+            out.push((key, r));
+        }
+        out
+    } else {
+        futures::future::try_join_all(
+            keys.into_iter().map(
+                |key| async move {
+                    let dim_len = lookup_dim_len(
+                        meta, &key.dim,
+                    )
+                    .ok_or_else(|| {
+                        unknown_dim(key.dim)
+                    })?;
+                    let r =
+                        resolve_value_range_async(
+                            backend,
+                            &key.dim,
+                            meta,
+                            dim_len,
+                            &key.vr,
+                            key.expansion,
+                        )
+                        .await?;
+                    Ok::<_, BackendError>((key, r))
+                },
+            ),
+        )
+        .await?
+    };
+    let table: HashMap<
+        ResolveKey,
+        Vec<Range<u64>>,
+    > = resolved.into_iter().collect();
+    let resolver = CachedResolver::from_table(table);
+
+    let plan = compile_expr_to_plan(
+        expr,
+        meta,
+        &universe,
+        &resolver,
+    )?;
     let mut builder =
-        GridJoinTreeBuilder::new(meta, backend);
-    apply_plan_async(&plan, &mut builder).await?;
+        GridJoinTreeBuilder::new(meta, &universe);
+    builder.apply_plan(&plan);
     let stats = builder.stats();
     let tree = builder.finalize()?;
     Ok((tree, stats))
@@ -1027,383 +817,13 @@ pub async fn compile_to_tree_async<
 fn compile_expr_to_plan(
     expr: &Expr,
     meta: &ZarrMeta,
+    universe: &Universe,
+    resolver: &dyn crate::chunk_plan::exprs::compile_ctx::CoordResolver,
 ) -> Result<ExprPlan, BackendError> {
-    use crate::chunk_plan::LazyCompileCtx;
     use crate::chunk_plan::compile_expr;
-    use crate::chunk_plan::compute_dims_and_lengths_unified;
 
-    let (dims, _) =
-        compute_dims_and_lengths_unified(meta);
-    let mut ctx =
-        LazyCompileCtx::new(meta, &dims);
+    let mut ctx = LazyCompileCtx::new(
+        meta, universe, resolver,
+    );
     compile_expr(expr, &mut ctx)
-}
-
-// ============================================================================
-// ExprPlan / LazyArraySelection -> builder walker
-// ============================================================================
-
-fn apply_plan_sync<B: ChunkedDataBackendSync>(
-    plan: &ExprPlan,
-    builder: &mut GridJoinTreeBuilder<'_, B>,
-) -> Result<(), BackendError> {
-    match plan {
-        ExprPlan::NoConstraint => {
-            builder.add_all_vars();
-            Ok(())
-        }
-        ExprPlan::Empty => {
-            builder.set_empty();
-            Ok(())
-        }
-        ExprPlan::Active {
-            vars,
-            constraints,
-        } => {
-            let mut sub =
-                compile_lazy_selection_sync(
-                    constraints,
-                    builder,
-                )?;
-            apply_vars_to_builder(&mut sub, vars);
-            builder.intersect(sub);
-            Ok(())
-        }
-    }
-}
-
-async fn apply_plan_async<
-    'p,
-    'a,
-    B: ChunkedDataBackendAsync,
->(
-    plan: &'p ExprPlan,
-    builder: &mut GridJoinTreeBuilder<'a, B>,
-) -> Result<(), BackendError>
-where
-    'a: 'p,
-{
-    match plan {
-        ExprPlan::NoConstraint => {
-            builder.add_all_vars();
-            Ok(())
-        }
-        ExprPlan::Empty => {
-            builder.set_empty();
-            Ok(())
-        }
-        ExprPlan::Active {
-            vars,
-            constraints,
-        } => {
-            let mut sub =
-                compile_lazy_selection_async(
-                    constraints,
-                    builder,
-                )
-                .await?;
-            apply_vars_to_builder(&mut sub, vars);
-            builder.intersect(sub);
-            Ok(())
-        }
-    }
-}
-
-fn apply_vars_to_builder<B>(
-    builder: &mut GridJoinTreeBuilder<'_, B>,
-    vars: &ExprVarSet,
-) {
-    match vars {
-        ExprVarSet::All => builder.add_all_vars(),
-        ExprVarSet::Specific(items) => {
-            if items.is_empty() {
-                // Constraints with no var-set means no rows can be
-                // produced because there's nothing to read.
-                builder.set_empty();
-            } else {
-                for v in items {
-                    builder.add_var(*v);
-                }
-            }
-        }
-    }
-}
-
-fn child_builder<'a, B>(
-    parent: &GridJoinTreeBuilder<'a, B>,
-) -> GridJoinTreeBuilder<'a, B> {
-    GridJoinTreeBuilder {
-        meta: parent.meta,
-        backend: parent.backend,
-        dims: parent.dims.clone(),
-        shape: parent.shape.clone(),
-        state: BuilderState::NoConstraint,
-    }
-}
-
-fn compile_lazy_selection_sync<
-    'a,
-    B: ChunkedDataBackendSync,
->(
-    sel: &LazyArraySelection,
-    parent: &GridJoinTreeBuilder<'a, B>,
-) -> Result<
-    GridJoinTreeBuilder<'a, B>,
-    BackendError,
-> {
-    match sel {
-        LazyArraySelection::Rectangles(rects) => {
-            let mut acc = child_builder(parent);
-            acc.set_empty();
-            for rect in rects {
-                let rect_b =
-                    compile_rectangle_sync(
-                        rect, parent,
-                    )?;
-                acc.union(rect_b);
-            }
-            Ok(acc)
-        }
-        LazyArraySelection::Difference(a, b) => {
-            let mut a_b =
-                compile_lazy_selection_sync(
-                    a, parent,
-                )?;
-            let b_b =
-                compile_lazy_selection_sync(
-                    b, parent,
-                )?;
-            a_b.difference(b_b);
-            Ok(a_b)
-        }
-        LazyArraySelection::Union(a, b) => {
-            let mut a_b =
-                compile_lazy_selection_sync(
-                    a, parent,
-                )?;
-            let b_b =
-                compile_lazy_selection_sync(
-                    b, parent,
-                )?;
-            a_b.union(b_b);
-            Ok(a_b)
-        }
-        LazyArraySelection::BooleanNot(inner) => {
-            let mut b =
-                compile_lazy_selection_sync(
-                    inner, parent,
-                )?;
-            b.negate();
-            Ok(b)
-        }
-    }
-}
-
-fn compile_lazy_selection_async<
-    'sel,
-    'a,
-    B: ChunkedDataBackendAsync,
->(
-    sel: &'sel LazyArraySelection,
-    parent: &'sel GridJoinTreeBuilder<'a, B>,
-) -> std::pin::Pin<
-    Box<
-        dyn std::future::Future<
-                Output = Result<
-                    GridJoinTreeBuilder<'a, B>,
-                    BackendError,
-                >,
-            > + Send
-            + 'sel,
-    >,
->
-where
-    'a: 'sel,
-{
-    Box::pin(async move {
-        match sel {
-            LazyArraySelection::Rectangles(
-                rects,
-            ) => {
-                let mut acc =
-                    child_builder(parent);
-                acc.set_empty();
-                for rect in rects {
-                    let rect_b =
-                        compile_rectangle_async(
-                            rect, parent,
-                        )
-                        .await?;
-                    acc.union(rect_b);
-                }
-                Ok(acc)
-            }
-            LazyArraySelection::Difference(
-                a,
-                b,
-            ) => {
-                let mut a_b =
-                    compile_lazy_selection_async(
-                        a, parent,
-                    )
-                    .await?;
-                let b_b =
-                    compile_lazy_selection_async(
-                        b, parent,
-                    )
-                    .await?;
-                a_b.difference(b_b);
-                Ok(a_b)
-            }
-            LazyArraySelection::Union(a, b) => {
-                let mut a_b =
-                    compile_lazy_selection_async(
-                        a, parent,
-                    )
-                    .await?;
-                let b_b =
-                    compile_lazy_selection_async(
-                        b, parent,
-                    )
-                    .await?;
-                a_b.union(b_b);
-                Ok(a_b)
-            }
-            LazyArraySelection::BooleanNot(
-                inner,
-            ) => {
-                let mut b =
-                    compile_lazy_selection_async(
-                        inner, parent,
-                    )
-                    .await?;
-                b.negate();
-                Ok(b)
-            }
-        }
-    })
-}
-
-/// Classification of a single [`LazyDimConstraint`].
-enum DimAction<'a> {
-    /// Unconstrained along this dim — nothing to do.
-    Skip,
-    /// Proven empty along this dim — short-circuit to the empty rectangle.
-    Empty,
-    /// Resolve a value-range with the given binary-search expansion.
-    Resolve(&'a ValueRangePresent, Expansion),
-}
-
-fn classify(
-    c: &LazyDimConstraint,
-) -> DimAction<'_> {
-    match c {
-        LazyDimConstraint::All => DimAction::Skip,
-        LazyDimConstraint::Empty => DimAction::Empty,
-        LazyDimConstraint::Unresolved(vr) => {
-            DimAction::Resolve(vr, Expansion::Exact)
-        }
-        LazyDimConstraint::InterpolationRange(vr) => {
-            DimAction::Resolve(
-                vr,
-                Expansion::InterpolationNeighbor,
-            )
-        }
-        LazyDimConstraint::WrappingInterpolationRange(
-            vr,
-        ) => DimAction::Resolve(
-            vr,
-            Expansion::WrappingGhost,
-        ),
-    }
-}
-
-/// Common preamble for both sync/async rectangle compilation: handle the
-/// `is_empty` / `is_all` shortcut cases. Returns `Some(builder)` if the
-/// caller should return immediately, or `None` to proceed with per-dim
-/// resolution into the returned builder.
-fn rectangle_preamble<'a, B>(
-    rect: &LazyHyperRectangle,
-    parent: &GridJoinTreeBuilder<'a, B>,
-) -> (GridJoinTreeBuilder<'a, B>, bool) {
-    let mut b = child_builder(parent);
-    if rect.is_empty() {
-        b.set_empty();
-        return (b, true);
-    }
-    if rect.is_all() {
-        // Promote NoConstraint -> Active with the full set so subsequent
-        // intersections / unions don't get short-circuited as identity.
-        b.state = BuilderState::Active {
-            rects: b.full_set(),
-            vars: VarSet::Specific(
-                BTreeSet::new(),
-            ),
-        };
-        return (b, true);
-    }
-    (b, false)
-}
-
-fn compile_rectangle_sync<
-    'a,
-    B: ChunkedDataBackendSync,
->(
-    rect: &LazyHyperRectangle,
-    parent: &GridJoinTreeBuilder<'a, B>,
-) -> Result<
-    GridJoinTreeBuilder<'a, B>,
-    BackendError,
-> {
-    let (mut b, done) =
-        rectangle_preamble(rect, parent);
-    if done {
-        return Ok(b);
-    }
-    for (dim, constraint) in rect.dims() {
-        match classify(constraint) {
-            DimAction::Skip => {}
-            DimAction::Empty => {
-                b.set_empty();
-                return Ok(b);
-            }
-            DimAction::Resolve(vr, exp) => {
-                b.add_constraint(*dim, vr, exp)?;
-            }
-        }
-    }
-    Ok(b)
-}
-
-async fn compile_rectangle_async<
-    'a,
-    B: ChunkedDataBackendAsync,
->(
-    rect: &LazyHyperRectangle,
-    parent: &GridJoinTreeBuilder<'a, B>,
-) -> Result<
-    GridJoinTreeBuilder<'a, B>,
-    BackendError,
-> {
-    let (mut b, done) =
-        rectangle_preamble(rect, parent);
-    if done {
-        return Ok(b);
-    }
-    for (dim, constraint) in rect.dims() {
-        match classify(constraint) {
-            DimAction::Skip => {}
-            DimAction::Empty => {
-                b.set_empty();
-                return Ok(b);
-            }
-            DimAction::Resolve(vr, exp) => {
-                b.add_constraint_async(
-                    *dim, vr, exp,
-                )
-                .await?;
-            }
-        }
-    }
-    Ok(b)
 }

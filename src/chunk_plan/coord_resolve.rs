@@ -1,14 +1,23 @@
 //! Coordinate-to-index resolution.
 //!
 //! Maps a [`ValueRangePresent`] over a dim's coordinate values to a
-//! `Range<u64>` of array indices via [`slice::partition_point`] on the
-//! materialized coordinate array. Backends may declare a dim already-sorted
-//! (via [`ChunkedDataBackendSync::assume_sorted_dim`]) to skip the
+//! `Range<u64>` of array indices via [`slice::partition_point`] on a
+//! type-native coordinate buffer (`Vec<f64>` or `Vec<i64>`). Backends may
+//! declare a dim already-sorted (via
+//! [`ChunkedDataBackendSync::assume_sorted_dim`]) to skip the
 //! [`slice::is_sorted_by`] monotonicity probe.
+//!
+//! `CoordScalar` is only used as the IR for `ValueRangePresent` bounds —
+//! the search itself runs on raw types. Time-encoded coords decode once
+//! into `Vec<i64>` nanoseconds; plain floats stay as `Vec<f64>`. NaN values
+//! produced by float-time decoding are dropped silently.
 
 use std::cmp::Ordering;
+use std::collections::HashMap;
 use std::ops::{Bound, Range};
 
+use crate::chunk_plan::exprs::compile_ctx::CoordResolver;
+use crate::errors::BackendError;
 use crate::meta::{TimeEncoding, ZarrMeta};
 use crate::reader::ColumnData;
 use crate::shared::{
@@ -20,27 +29,11 @@ use super::indexing::types::{
     CoordScalar, ValueRangePresent,
 };
 
-#[derive(Debug, Clone)]
-pub enum ResolutionError {
-    Unresolvable(String),
-}
-
-impl std::fmt::Display for ResolutionError {
-    fn fmt(
-        &self,
-        f: &mut std::fmt::Formatter<'_>,
-    ) -> std::fmt::Result {
-        let ResolutionError::Unresolvable(msg) =
-            self;
-        write!(f, "unresolvable: {msg}")
-    }
-}
-
-impl std::error::Error for ResolutionError {}
-
 /// Selects how a [`ValueRangePresent`] is converted into one or more index
 /// ranges after the binary search.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash,
+)]
 pub enum Expansion {
     /// No expansion — return the searched cells exactly.
     Exact,
@@ -57,8 +50,32 @@ pub enum Expansion {
 pub const GHOST_EXPANSION: u64 = 3;
 
 // ============================================================================
-// Coord array fetch + decode
+// Coord buffer + dim context
 // ============================================================================
+
+/// Type-native coord array. Two variants cover all coord dtypes:
+/// `F64` for plain floats; `I64` for plain ints (any signed/unsigned width
+/// gets cast) AND for time-encoded coords (decoded to nanoseconds).
+enum CoordBuffer {
+    F64(Vec<f64>),
+    I64(Vec<i64>),
+}
+
+impl CoordBuffer {
+    fn len(&self) -> usize {
+        match self {
+            CoordBuffer::F64(v) => v.len(),
+            CoordBuffer::I64(v) => v.len(),
+        }
+    }
+
+    fn truncate(&mut self, n: usize) {
+        match self {
+            CoordBuffer::F64(v) => v.truncate(n),
+            CoordBuffer::I64(v) => v.truncate(n),
+        }
+    }
+}
 
 #[derive(Debug)]
 struct DimCtx {
@@ -104,96 +121,180 @@ impl DimCtx {
     }
 }
 
-fn decode_chunk_into(
-    chunk: &ColumnData,
-    out: &mut Vec<CoordScalar>,
+// ============================================================================
+// Decode chunks into a typed buffer
+// ============================================================================
+
+/// Decide the buffer type once: plain F64/F32 chunks → `F64`; everything
+/// else (signed/unsigned ints, time-encoded floats, time-encoded ints) →
+/// `I64`. Time-encoded coords decode to `i64` nanoseconds during the load
+/// pass, never producing a `CoordScalar`.
+fn buffer_kind(
+    sample: &ColumnData,
+    has_time_enc: bool,
+) -> BufferKind {
+    if has_time_enc {
+        return BufferKind::I64;
+    }
+    match sample {
+        ColumnData::F32(_) | ColumnData::F64(_) => {
+            BufferKind::F64
+        }
+        _ => BufferKind::I64,
+    }
+}
+
+#[derive(Clone, Copy)]
+enum BufferKind {
+    F64,
+    I64,
+}
+
+fn build_buffer(
+    chunks: &[std::sync::Arc<ColumnData>],
+    n: usize,
     te: Option<&TimeEncoding>,
-) {
-    let decode_float = |x: f64| match te {
-        Some(enc) => enc
-            .decode_f64(x)
-            .map(|ns| time_scalar(ns, enc))
-            .unwrap_or(CoordScalar::F64(x)),
-        None => CoordScalar::F64(x),
-    };
-    match chunk {
-        ColumnData::F64(v) => out.extend(
-            v.iter().copied().map(decode_float),
-        ),
-        ColumnData::F32(v) => out.extend(
-            v.iter()
-                .copied()
-                .map(|x| decode_float(x as f64)),
-        ),
-        _ => {
-            out
-                .extend((0..chunk.len()).map(|i| {
-                super::exprs::apply_time_encoding(
-                    chunk.get_i64(i).unwrap_or(0),
+) -> CoordBuffer {
+    let kind = chunks
+        .first()
+        .map(|c| {
+            buffer_kind(c.as_ref(), te.is_some())
+        })
+        .unwrap_or(BufferKind::I64);
+    match kind {
+        BufferKind::F64 => {
+            let mut out: Vec<f64> =
+                Vec::with_capacity(n);
+            for chunk in chunks {
+                match chunk.as_ref() {
+                    ColumnData::F64(v) => {
+                        out.extend_from_slice(v);
+                    }
+                    ColumnData::F32(v) => {
+                        out.extend(
+                            v.iter()
+                                .map(|&x| x as f64),
+                        );
+                    }
+                    _ => {
+                        // Mixed-dtype chunks
+                        // shouldn't happen; fall
+                        // through via get_i64 cast
+                        // for safety.
+                        for i in 0..chunk.len() {
+                            out.push(
+                                chunk
+                                    .get_i64(i)
+                                    .unwrap_or(0)
+                                    as f64,
+                            );
+                        }
+                    }
+                }
+            }
+            out.truncate(n);
+            CoordBuffer::F64(out)
+        }
+        BufferKind::I64 => {
+            let mut out: Vec<i64> =
+                Vec::with_capacity(n);
+            for chunk in chunks {
+                decode_chunk_to_i64(
+                    chunk.as_ref(),
                     te,
-                )
-            }))
+                    &mut out,
+                );
+            }
+            out.truncate(n);
+            CoordBuffer::I64(out)
         }
     }
 }
 
-#[inline]
-fn time_scalar(
-    ns: i64,
-    enc: &TimeEncoding,
-) -> CoordScalar {
-    if enc.is_duration {
-        CoordScalar::DurationNs(ns)
-    } else {
-        CoordScalar::DatetimeNs(ns)
+fn decode_chunk_to_i64(
+    chunk: &ColumnData,
+    te: Option<&TimeEncoding>,
+    out: &mut Vec<i64>,
+) {
+    match (chunk, te) {
+        (ColumnData::F64(v), Some(enc)) => {
+            // F64 raw + time encoding: decode each
+            // value to i64 ns; drop NaN/non-finite.
+            for &x in v {
+                if let Some(ns) = enc.decode_f64(x)
+                {
+                    out.push(ns);
+                }
+            }
+        }
+        (ColumnData::F32(v), Some(enc)) => {
+            for &x in v {
+                if let Some(ns) =
+                    enc.decode_f64(x as f64)
+                {
+                    out.push(ns);
+                }
+            }
+        }
+        (ColumnData::I64(v), Some(enc)) => {
+            out.extend(
+                v.iter().map(|&x| enc.decode(x)),
+            );
+        }
+        (ColumnData::I64(v), None) => {
+            out.extend_from_slice(v);
+        }
+        _ => {
+            // Other integer widths or float-without-encoding (rare for
+            // I64 buffer): cast each element via get_i64 then optionally
+            // apply time encoding.
+            for i in 0..chunk.len() {
+                let raw =
+                    chunk.get_i64(i).unwrap_or(0);
+                let val = match te {
+                    Some(enc) => enc.decode(raw),
+                    None => raw,
+                };
+                out.push(val);
+            }
+        }
     }
 }
 
-fn load_coord_array_sync<
-    B: ChunkedDataBackendSync,
->(
+// ============================================================================
+// Async/sync chunk loading
+// ============================================================================
+
+fn load_chunks_sync<B: ChunkedDataBackendSync>(
     backend: &B,
     ctx: &DimCtx,
-) -> Result<Vec<CoordScalar>, ResolutionError> {
-    let te = ctx.time_enc.as_ref();
+) -> Result<
+    Vec<std::sync::Arc<ColumnData>>,
+    BackendError,
+> {
     let n_chunks = ctx.n_chunks() as usize;
-
-    // Load chunks concurrently using parallel iteration
     const PARALLEL_CHUNK_THRESHOLD: usize = 2;
-
-    let chunks: Vec<_> = (0..n_chunks)
+    (0..n_chunks)
         .collect::<Vec<_>>()
         .maybe_par_iter(PARALLEL_CHUNK_THRESHOLD)
         .map_collect(|ci| {
-            backend
-                .read_chunk_sync(
-                    &ctx.array_path,
-                    &[*ci as u64],
-                )
-                .map_err(|e| {
-                    ResolutionError::Unresolvable(
-                        e.to_string(),
-                    )
-                })
-        })?;
-
-    let mut out =
-        Vec::with_capacity(ctx.n as usize);
-    for chunk in chunks {
-        decode_chunk_into(&chunk, &mut out, te);
-    }
-
-    out.truncate(ctx.n as usize);
-    Ok(out)
+            backend.read_chunk_sync(
+                &ctx.array_path,
+                &[*ci as u64],
+            )
+        })
 }
 
-async fn load_coord_array_async<
+async fn load_chunks_async<
     B: ChunkedDataBackendAsync,
 >(
     backend: &B,
     ctx: &DimCtx,
-) -> Result<Vec<CoordScalar>, ResolutionError> {
-    let chunks = futures::future::try_join_all(
+) -> Result<
+    Vec<std::sync::Arc<ColumnData>>,
+    BackendError,
+> {
+    futures::future::try_join_all(
         (0..ctx.n_chunks()).map(
             |ci| async move {
                 backend
@@ -206,151 +307,142 @@ async fn load_coord_array_async<
         ),
     )
     .await
-    .map_err(|e| {
-        ResolutionError::Unresolvable(
-            e.to_string(),
-        )
-    })?;
-    let mut out =
-        Vec::with_capacity(ctx.n as usize);
-    let te = ctx.time_enc.as_ref();
-    for chunk in &chunks {
-        decode_chunk_into(chunk, &mut out, te);
-    }
-    out.truncate(ctx.n as usize);
-    Ok(out)
+}
+
+fn load_coord_buffer_sync<
+    B: ChunkedDataBackendSync,
+>(
+    backend: &B,
+    ctx: &DimCtx,
+) -> Result<CoordBuffer, BackendError> {
+    let chunks = load_chunks_sync(backend, ctx)?;
+    Ok(build_buffer(
+        &chunks,
+        ctx.n as usize,
+        ctx.time_enc.as_ref(),
+    ))
+}
+
+async fn load_coord_buffer_async<
+    B: ChunkedDataBackendAsync,
+>(
+    backend: &B,
+    ctx: &DimCtx,
+) -> Result<CoordBuffer, BackendError> {
+    let chunks =
+        load_chunks_async(backend, ctx).await?;
+    Ok(build_buffer(
+        &chunks,
+        ctx.n as usize,
+        ctx.time_enc.as_ref(),
+    ))
 }
 
 // ============================================================================
 // Direction + monotonicity
 // ============================================================================
 
-/// Sort direction of a coordinate array.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Dir {
     Ascending,
     Descending,
 }
 
-impl Dir {
-    fn from_endpoints(
-        first: &CoordScalar,
-        last: &CoordScalar,
-    ) -> Option<Self> {
-        match first.partial_cmp(last)? {
-            Ordering::Greater => {
-                Some(Dir::Descending)
-            }
-            _ => Some(Dir::Ascending),
-        }
-    }
-}
-
-fn detect_direction(
-    coords: &[CoordScalar],
+fn detect_direction<T: PartialOrd>(
+    coords: &[T],
     assume_sorted: bool,
-) -> Result<Dir, ResolutionError> {
-    let (first, last) =
-        match (coords.first(), coords.last()) {
-            (Some(f), Some(l)) => (f, l),
-            _ => {
-                return Err(
-                    ResolutionError::Unresolvable(
-                        "empty coordinate array"
-                            .into(),
-                    ),
-                );
-            }
-        };
-    let dir = Dir::from_endpoints(first, last)
-        .ok_or_else(|| {
-            ResolutionError::Unresolvable(
-                "non-comparable coordinate values"
-                    .into(),
-            )
-        })?;
+) -> Option<Dir> {
+    let first = coords.first()?;
+    let last = coords.last()?;
+    let dir = match first.partial_cmp(last)? {
+        Ordering::Greater => Dir::Descending,
+        _ => Dir::Ascending,
+    };
     if assume_sorted {
-        return Ok(dir);
+        return Some(dir);
     }
     let monotonic = match dir {
-        Dir::Ascending => {
-            coords.is_sorted_by(|a, b| a <= b)
-        }
-        Dir::Descending => {
-            coords.is_sorted_by(|a, b| a >= b)
-        }
+        Dir::Ascending => coords
+            .is_sorted_by(|a, b| a <= b),
+        Dir::Descending => coords
+            .is_sorted_by(|a, b| a >= b),
     };
-    if monotonic {
-        Ok(dir)
-    } else {
-        Err(ResolutionError::Unresolvable(
-            "coordinate array is not monotonic"
-                .into(),
-        ))
-    }
+    monotonic.then_some(dir)
 }
 
 // ============================================================================
-// Binary search via partition_point
+// Native binary search via partition_point
 // ============================================================================
 
-/// Convert a [`ValueRangePresent`] to an index range against a sorted
-/// coordinate slice.
-///
-/// For descending coords the value-range bounds are swapped: the in-range
-/// slice is still contiguous, but the value-range *upper* bound governs the
-/// result *start* (the largest value lives at the lowest index), and the
-/// *lower* bound governs the result *end*. The `lt` / `le` closures
-/// likewise flip to the descending comparison so the rest of the function
-/// reads identically to the ascending case.
-fn resolve_against_sorted(
-    coords: &[CoordScalar],
-    vr: &ValueRangePresent,
+/// Convert a value-range to an index range against a sorted typed slice.
+fn resolve_against_sorted<T: PartialOrd + Copy>(
+    coords: &[T],
+    start: Bound<T>,
+    end: Bound<T>,
     dir: Dir,
 ) -> Range<u64> {
     let (start_b, end_b) = match dir {
-        Dir::Ascending => {
-            (vr.0.as_ref(), vr.1.as_ref())
-        }
-        Dir::Descending => {
-            (vr.1.as_ref(), vr.0.as_ref())
-        }
+        Dir::Ascending => (start, end),
+        Dir::Descending => (end, start),
     };
-    // partition_point walks while the predicate holds; these are direction-
-    // aware "v is before target" predicates over `PartialOrd`. NaN/None
-    // results return `false`, which keeps the search safely conservative.
-    let lt = |v: &CoordScalar,
-              t: &CoordScalar| {
-        match dir {
-            Dir::Ascending => v < t,
-            Dir::Descending => v > t,
-        }
+    let lt = |v: &T, t: &T| match dir {
+        Dir::Ascending => *v < *t,
+        Dir::Descending => *v > *t,
     };
-    let le = |v: &CoordScalar,
-              t: &CoordScalar| {
-        match dir {
-            Dir::Ascending => v <= t,
-            Dir::Descending => v >= t,
-        }
+    let le = |v: &T, t: &T| match dir {
+        Dir::Ascending => *v <= *t,
+        Dir::Descending => *v >= *t,
     };
+    let s_idx = match start_b {
+        Bound::Included(t) => coords
+            .partition_point(|v| lt(v, &t)),
+        Bound::Excluded(t) => coords
+            .partition_point(|v| le(v, &t)),
+        Bound::Unbounded => 0,
+    };
+    let e_idx = match end_b {
+        Bound::Included(t) => coords
+            .partition_point(|v| le(v, &t)),
+        Bound::Excluded(t) => coords
+            .partition_point(|v| lt(v, &t)),
+        Bound::Unbounded => coords.len(),
+    };
+    (s_idx as u64)..(e_idx.max(s_idx) as u64)
+}
 
-    let start =
-        match start_b {
-            Bound::Included(t) => coords
-                .partition_point(|v| lt(v, t)),
-            Bound::Excluded(t) => coords
-                .partition_point(|v| le(v, t)),
-            Bound::Unbounded => 0,
-        };
-    let end =
-        match end_b {
-            Bound::Included(t) => coords
-                .partition_point(|v| le(v, t)),
-            Bound::Excluded(t) => coords
-                .partition_point(|v| lt(v, t)),
-            Bound::Unbounded => coords.len(),
-        };
-    (start as u64)..(end.max(start) as u64)
+// ============================================================================
+// Target normalization: CoordScalar bounds → native f64/i64 bounds
+// ============================================================================
+
+fn coord_to_f64(s: &CoordScalar) -> f64 {
+    match s {
+        CoordScalar::F64(v) => *v,
+        CoordScalar::I64(v) => *v as f64,
+        CoordScalar::U64(v) => *v as f64,
+        CoordScalar::DatetimeNs(v) => *v as f64,
+        CoordScalar::DurationNs(v) => *v as f64,
+    }
+}
+
+fn coord_to_i64(s: &CoordScalar) -> i64 {
+    match s {
+        CoordScalar::I64(v) => *v,
+        CoordScalar::U64(v) => *v as i64,
+        CoordScalar::DatetimeNs(v) => *v,
+        CoordScalar::DurationNs(v) => *v,
+        CoordScalar::F64(v) => *v as i64,
+    }
+}
+
+fn bound_map<T, F: Fn(&CoordScalar) -> T>(
+    b: &Bound<CoordScalar>,
+    f: F,
+) -> Bound<T> {
+    match b {
+        Bound::Included(s) => Bound::Included(f(s)),
+        Bound::Excluded(s) => Bound::Excluded(f(s)),
+        Bound::Unbounded => Bound::Unbounded,
+    }
 }
 
 // ============================================================================
@@ -367,10 +459,6 @@ fn pin_interpolation_without_neighbor_cells(
 }
 
 /// Compute wrapping ghost ranges given a primary index range and dimension size.
-///
-/// Returns a `Vec<Range<u64>>` containing the primary range (expanded by
-/// [`GHOST_EXPANSION`]) plus up to two ghost ranges at the opposite boundary
-/// when the primary range is within `GHOST_EXPANSION` of either edge.
 pub(crate) fn wrapping_ghost_ranges(
     primary: Range<u64>,
     n: u64,
@@ -418,9 +506,6 @@ fn apply_expansion(
                 Vec::new()
             }
         }
-        // Interpolation needs ±1 cells even when the in-range slice is
-        // empty (target lies strictly between two grid points), so we don't
-        // short-circuit on `r.start == r.end` here.
         Expansion::InterpolationNeighbor => {
             if r.start < r.end
                 && pin_interpolation_without_neighbor_cells(
@@ -445,50 +530,109 @@ fn apply_expansion(
 }
 
 // ============================================================================
-// Top-level: index-only fast path + sync/async drivers
+// Top-level entry points
 // ============================================================================
 
-pub(crate) fn try_resolve_index_only(
+fn resolve_via_buffer(
+    buf: &CoordBuffer,
     dim: &IStr,
-    meta: &ZarrMeta,
-    dim_len: u64,
-    vr: &ValueRangePresent,
-) -> Option<Range<u64>> {
-    if meta.array_by_path_contains(dim) {
-        return None;
-    }
-    vr.index_range_for_index_dim(dim_len)
-}
-
-fn resolve_with_coords(
-    coords: &[CoordScalar],
     dim_len: u64,
     vr: &ValueRangePresent,
     expansion: Expansion,
     assume_sorted: bool,
-) -> Result<Vec<Range<u64>>, ResolutionError> {
-    if coords.is_empty() {
+) -> Result<Vec<Range<u64>>, BackendError> {
+    if buf.len() == 0 {
         return Ok(Vec::new());
     }
-    match detect_direction(coords, assume_sorted)
-    {
-        Ok(dir) => Ok(apply_expansion(
+    let primary = match buf {
+        CoordBuffer::F64(coords) => {
+            let Some(dir) = detect_direction(
+                coords,
+                assume_sorted,
+            ) else {
+                return non_monotonic_fallback(
+                    dim, dim_len, expansion,
+                );
+            };
+            let start = bound_map(
+                &vr.0,
+                coord_to_f64,
+            );
+            let end = bound_map(
+                &vr.1,
+                coord_to_f64,
+            );
             resolve_against_sorted(
-                coords, vr, dir,
-            ),
-            dim_len,
-            vr,
-            expansion,
-        )),
-        // Non-monotonic coords: scan-everything is still safe for plain
-        // filtering, but interpolation needs an actual ordering.
-        Err(_)
-            if expansion == Expansion::Exact =>
-        {
-            Ok(vec![0..dim_len])
+                coords, start, end, dir,
+            )
         }
-        Err(e) => Err(e),
+        CoordBuffer::I64(coords) => {
+            let Some(dir) = detect_direction(
+                coords,
+                assume_sorted,
+            ) else {
+                return non_monotonic_fallback(
+                    dim, dim_len, expansion,
+                );
+            };
+            let start = bound_map(
+                &vr.0,
+                coord_to_i64,
+            );
+            let end = bound_map(
+                &vr.1,
+                coord_to_i64,
+            );
+            resolve_against_sorted(
+                coords, start, end, dir,
+            )
+        }
+    };
+    Ok(apply_expansion(
+        primary, dim_len, vr, expansion,
+    ))
+}
+
+fn non_monotonic_fallback(
+    dim: &IStr,
+    dim_len: u64,
+    expansion: Expansion,
+) -> Result<Vec<Range<u64>>, BackendError> {
+    if expansion == Expansion::Exact {
+        Ok(vec![0..dim_len])
+    } else {
+        Err(BackendError::other(format!(
+            "dimension '{}' coordinate array is not monotonic",
+            AsRef::<str>::as_ref(dim),
+        )))
     }
+}
+
+fn resolve_index_only_or_missing(
+    dim: &IStr,
+    meta: &ZarrMeta,
+    dim_len: u64,
+    vr: &ValueRangePresent,
+    expansion: Expansion,
+) -> Option<Result<Vec<Range<u64>>, BackendError>>
+{
+    if meta.array_by_path_contains(dim) {
+        return None;
+    }
+    Some(
+        vr.index_range_for_index_dim(dim_len)
+            .map(|r| {
+                apply_expansion(
+                    r, dim_len, vr, expansion,
+                )
+            })
+            .ok_or_else(|| {
+                BackendError::other(format!(
+                    "dimension '{}' has no coordinate array",
+                    AsRef::<str>::as_ref(dim),
+                ))
+            }),
+    )
 }
 
 pub(crate) fn resolve_value_range_sync<
@@ -500,24 +644,19 @@ pub(crate) fn resolve_value_range_sync<
     dim_len: u64,
     vr: &ValueRangePresent,
     expansion: Expansion,
-) -> Result<Vec<Range<u64>>, ResolutionError> {
-    if let Some(r) = try_resolve_index_only(
-        dim, meta, dim_len, vr,
+) -> Result<Vec<Range<u64>>, BackendError> {
+    if let Some(r) = resolve_index_only_or_missing(
+        dim, meta, dim_len, vr, expansion,
     ) {
-        return Ok(apply_expansion(
-            r, dim_len, vr, expansion,
-        ));
+        return r;
     }
-    let Some(ctx) = DimCtx::from_meta(dim, meta)
-    else {
-        return missing_coord_array(
-            dim, dim_len, expansion,
-        );
-    };
-    let coords =
-        load_coord_array_sync(backend, &ctx)?;
-    resolve_with_coords(
-        &coords,
+    let ctx = DimCtx::from_meta(dim, meta)
+        .expect("checked by resolve_index_only_or_missing");
+    let buf =
+        load_coord_buffer_sync(backend, &ctx)?;
+    resolve_via_buffer(
+        &buf,
+        dim,
         ctx.n,
         vr,
         expansion,
@@ -534,25 +673,20 @@ pub(crate) async fn resolve_value_range_async<
     dim_len: u64,
     vr: &ValueRangePresent,
     expansion: Expansion,
-) -> Result<Vec<Range<u64>>, ResolutionError> {
-    if let Some(r) = try_resolve_index_only(
-        dim, meta, dim_len, vr,
+) -> Result<Vec<Range<u64>>, BackendError> {
+    if let Some(r) = resolve_index_only_or_missing(
+        dim, meta, dim_len, vr, expansion,
     ) {
-        return Ok(apply_expansion(
-            r, dim_len, vr, expansion,
-        ));
+        return r;
     }
-    let Some(ctx) = DimCtx::from_meta(dim, meta)
-    else {
-        return missing_coord_array(
-            dim, dim_len, expansion,
-        );
-    };
-    let coords =
-        load_coord_array_async(backend, &ctx)
+    let ctx = DimCtx::from_meta(dim, meta)
+        .expect("checked by resolve_index_only_or_missing");
+    let buf =
+        load_coord_buffer_async(backend, &ctx)
             .await?;
-    resolve_with_coords(
-        &coords,
+    resolve_via_buffer(
+        &buf,
+        dim,
         ctx.n,
         vr,
         expansion,
@@ -560,19 +694,98 @@ pub(crate) async fn resolve_value_range_async<
     )
 }
 
-fn missing_coord_array(
-    dim: &IStr,
-    dim_len: u64,
-    expansion: Expansion,
-) -> Result<Vec<Range<u64>>, ResolutionError> {
-    match expansion {
-        Expansion::Exact => Ok(vec![0..dim_len]),
-        _ => Err(ResolutionError::Unresolvable(
-            format!(
-                "dimension '{}' has no coordinate array",
-                AsRef::<str>::as_ref(dim),
+// ============================================================================
+// CoordResolver impls
+// ============================================================================
+
+/// Lookup-only resolver backed by a pre-populated table.
+pub(crate) struct CachedResolver {
+    table:
+        HashMap<ResolveKey, Vec<Range<u64>>>,
+}
+
+#[derive(
+    Debug, Clone, PartialEq, Eq, Hash,
+)]
+pub(crate) struct ResolveKey {
+    pub(crate) dim: IStr,
+    pub(crate) vr: ValueRangePresent,
+    pub(crate) expansion: Expansion,
+}
+
+impl CachedResolver {
+    pub(crate) fn from_table(
+        table: HashMap<ResolveKey, Vec<Range<u64>>>,
+    ) -> Self {
+        Self { table }
+    }
+}
+
+impl CoordResolver for CachedResolver {
+    fn resolve(
+        &self,
+        dim: IStr,
+        _meta: &ZarrMeta,
+        _dim_len: u64,
+        vr: &ValueRangePresent,
+        expansion: Expansion,
+    ) -> Result<Vec<Range<u64>>, BackendError>
+    {
+        let key = ResolveKey {
+            dim,
+            vr: vr.clone(),
+            expansion,
+        };
+        self.table
+            .get(&key)
+            .cloned()
+            .ok_or_else(|| {
+                BackendError::other(format!(
+                    "missing pre-resolved entry for dim '{}'",
+                    AsRef::<str>::as_ref(&dim),
+                ))
+            })
+    }
+}
+
+/// Collecting resolver used during the dry-run pre-walk.
+pub(crate) struct CollectingResolver {
+    pub(crate) keys:
+        std::cell::RefCell<Vec<ResolveKey>>,
+}
+
+impl CollectingResolver {
+    pub(crate) fn new() -> Self {
+        Self {
+            keys: std::cell::RefCell::new(
+                Vec::new(),
             ),
-        )),
+        }
+    }
+
+    pub(crate) fn into_keys(
+        self,
+    ) -> Vec<ResolveKey> {
+        self.keys.into_inner()
+    }
+}
+
+impl CoordResolver for CollectingResolver {
+    fn resolve(
+        &self,
+        dim: IStr,
+        _meta: &ZarrMeta,
+        dim_len: u64,
+        vr: &ValueRangePresent,
+        expansion: Expansion,
+    ) -> Result<Vec<Range<u64>>, BackendError>
+    {
+        self.keys.borrow_mut().push(ResolveKey {
+            dim,
+            vr: vr.clone(),
+            expansion,
+        });
+        Ok(vec![0..dim_len.max(1)])
     }
 }
 
@@ -580,41 +793,47 @@ fn missing_coord_array(
 mod tests {
     use super::*;
 
-    fn asc(n: i64) -> Vec<CoordScalar> {
-        (0..n).map(CoordScalar::I64).collect()
-    }
-
-    fn desc(n: i64) -> Vec<CoordScalar> {
-        (0..n)
-            .rev()
-            .map(CoordScalar::I64)
-            .collect()
-    }
-
     fn vr(
         start: Bound<i64>,
         end: Bound<i64>,
     ) -> ValueRangePresent {
         let map = |b: Bound<i64>| match b {
-            Bound::Included(v) => {
-                Bound::Included(CoordScalar::I64(
-                    v,
-                ))
-            }
-            Bound::Excluded(v) => {
-                Bound::Excluded(CoordScalar::I64(
-                    v,
-                ))
-            }
+            Bound::Included(v) => Bound::Included(
+                CoordScalar::I64(v),
+            ),
+            Bound::Excluded(v) => Bound::Excluded(
+                CoordScalar::I64(v),
+            ),
             Bound::Unbounded => Bound::Unbounded,
         };
         ValueRangePresent(map(start), map(end))
     }
 
+    fn search_i64(
+        coords: &[i64],
+        v: &ValueRangePresent,
+        dir: Dir,
+    ) -> Range<u64> {
+        let start =
+            bound_map(&v.0, coord_to_i64);
+        let end = bound_map(&v.1, coord_to_i64);
+        resolve_against_sorted(
+            coords, start, end, dir,
+        )
+    }
+
+    fn asc_i64(n: i64) -> Vec<i64> {
+        (0..n).collect()
+    }
+
+    fn desc_i64(n: i64) -> Vec<i64> {
+        (0..n).rev().collect()
+    }
+
     #[test]
     fn ascending_inclusive_inclusive() {
-        let r = resolve_against_sorted(
-            &asc(11),
+        let r = search_i64(
+            &asc_i64(11),
             &vr(
                 Bound::Included(3),
                 Bound::Included(7),
@@ -626,8 +845,8 @@ mod tests {
 
     #[test]
     fn ascending_exclusive_exclusive() {
-        let r = resolve_against_sorted(
-            &asc(11),
+        let r = search_i64(
+            &asc_i64(11),
             &vr(
                 Bound::Excluded(3),
                 Bound::Excluded(7),
@@ -639,8 +858,8 @@ mod tests {
 
     #[test]
     fn ascending_unbounded_start() {
-        let r = resolve_against_sorted(
-            &asc(11),
+        let r = search_i64(
+            &asc_i64(11),
             &vr(
                 Bound::Unbounded,
                 Bound::Excluded(5),
@@ -652,8 +871,8 @@ mod tests {
 
     #[test]
     fn ascending_unbounded_end() {
-        let r = resolve_against_sorted(
-            &asc(11),
+        let r = search_i64(
+            &asc_i64(11),
             &vr(
                 Bound::Included(5),
                 Bound::Unbounded,
@@ -664,23 +883,20 @@ mod tests {
     }
 
     #[test]
-    fn ascending_target_off_grid() {
-        // Range [3.5, 7.5] over int coords: result should bracket the
-        // values strictly between, here {4,5,6,7}.
-        let coords: Vec<_> = (0..11)
-            .map(|i| CoordScalar::F64(i as f64))
+    fn ascending_target_off_grid_f64() {
+        let coords: Vec<f64> = (0..11)
+            .map(|i| i as f64)
             .collect();
         let v = ValueRangePresent(
-            Bound::Included(CoordScalar::F64(
-                3.5,
-            )),
-            Bound::Included(CoordScalar::F64(
-                7.5,
-            )),
+            Bound::Included(CoordScalar::F64(3.5)),
+            Bound::Included(CoordScalar::F64(7.5)),
         );
+        let start = bound_map(&v.0, coord_to_f64);
+        let end = bound_map(&v.1, coord_to_f64);
         let r = resolve_against_sorted(
             &coords,
-            &v,
+            start,
+            end,
             Dir::Ascending,
         );
         assert_eq!(r, 4..8);
@@ -688,9 +904,8 @@ mod tests {
 
     #[test]
     fn descending_inclusive_inclusive() {
-        // Descending [10..0] with [3,7] -> indices 3..8 (vals 7,6,5,4,3).
-        let r = resolve_against_sorted(
-            &desc(11),
+        let r = search_i64(
+            &desc_i64(11),
             &vr(
                 Bound::Included(3),
                 Bound::Included(7),
@@ -702,9 +917,8 @@ mod tests {
 
     #[test]
     fn descending_exclusive_exclusive() {
-        // Descending [10..0] with (3,7) -> indices 4..7 (vals 6,5,4).
-        let r = resolve_against_sorted(
-            &desc(11),
+        let r = search_i64(
+            &desc_i64(11),
             &vr(
                 Bound::Excluded(3),
                 Bound::Excluded(7),
@@ -716,9 +930,8 @@ mod tests {
 
     #[test]
     fn descending_unbounded_start() {
-        // Descending [10..0] with (-inf, 5) -> indices 6..11 (vals 4..0).
-        let r = resolve_against_sorted(
-            &desc(11),
+        let r = search_i64(
+            &desc_i64(11),
             &vr(
                 Bound::Unbounded,
                 Bound::Excluded(5),
@@ -730,100 +943,83 @@ mod tests {
 
     #[test]
     fn detect_direction_assumed_skips_check() {
-        // Non-monotonic coords; assume_sorted=true uses only endpoints.
-        let coords = vec![
-            CoordScalar::I64(0),
-            CoordScalar::I64(5),
-            CoordScalar::I64(2),
-            CoordScalar::I64(9),
-            CoordScalar::I64(10),
-        ];
-        let dir = detect_direction(&coords, true)
-            .unwrap();
+        let coords =
+            vec![0i64, 5, 2, 9, 10];
+        let dir =
+            detect_direction(&coords, true).unwrap();
         assert_eq!(dir, Dir::Ascending);
     }
 
     #[test]
     fn detect_direction_rejects_non_monotonic() {
-        let coords = vec![
-            CoordScalar::I64(0),
-            CoordScalar::I64(5),
-            CoordScalar::I64(2),
-            CoordScalar::I64(9),
-            CoordScalar::I64(10),
-        ];
+        let coords =
+            vec![0i64, 5, 2, 9, 10];
         assert!(
             detect_direction(&coords, false)
-                .is_err()
+                .is_none()
         );
     }
 
     #[test]
     fn ghost_ranges_interior_single_range() {
-        let ranges =
-            wrapping_ghost_ranges(50..55, 360);
-        assert_eq!(ranges, vec![47..58]);
+        assert_eq!(
+            wrapping_ghost_ranges(50..55, 360),
+            vec![47..58]
+        );
     }
 
     #[test]
     fn ghost_ranges_near_start_adds_end_ghost() {
         let ranges =
             wrapping_ghost_ranges(1..5, 360);
-        assert_eq!(ranges.len(), 2);
-        assert_eq!(ranges[0], 0..8);
-        assert_eq!(ranges[1], 357..360);
+        assert_eq!(ranges, vec![0..8, 357..360]);
     }
 
     #[test]
     fn ghost_ranges_at_start_adds_end_ghost() {
         let ranges =
             wrapping_ghost_ranges(0..3, 360);
-        assert_eq!(ranges.len(), 2);
-        assert_eq!(ranges[0], 0..6);
-        assert_eq!(ranges[1], 357..360);
+        assert_eq!(ranges, vec![0..6, 357..360]);
     }
 
     #[test]
     fn ghost_ranges_near_end_adds_start_ghost() {
         let ranges =
             wrapping_ghost_ranges(356..360, 360);
-        assert_eq!(ranges.len(), 2);
-        assert_eq!(ranges[0], 353..360);
-        assert_eq!(ranges[1], 0..3);
+        assert_eq!(ranges, vec![353..360, 0..3]);
     }
 
     #[test]
     fn ghost_ranges_at_end_adds_start_ghost() {
         let ranges =
             wrapping_ghost_ranges(358..360, 360);
-        assert_eq!(ranges.len(), 2);
-        assert_eq!(ranges[0], 355..360);
-        assert_eq!(ranges[1], 0..3);
+        assert_eq!(ranges, vec![355..360, 0..3]);
     }
 
     #[test]
-    fn ghost_ranges_small_dimension_both_ghosts()
-    {
+    fn ghost_ranges_small_dimension_both_ghosts() {
         let ranges =
             wrapping_ghost_ranges(2..4, 5);
-        assert_eq!(ranges.len(), 3);
-        assert_eq!(ranges[0], 0..5);
-        assert_eq!(ranges[1], 2..5);
-        assert_eq!(ranges[2], 0..3);
+        assert_eq!(
+            ranges,
+            vec![0..5, 2..5, 0..3]
+        );
     }
 
     #[test]
     fn ghost_ranges_very_small_dimension() {
-        let ranges =
-            wrapping_ghost_ranges(0..2, 3);
-        assert_eq!(ranges, vec![0..3]);
+        assert_eq!(
+            wrapping_ghost_ranges(0..2, 3),
+            vec![0..3]
+        );
     }
 
     #[test]
     fn ghost_ranges_exact_ghost_expansion_size() {
-        let ranges =
-            wrapping_ghost_ranges(1..2, 3);
-        assert_eq!(ranges, vec![0..3]);
+        assert_eq!(
+            wrapping_ghost_ranges(1..2, 3),
+            vec![0..3]
+        );
     }
 
     #[test]

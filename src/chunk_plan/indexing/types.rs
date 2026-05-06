@@ -463,33 +463,6 @@ impl CoordScalar {
             CoordScalar::F64(_) => None,
         }
     }
-
-    pub(crate) fn partial_cmp(
-        &self,
-        other: &CoordScalar,
-    ) -> Option<std::cmp::Ordering> {
-        match (self, other) {
-            (
-                CoordScalar::F64(a),
-                CoordScalar::F64(b),
-            ) => a.partial_cmp(b),
-            (CoordScalar::F64(a), b) => {
-                Some((*a).partial_cmp(
-                    &(b.as_i128_orderable()?
-                        as f64),
-                )?)
-            }
-            (a, CoordScalar::F64(b)) => Some(
-                (a.as_i128_orderable()? as f64)
-                    .partial_cmp(b)?,
-            ),
-            _ => Some(
-                self.as_i128_orderable()?.cmp(
-                    &other.as_i128_orderable()?,
-                ),
-            ),
-        }
-    }
 }
 
 impl PartialOrd for CoordScalar {
@@ -654,27 +627,6 @@ impl ValueRangePresent {
         )
     }
 
-    /// Build from optional start/end bounds.
-    /// Returns `None` only when both bounds are `None`
-    /// (i.e. no constraint could be determined).
-    pub(crate) fn from_option_bounds(
-        min: Option<CoordBound>,
-        max: Option<CoordBound>,
-    ) -> Option<Self> {
-        match (min, max) {
-            (Some(min), Some(max)) => {
-                Some(Self(min, max))
-            }
-            (Some(min), None) => {
-                Some(Self(min, Bound::Unbounded))
-            }
-            (None, Some(max)) => {
-                Some(Self(Bound::Unbounded, max))
-            }
-            (None, None) => None,
-        }
-    }
-
     pub(crate) fn from_min_exclusive(
         min: CoordScalar,
     ) -> Self {
@@ -767,132 +719,5 @@ impl ValueRangePresent {
             Bound::Unbounded => {}
         }
         Some(start..end_exclusive)
-    }
-}
-impl ValueRangePresent {
-    /// Intersect two value ranges, producing the tighter of the two.
-    /// Returns `None` if the intersection is provably empty.
-    pub(crate) fn intersect(
-        &self,
-        other: &Self,
-    ) -> Option<Self> {
-        let new_start = pick_tighter_min_bound(
-            self.0.clone(),
-            other.0.clone(),
-        );
-        let new_end = pick_tighter_max_bound(
-            self.1.clone(),
-            other.1.clone(),
-        );
-        let result = Self::from_option_bounds(
-            new_start, new_end,
-        )?;
-        if result.is_certainly_empty() {
-            None
-        } else {
-            Some(result)
-        }
-    }
-
-    /// Returns `true` when the lower bound is provably above the upper bound,
-    /// meaning no value can satisfy the range.
-    fn is_certainly_empty(&self) -> bool {
-        let (lo, lo_incl) = match &self.0 {
-            Bound::Included(s) => (s, true),
-            Bound::Excluded(s) => (s, false),
-            Bound::Unbounded => return false,
-        };
-        let (hi, hi_incl) = match &self.1 {
-            Bound::Included(s) => (s, true),
-            Bound::Excluded(s) => (s, false),
-            Bound::Unbounded => return false,
-        };
-        match lo.partial_cmp(hi) {
-            Some(std::cmp::Ordering::Greater) => {
-                true
-            }
-            Some(std::cmp::Ordering::Equal) => {
-                !(lo_incl && hi_incl)
-            }
-            _ => false,
-        }
-    }
-}
-
-fn pick_tighter_min_bound(
-    a: CoordBound,
-    b: CoordBound,
-) -> Option<CoordBound> {
-    let (a_scalar, a_excl) = match &a {
-        CoordBound::Included(s) => {
-            (s.clone(), false)
-        }
-        CoordBound::Excluded(s) => {
-            (s.clone(), true)
-        }
-        CoordBound::Unbounded => return Some(b),
-    };
-    let (b_scalar, b_excl) = match &b {
-        CoordBound::Included(s) => {
-            (s.clone(), false)
-        }
-        CoordBound::Excluded(s) => {
-            (s.clone(), true)
-        }
-        CoordBound::Unbounded => return Some(a),
-    };
-    match a_scalar.partial_cmp(&b_scalar) {
-        Some(std::cmp::Ordering::Less) => Some(b),
-        Some(std::cmp::Ordering::Greater) => {
-            Some(a)
-        }
-        Some(std::cmp::Ordering::Equal) => {
-            let excl = a_excl || b_excl;
-            Some(if excl {
-                CoordBound::Excluded(a_scalar)
-            } else {
-                CoordBound::Included(a_scalar)
-            })
-        }
-        None => None,
-    }
-}
-
-fn pick_tighter_max_bound(
-    a: CoordBound,
-    b: CoordBound,
-) -> Option<CoordBound> {
-    let (a_scalar, a_excl) = match &a {
-        CoordBound::Included(s) => {
-            (s.clone(), false)
-        }
-        CoordBound::Excluded(s) => {
-            (s.clone(), true)
-        }
-        CoordBound::Unbounded => return Some(b),
-    };
-    let (b_scalar, b_excl) = match &b {
-        CoordBound::Included(s) => {
-            (s.clone(), false)
-        }
-        CoordBound::Excluded(s) => {
-            (s.clone(), true)
-        }
-        CoordBound::Unbounded => return Some(a),
-    };
-    match a_scalar.partial_cmp(&b_scalar) {
-        Some(std::cmp::Ordering::Less) => Some(a),
-        Some(std::cmp::Ordering::Greater) => {
-            Some(b)
-        }
-        Some(std::cmp::Ordering::Equal) => {
-            let excl = a_excl || b_excl;
-            Some(if excl {
-                CoordBound::Excluded(a_scalar)
-            } else {
-                CoordBound::Included(a_scalar)
-            })
-        }
-        None => None,
     }
 }
