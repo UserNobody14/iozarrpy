@@ -198,7 +198,7 @@ impl ExprPlan {
     /// but shouldn't weaken the function's constraints.
     pub(crate) fn add_vars(
         &self,
-        extra: VarSet,
+        extra: &VarSet,
     ) -> Self {
         match self {
             Self::NoConstraint => {
@@ -209,7 +209,7 @@ impl ExprPlan {
                 vars,
                 constraints,
             } => Self::Active {
-                vars: vars.union(&extra),
+                vars: vars.union(extra),
                 constraints: constraints.clone(),
             },
         }

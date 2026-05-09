@@ -47,8 +47,7 @@ where
     const DEFAULT_MAX_CONCURRENCY: usize = 32;
     let meta = backend.metadata().await?;
 
-    let (grouped_plan, _stats) = backend
-        .clone()
+    let (grouped_plan, _stats) = Arc::clone(&backend)
         .compile_expression_async(&expr)
         .await?;
 
@@ -62,16 +61,15 @@ where
         )?;
 
     let tree = GridJoinTree::build(groups);
-    let batches = match &tree {
-        Some(t) => build_batches(t, usize::MAX),
-        None => Vec::new(),
-    };
+    let batches = tree.as_ref().map_or_else(
+        Vec::new,
+        |t| build_batches(t, usize::MAX),
+    );
 
     if let Some(max_chunks) = max_chunks_to_read {
-        let leaves_for_count = match &tree {
-            Some(t) => t.leaves(),
-            None => Vec::new(),
-        };
+        let leaves_for_count = tree
+            .as_ref()
+            .map_or_else(Vec::new, |t| t.leaves());
         let total_chunks =
             distinct_chunks_in_batches(
                 &batches,
@@ -108,11 +106,11 @@ where
             let mut futs =
                 FuturesUnordered::new();
             for r in reads {
-                let sem = semaphore.clone();
-                let backend = backend.clone();
-                let meta = meta.clone();
+                let sem = Arc::clone(&semaphore);
+                let backend = Arc::clone(&backend);
+                let meta = Arc::clone(&meta);
                 let leaf_idx = r.leaf_idx;
-                let sig = r.sig.clone();
+                let sig = Arc::clone(&r.sig);
                 let array_shape =
                     r.array_shape.clone();
                 let vars = r.vars.clone();
@@ -124,7 +122,7 @@ where
                         sem.acquire_owned().await.expect("semaphore closed");
                     let df = chunk_to_df_from_grid_with_backend(
                         backend.as_ref(),
-                        idx,
+                        idx.as_slice(),
                         sig.as_ref(),
                         &array_shape,
                         &vars,

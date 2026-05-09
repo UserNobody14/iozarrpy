@@ -31,6 +31,7 @@ impl ChunkSubset {
     ///
     /// Used by tests and benches that need to materialize a subset without
     /// going through [`compute_chunk_subset`].
+    #[allow(dead_code)] // Public API for tests/benches outside default builds
     pub fn from_ranges(
         ranges: Vec<Range<u64>>,
     ) -> Self {
@@ -208,16 +209,16 @@ impl GroupedChunkPlan {
         chunk_grid: Arc<ChunkGrid>,
     ) {
         let var = var.istr();
-        self.var_to_grid.insert(var, sig.clone());
+        self.var_to_grid.insert(var, Arc::clone(&sig));
         self.by_grid
-            .entry(sig.clone())
+            .entry(Arc::clone(&sig))
             .or_insert(plan);
         self.vars_by_grid
-            .entry(sig.clone())
+            .entry(Arc::clone(&sig))
             .or_insert(vec![])
             .push(var);
         self.chunk_grid
-            .entry(sig.clone())
+            .entry(sig)
             .or_insert(chunk_grid);
     }
 
@@ -312,7 +313,7 @@ impl GroupedChunkPlan {
                     .collect();
 
                 Ok(OwnedGridGroup::new(
-                    sig.clone(),
+                    Arc::clone(sig),
                     vars,
                     chunk_indices,
                     chunk_subsets,

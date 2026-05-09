@@ -97,7 +97,7 @@ impl IcechunkIterator {
     fn initialize(
         &mut self,
     ) -> Result<(), PyErr> {
-        let backend = self.backend.clone();
+        let backend = Arc::clone(&self.backend);
         let expr = self.expr.clone();
         let with_columns =
             self.with_columns.clone();
@@ -128,19 +128,18 @@ impl IcechunkIterator {
                     .owned_grid_groups_for_io(literal_false)?;
 
                 let tree = GridJoinTree::build(groups);
-                let batches = match &tree {
-                    Some(t) => build_batches(t, batch_size),
-                    None => Vec::new(),
-                };
+                let batches = tree.as_ref().map_or_else(
+                    Vec::new,
+                    |t| build_batches(t, batch_size),
+                );
                 // Emit one empty-schema batch when we have nothing to read so
                 // Polars can still resolve downstream projection / filter expressions.
                 let emit_empty_schema_once = literal_false || batches.is_empty();
 
                 if let Some(max_chunks) = max_chunks_to_read {
-                    let leaves_for_count = match &tree {
-                        Some(t) => t.leaves(),
-                        None => Vec::new(),
-                    };
+                    let leaves_for_count = tree
+                        .as_ref()
+                        .map_or_else(Vec::new, |t| t.leaves());
                     let total_chunks = distinct_chunks_in_batches(
                         &batches,
                         &leaves_for_count,
@@ -233,13 +232,13 @@ impl IcechunkIterator {
                 continue;
             }
 
-            let backend = self.backend.clone();
+            let backend = Arc::clone(&self.backend);
             let expanded_with_columns = state
                 .expanded_with_columns
                 .clone();
             let max_concurrency =
                 self.max_concurrency;
-            let meta = state.meta.clone();
+            let meta = Arc::clone(&state.meta);
 
             let chunk_dfs: Result<Vec<(usize, DataFrame)>, PyErr> =
                 self.runtime.block_on(async {
@@ -247,12 +246,12 @@ impl IcechunkIterator {
                     let mut futs = FuturesUnordered::new();
 
                     for r in reads {
-                        let sem = semaphore.clone();
-                        let backend = backend.clone();
+                        let sem = Arc::clone(&semaphore);
+                        let backend = Arc::clone(&backend);
                         let expanded = expanded_with_columns.clone();
-                        let meta = meta.clone();
+                        let meta = Arc::clone(&meta);
                         let leaf_idx = r.leaf_idx;
-                        let sig = r.sig.clone();
+                        let sig = Arc::clone(&r.sig);
                         let array_shape = r.array_shape.clone();
                         let vars = r.vars.clone();
                         let idx = r.idx.clone();
@@ -263,7 +262,7 @@ impl IcechunkIterator {
                                 sem.acquire().await.expect("semaphore closed");
                             let df = chunk_to_df_from_grid_with_backend(
                                 backend.as_ref(),
-                                idx,
+                                idx.as_slice(),
                                 sig.as_ref(),
                                 &array_shape,
                                 &vars,

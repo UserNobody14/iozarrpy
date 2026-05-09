@@ -92,9 +92,9 @@ pub fn compile_expr(
             if refs.is_empty() {
                 Ok(func_plan)
             } else {
-                Ok(func_plan.add_vars(
-                    VarSet::from_vec(refs),
-                ))
+                Ok(func_plan.add_vars(&VarSet::from_vec(
+                    refs,
+                )))
             }
         }
 
@@ -128,9 +128,9 @@ pub fn compile_expr(
             if filter_refs.is_empty() {
                 Ok(result)
             } else {
-                Ok(result.add_vars(
-                    VarSet::from_vec(filter_refs),
-                ))
+                Ok(result.add_vars(&VarSet::from_vec(
+                    filter_refs,
+                )))
             }
         }
 

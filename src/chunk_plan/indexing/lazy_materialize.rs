@@ -48,7 +48,7 @@ fn coord_scalar_from_chunk(
     match chunk {
         ColumnData::F64(v) => {
             let val = v[offset];
-            if let Some(enc) = time_enc {
+            time_enc.map_or(Some(CoordScalar::F64(val)), |enc| {
                 enc.decode_f64(val).map(|ns| {
                     if enc.is_duration {
                         CoordScalar::DurationNs(ns)
@@ -56,13 +56,11 @@ fn coord_scalar_from_chunk(
                         CoordScalar::DatetimeNs(ns)
                     }
                 })
-            } else {
-                Some(CoordScalar::F64(val))
-            }
+            })
         }
         ColumnData::F32(v) => {
             let val = v[offset] as f64;
-            if let Some(enc) = time_enc {
+            time_enc.map_or(Some(CoordScalar::F64(val)), |enc| {
                 enc.decode_f64(val).map(|ns| {
                     if enc.is_duration {
                         CoordScalar::DurationNs(ns)
@@ -70,9 +68,7 @@ fn coord_scalar_from_chunk(
                         CoordScalar::DatetimeNs(ns)
                     }
                 })
-            } else {
-                Some(CoordScalar::F64(val))
-            }
+            })
         }
         _ => chunk.get_i64(offset).map(|raw| {
             crate::chunk_plan::apply_time_encoding(
@@ -626,7 +622,7 @@ fn resolve_constraint_sync<
             let r = resolve_value_range_sync(
                 backend, &ctx, vr, dir,
             )
-            .unwrap_or(dim_range.clone());
+            .unwrap_or(dim_range);
             if pin_interpolation_without_neighbor_cells(
                 vr, &r,
             ) {
@@ -1423,22 +1419,24 @@ fn build_var_grouping(
     > = BTreeMap::new();
 
     for var in &var_list {
-        let sig = if let Some(array_meta) =
-            meta.array_by_path(*var)
-        {
-            ChunkGridSignature::from_dims_only(
-                array_meta.dims.clone(),
-            )
-        } else {
-            ChunkGridSignature::from_dims_only(
-                SmallVec::new(),
-            )
-        };
-        let sig_arc = sig_cache
-            .entry(sig.clone())
-            .or_insert_with(|| Arc::new(sig))
-            .clone();
-        var_to_sig.insert(*var, sig_arc.clone());
+        let sig = meta.array_by_path(*var).map_or_else(
+            || {
+                ChunkGridSignature::from_dims_only(
+                    SmallVec::new(),
+                )
+            },
+            |array_meta| {
+                ChunkGridSignature::from_dims_only(
+                    array_meta.dims.clone(),
+                )
+            },
+        );
+        let sig_arc = Arc::clone(
+            sig_cache
+                .entry(sig.clone())
+                .or_insert_with(|| Arc::new(sig)),
+        );
+        var_to_sig.insert(*var, Arc::clone(&sig_arc));
         by_sig
             .entry(sig_arc)
             .or_default()
@@ -1499,7 +1497,7 @@ pub(crate) fn resolve_expr_plan_sync<
                     )?;
                 if !resolved.is_empty() {
                     by_dims.insert(
-                        sig_arc.clone(),
+                        Arc::clone(sig_arc),
                         resolved,
                     );
                 }
@@ -1578,7 +1576,7 @@ pub(crate) async fn resolve_expr_plan_async<
                     .await?;
                 if !resolved.is_empty() {
                     by_dims.insert(
-                        sig_arc.clone(),
+                        Arc::clone(sig_arc),
                         resolved,
                     );
                 }
@@ -1655,7 +1653,7 @@ fn drop_orphan_coord_sigs(
                 .map(|vars| vars.iter().any(|v| data_vars.contains(v)))
                 .unwrap_or(false)
         })
-        .flat_map(|sig| sig.dims().iter().copied().collect::<Vec<_>>())
+        .flat_map(|sig| sig.dims().to_vec())
         .collect();
     by_dims.retain(|sig, _| {
         let Some(vars) = by_sig.get(sig) else {

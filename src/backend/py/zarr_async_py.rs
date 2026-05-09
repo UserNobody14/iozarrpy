@@ -111,7 +111,7 @@ impl PyZarrBackend {
         let expr = extract_expr(predicate)?;
         let expr2 = expr.clone();
 
-        let backend = self.inner.clone();
+        let backend = Arc::clone(&self.inner);
 
         future_into_py(py, async move {
             let df = scan_with_backend_async(
@@ -191,7 +191,7 @@ impl PyZarrBackend {
         py: Python<'py>,
         predicate: &Bound<'py, PyAny>,
     ) -> PyResult<Py<PyAny>> {
-        let backend = self.inner.clone();
+        let backend = Arc::clone(&self.inner);
         let expr = extract_expr(predicate)?;
 
         // Create a runtime to block on async operations (same pattern as schema())
@@ -201,7 +201,7 @@ impl PyZarrBackend {
 
         let (grids, coord_reads) = runtime
             .block_on(extract_grids(
-                backend, expr,
+                &backend, &expr,
             ))?;
 
         grids_to_python(py, grids, coord_reads)
@@ -217,7 +217,7 @@ impl PyZarrBackend {
         &self,
         py: Python<'py>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let backend = self.inner.clone();
+        let backend = Arc::clone(&self.inner);
         future_into_py(py, async move {
             backend.clear().await;
             Ok(())
@@ -229,7 +229,7 @@ impl PyZarrBackend {
         &self,
         py: Python<'py>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let backend = self.inner.clone();
+        let backend = Arc::clone(&self.inner);
         future_into_py(py, async move {
             backend.clear_all_caches().await;
             Ok(())
@@ -241,7 +241,7 @@ impl PyZarrBackend {
         &self,
         py: Python<'py>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let backend = self.inner.clone();
+        let backend = Arc::clone(&self.inner);
         future_into_py(py, async move {
             let stats =
                 backend.cache_stats().await;

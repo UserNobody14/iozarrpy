@@ -165,8 +165,8 @@ pub(crate) fn output_columns_for_streaming_batch(
             }
         };
 
-    match polars_requested {
-        None => {
+    polars_requested.map_or_else(
+        || {
             let mut out =
                 meta.tidy_column_order(None);
             let mut seen: BTreeSet<IStr> =
@@ -175,8 +175,8 @@ pub(crate) fn output_columns_for_streaming_batch(
                 &mut out, &mut seen,
             );
             Some(out)
-        }
-        Some(req) => {
+        },
+        |req| {
             let mut out: Vec<IStr> =
                 req.iter().cloned().collect();
             let mut seen: BTreeSet<IStr> =
@@ -185,8 +185,8 @@ pub(crate) fn output_columns_for_streaming_batch(
                 &mut out, &mut seen,
             );
             Some(out)
-        }
-    }
+        },
+    )
 }
 
 /// Keep only columns Polars asked for; order matches `output_columns`.
@@ -271,13 +271,13 @@ pub(crate) fn postprocess_batch(
 pub(crate) fn empty_streaming_schema_batch(
     state: &IteratorState,
 ) -> Result<DataFrame, BackendError> {
-    let keys: Vec<IStr> =
-        match &state.output_columns {
-            Some(cols) => cols.clone(),
-            None => {
-                state.meta.tidy_column_order(None)
-            }
-        };
+    let keys: Vec<IStr> = state
+        .output_columns
+        .as_ref()
+        .map_or_else(
+            || state.meta.tidy_column_order(None),
+            Clone::clone,
+        );
     let df = DataFrame::empty_with_schema(
         &state
             .meta

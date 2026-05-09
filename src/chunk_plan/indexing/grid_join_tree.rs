@@ -327,9 +327,8 @@ fn structural_dim_intersection(
 fn intersection_of<'a>(
     mut iter: impl Iterator<Item = &'a [IStr]>,
 ) -> SmallVec<[IStr; 4]> {
-    let first = match iter.next() {
-        Some(d) => d,
-        None => return SmallVec::new(),
+    let Some(first) = iter.next() else {
+        return SmallVec::new();
     };
     let mut acc: BTreeSet<IStr> =
         first.iter().copied().collect();
@@ -490,7 +489,7 @@ mod tests {
             .collect();
         let sig = Arc::new(
             ChunkGridSignature::from_dims_only(
-                dim_istrs.clone(),
+                dim_istrs,
             ),
         );
         OwnedGridGroup::new(

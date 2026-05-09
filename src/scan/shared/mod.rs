@@ -1,7 +1,7 @@
 pub mod chunk_read_plan;
 pub mod columns;
 pub use chunk_read_plan::{
-    VarRead, plan_var_reads,
+    plan_var_reads,
 };
 pub use columns::{
     build_coord_column, build_var_column,

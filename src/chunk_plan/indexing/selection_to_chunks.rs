@@ -105,7 +105,7 @@ fn var_plan_part_from_meta(
             .context(
                 crate::errors::backend::IncompatibleDimensionalitySnafu {
                     dims: var_meta.dims.clone().to_vec(),
-                    shape: var_meta.shape.clone().to_vec(),
+                    shape: Arc::clone(&var_meta.shape).to_vec(),
                     paths: vec![var.istr()],
                 },
             )?;
@@ -125,7 +125,7 @@ fn var_plan_part_from_meta(
                 .context(
                     crate::errors::backend::IncompatibleDimensionalitySnafu {
                         dims: var_meta.dims.clone().to_vec(),
-                        shape: var_meta.shape.clone().to_vec(),
+                        shape: Arc::clone(&var_meta.shape).to_vec(),
                         paths: vec![var.istr()],
                     },
                 )?;
@@ -145,19 +145,18 @@ fn var_plan_part_from_meta(
             inner_chunk_shape,
         )?;
 
-    let chunk_plan = if let Some(sel) = maybe_sel
-    {
-        sel.clone().into()
-    } else {
-        all_chunks_subset(&var_meta.shape)
-    };
+    let chunk_plan = maybe_sel.map_or_else(
+        || all_chunks_subset(&var_meta.shape),
+        |sel| sel.clone().into(),
+    );
 
-    let chunk_grid = match &var_meta
+    let chunk_grid = var_meta
         .inner_chunk_grid
-    {
-        Some(grid) => grid.clone(),
-        None => var_meta.outer_chunk_grid.clone(),
-    };
+        .as_ref()
+        .map_or_else(
+            || Arc::clone(&var_meta.outer_chunk_grid),
+            Arc::clone,
+        );
 
     Ok((var.istr(), sig, chunk_plan, chunk_grid))
 }
@@ -171,7 +170,7 @@ pub fn selection_to_grouped_chunk_plan_unified_from_meta(
     selection: &DatasetSelection,
     meta: &ZarrMeta,
 ) -> Result<GroupedChunkPlan, BackendError> {
-    let grouped_plan = GroupedChunkPlan::new();
+    let mut grouped_plan = GroupedChunkPlan::new();
 
     let sig_cache: BTreeMap<
         ChunkGridSignature,
@@ -205,124 +204,30 @@ pub fn selection_to_grouped_chunk_plan_unified_from_meta(
     };
 
     use rayon::prelude::*;
-    use std::sync::{Arc as StdArc, Mutex};
 
-    // Use mutex to collect the results from the parallel iteration.
-    let grouped_plan_mutex = StdArc::new(
-        Mutex::new(GroupedChunkPlan::new()),
-    );
-    let sig_cache_mutex =
-        StdArc::new(Mutex::new(sig_cache));
+    let parts: Vec<VarPlanPart> = vars_to_process
+        .par_iter()
+        .map(|(var, maybe_sel)| {
+            var_plan_part_from_meta(var, *maybe_sel, meta)
+        })
+        .collect::<Vec<Result<VarPlanPart, BackendError>>>()
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()?;
 
-    let results: Result<(), BackendError> = vars_to_process.par_iter().map(|(var, maybe_sel)| {
-        let var_meta = meta.array_by_path(*var)
-            .ok_or_else(|| BackendError::UnknownZarrArray {
-                name: var.istr(),
-                available_zarr_arrays: meta.all_zarr_array_paths(),
-            })?;
-
-        // All zeroes, with the length of the number of dimensions these chunks operate on
-        let all_zeroes_dimensionality = vec![0u64; var_meta.shape.len()];
-
-        // Extract outer chunk shape (with error context)
-        let outer_chunk_shape: Option<SmallVec<[u64; 4]>> = {
-            let raw_shape = var_meta
-                .outer_chunk_grid
-                .chunk_shape(all_zeroes_dimensionality.as_slice())
-                .context(
-                    crate::errors::backend::IncompatibleDimensionalitySnafu {
-                        dims: var_meta.dims.clone().to_vec(),
-                        shape: var_meta.shape.clone().to_vec(),
-                        paths: vec![var.istr()],
-                    },
-                )?;
-            raw_shape.map(|v| {
-                v.into_iter().map(|n| n.get()).collect()
-            })
-        };
-
-        // Extract inner chunk shape (with error context)
-        let inner_chunk_shape: Option<SmallVec<[u64; 4]>> = match var_meta.inner_chunk_grid.as_ref() {
-            Some(grid) => {
-                let raw_shape = grid
-                    .chunk_shape(&all_zeroes_dimensionality)
-                    .context(
-                        crate::errors::backend::IncompatibleDimensionalitySnafu {
-                            dims: var_meta.dims.clone().to_vec(),
-                            shape: var_meta.shape.clone().to_vec(),
-                            paths: vec![var.istr()],
-                        },
-                    )?;
-                raw_shape.map(|v| {
-                    v.into_iter().map(|n| n.get()).collect()
-                })
-            }
-            None => None,
-        };
-
-        let sig = ChunkGridSignature::new(
-            var_meta.dims.clone(),
-            outer_chunk_shape,
-            inner_chunk_shape,
-        )?;
-
-        // Share signature cache mutably with mutex.
-        let sig_arc = {
-            let mut sig_cache = sig_cache_mutex.lock().unwrap();
+    let mut sig_cache = sig_cache;
+    for (var, sig, chunk_plan, chunk_grid) in parts {
+        let sig_arc = Arc::clone(
             sig_cache
                 .entry(sig.clone())
-                .or_insert_with(|| Arc::new(sig))
-                .clone()
-        };
-
-        // Create chunk plan
-        let chunk_plan = if let Some(sel) = maybe_sel {
-            (*sel).clone().into()
-        } else {
-            all_chunks_subset(&var_meta.shape)
-        };
-
-        let chunk_grid = match &var_meta.inner_chunk_grid {
-            Some(grid) => grid.clone(),
-            None => var_meta.outer_chunk_grid.clone(),
-        };
-
-        {
-            let mut grouped_plan = grouped_plan_mutex.lock().unwrap();
-            grouped_plan.insert(
-                var.istr(),
-                sig_arc,
-                chunk_plan,
-                chunk_grid,
-            );
-        }
-
-        Ok(())
-    }).try_reduce(|| (), |_, _| Ok(()));
-    let sig_cache =
-        StdArc::try_unwrap(sig_cache_mutex)
-            .unwrap_or_else(|arc| {
-                (*arc)
-                    .lock()
-                    .unwrap()
-                    .clone()
-                    .into()
-            })
-            .into_inner()
-            .unwrap();
-    let grouped_plan =
-        StdArc::try_unwrap(grouped_plan_mutex)
-            .unwrap_or_else(|arc| {
-                (*arc)
-                    .lock()
-                    .unwrap()
-                    .clone()
-                    .into()
-            })
-            .into_inner()
-            .unwrap();
-
-    results?;
+                .or_insert_with(|| Arc::new(sig)),
+        );
+        grouped_plan.insert(
+            var,
+            sig_arc,
+            chunk_plan,
+            chunk_grid,
+        );
+    }
 
     Ok(grouped_plan)
 }

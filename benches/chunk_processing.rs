@@ -398,7 +398,7 @@ fn bench_var_column(c: &mut Criterion) {
                     black_box(
                         &"temperature".istr(),
                     ),
-                    black_box(var_data.clone()),
+                    black_box(&var_data),
                     black_box(&var_dims_same),
                     black_box(&chunk_shape),
                     black_box(&offsets_zero),
@@ -430,9 +430,7 @@ fn bench_var_column(c: &mut Criterion) {
             b.iter(|| {
                 build_var_column(
                     black_box(&"pressure".istr()),
-                    black_box(
-                        var_data_diff.clone(),
-                    ),
+                    black_box(&var_data_diff),
                     black_box(&var_dims_diff),
                     black_box(
                         &var_chunk_shape_diff,
@@ -542,7 +540,7 @@ fn bench_chunk_to_df(c: &mut Criterion) {
         b.iter(|| {
             chunk_to_df_from_grid_with_backend(
                 black_box(&backend),
-                black_box(vec![2, 3, 1]),
+                black_box(&[2u64, 3, 1]),
                 black_box(&sig),
                 black_box(&array_shape),
                 black_box(&vars),
@@ -559,7 +557,7 @@ fn bench_chunk_to_df(c: &mut Criterion) {
         b.iter(|| {
             chunk_to_df_from_grid_with_backend(
                 black_box(&backend),
-                black_box(vec![9, 9, 4]),
+                black_box(&[9u64, 9, 4]),
                 black_box(&sig),
                 black_box(&array_shape),
                 black_box(&vars),

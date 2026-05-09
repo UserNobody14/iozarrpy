@@ -7,16 +7,14 @@ pub(crate) fn apply_time_encoding(
     raw: i64,
     te: Option<&TimeEncoding>,
 ) -> CoordScalar {
-    if let Some(enc) = te {
+    te.map_or(CoordScalar::I64(raw), |enc| {
         let ns = enc.decode(raw);
         if enc.is_duration {
             CoordScalar::DurationNs(ns)
         } else {
             CoordScalar::DatetimeNs(ns)
         }
-    } else {
-        CoordScalar::I64(raw)
-    }
+    })
 }
 
 pub(super) fn literal_anyvalue<'a>(

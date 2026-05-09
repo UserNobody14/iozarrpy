@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use zarrs::storage::AsyncReadableWritableListableStorage;
 
 use crate::errors::BackendResult;
@@ -15,12 +17,12 @@ pub async fn load_zarr_meta_from_opened_async(
 ) -> BackendResult<ZarrMeta> {
     crate::codec_compat::ensure_zarr_compat_registered();
 
-    let store = opened.store.clone();
+    let store = Arc::clone(&opened.store);
     let root_path = opened.root.clone();
     let root_path_str: &str = root_path.as_ref();
 
     let group = zarrs::group::Group::async_open(
-        store.clone(),
+        Arc::clone(&store),
         &root_path,
     )
     .await?;
@@ -41,10 +43,10 @@ pub async fn load_zarr_meta_from_store_async(
 ) -> BackendResult<ZarrMeta> {
     crate::codec_compat::ensure_zarr_compat_registered();
 
-    let store = store.clone();
+    let store = Arc::clone(store);
 
     let group = zarrs::group::Group::async_open(
-        store.clone(),
+        Arc::clone(&store),
         root_path,
     )
     .await?;

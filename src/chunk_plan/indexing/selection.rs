@@ -82,24 +82,24 @@ impl SetOperations for DataArraySelection {
     ) -> DataArraySelection {
         if self.is_empty() && other.is_empty() {
             return DataArraySelection {
-                dims: self.dims.clone(),
+                dims: Arc::clone(&self.dims),
                 subsets: ArraySubsetList::empty(),
             };
         }
         if self.is_empty() {
             return DataArraySelection {
-                dims: other.dims.clone(),
+                dims: Arc::clone(&other.dims),
                 subsets: other.subsets.clone(),
             };
         }
         if other.is_empty() {
             return DataArraySelection {
-                dims: self.dims.clone(),
+                dims: Arc::clone(&self.dims),
                 subsets: self.subsets.clone(),
             };
         }
         DataArraySelection {
-            dims: self.dims.clone(),
+            dims: Arc::clone(&self.dims),
             subsets: self
                 .subsets
                 .union(&other.subsets),
@@ -112,12 +112,12 @@ impl SetOperations for DataArraySelection {
     ) -> DataArraySelection {
         if self.is_empty() || other.is_empty() {
             return DataArraySelection {
-                dims: self.dims.clone(),
+                dims: Arc::clone(&self.dims),
                 subsets: ArraySubsetList::empty(),
             };
         }
         DataArraySelection {
-            dims: self.dims.clone(),
+            dims: Arc::clone(&self.dims),
             subsets: self
                 .subsets
                 .intersect(&other.subsets),
@@ -130,18 +130,18 @@ impl SetOperations for DataArraySelection {
     ) -> DataArraySelection {
         if self.is_empty() {
             return DataArraySelection {
-                dims: self.dims.clone(),
+                dims: Arc::clone(&self.dims),
                 subsets: ArraySubsetList::empty(),
             };
         }
         if other.is_empty() {
             return DataArraySelection {
-                dims: self.dims.clone(),
+                dims: Arc::clone(&self.dims),
                 subsets: self.subsets.clone(),
             };
         }
         DataArraySelection {
-            dims: self.dims.clone(),
+            dims: Arc::clone(&self.dims),
             subsets: self
                 .subsets
                 .difference(&other.subsets),
@@ -253,7 +253,7 @@ fn hyper_rectangle_difference(
 
     let mut result = Vec::new();
     // Track the "remaining" part of A as we peel off pieces
-    let mut remaining_ranges = a_ranges.clone();
+    let mut remaining_ranges = a_ranges;
 
     for dim in 0..ndim {
         let a_range = &remaining_ranges[dim];

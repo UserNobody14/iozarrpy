@@ -95,7 +95,7 @@ impl HasMetadataBackendSync<ZarrMeta>
         {
             let cached = self.cached_meta.read();
             if let Some(meta) = cached.as_ref() {
-                return Ok(meta.clone());
+                return Ok(Arc::clone(meta));
             }
         }
 
@@ -106,7 +106,7 @@ impl HasMetadataBackendSync<ZarrMeta>
         let meta_arc = Arc::new(meta);
 
         *self.cached_meta.write() =
-            Some(meta_arc.clone());
+            Some(Arc::clone(&meta_arc));
 
         Ok(meta_arc)
     }
@@ -156,9 +156,9 @@ impl ChunkedDataBackendSync for ZarrBackendSync {
                     .write()
                     .insert(
                         *var,
-                        opened_inner.clone(),
+                        Arc::clone(&opened_inner),
                     );
-                opened_inner.clone()
+                opened_inner
             }
         };
 
@@ -221,7 +221,7 @@ impl HasMetadataBackendAsync<ZarrMeta>
             let cached =
                 self.cached_meta.read().await;
             if let Some(meta) = cached.as_ref() {
-                return Ok(meta.clone());
+                return Ok(Arc::clone(meta));
             }
         }
 
@@ -234,7 +234,7 @@ impl HasMetadataBackendAsync<ZarrMeta>
         let meta_arc = Arc::new(meta);
 
         *self.cached_meta.write().await =
-            Some(meta_arc.clone());
+            Some(Arc::clone(&meta_arc));
 
         Ok(meta_arc)
     }
@@ -263,7 +263,7 @@ impl ChunkedDataBackendAsync
 
         let opened: Arc<OpenedArrayAsync> =
             match existing {
-                Some(opened) => opened.clone(),
+                Some(opened) => Arc::clone(&opened),
                 None => {
                     // Get array metadata from cache if available
                     let array_metadata = {
@@ -302,7 +302,7 @@ impl ChunkedDataBackendAsync
                         .await
                         .insert(
                             *var,
-                            opened_inner.clone(),
+                            Arc::clone(&opened_inner),
                         );
                     opened_inner
                 }

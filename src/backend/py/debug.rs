@@ -149,13 +149,12 @@ pub(crate) async fn extract_grids<
     B: HasMetadataBackendAsync<ZarrMeta>
         + ChunkedDataBackendAsync,
 >(
-    backend: Arc<B>,
-    expr: polars::prelude::Expr,
+    backend: &Arc<B>,
+    expr: &polars::prelude::Expr,
 ) -> PyResult<(Vec<GridInfo>, u64)> {
     // Compile expression to grouped chunk plan using backend-based resolver
-    let (grouped_plan, stats) = backend
-        .clone()
-        .compile_expression_async(&expr)
+    let (grouped_plan, stats) = Arc::clone(backend)
+        .compile_expression_async(expr)
         .await?;
 
     let mut grids: Vec<GridInfo> = Vec::new();
@@ -213,13 +212,11 @@ pub(crate) fn extract_grids_sync<
     B: HasMetadataBackendSync<ZarrMeta>
         + ChunkedDataBackendSync,
 >(
-    backend: Arc<B>,
-    expr: polars::prelude::Expr,
+    backend: &Arc<B>,
+    expr: &polars::prelude::Expr,
 ) -> PyResult<(Vec<GridInfo>, u64)> {
     let (grouped_plan, stats) =
-        backend
-            .clone()
-            .compile_expression_sync(&expr)?;
+        backend.compile_expression_sync(expr)?;
 
     let mut grids: Vec<GridInfo> = Vec::new();
 

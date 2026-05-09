@@ -140,6 +140,7 @@ impl ColumnData {
         }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn slice(
         &self,
         start: usize,
@@ -882,6 +883,7 @@ impl ColumnData {
 
     /// Concatenate this ColumnData with another, returning a new value.
     /// Panics if types don't match.
+    #[allow(dead_code)]
     pub(crate) fn concat(
         self,
         other: &ColumnData,

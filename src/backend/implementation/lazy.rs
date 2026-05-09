@@ -34,8 +34,8 @@ const PARALLEL_CHUNK_READS: usize = 2;
 /// diagonal-concats the per-batch DataFrames.
 pub fn scan_zarr_with_backend_sync(
     backend: &Arc<FullyCachedZarrBackendSync>,
-    expr: polars::prelude::Expr,
-    with_columns: Option<BTreeSet<IStr>>,
+    expr: &polars::prelude::Expr,
+    with_columns: Option<&BTreeSet<IStr>>,
     max_chunks_to_read: Option<usize>,
 ) -> Result<
     polars::prelude::DataFrame,
@@ -44,17 +44,17 @@ pub fn scan_zarr_with_backend_sync(
     let meta = backend.metadata()?;
 
     let chunk_expanded =
-        with_columns.as_ref().map(|cols| {
+        with_columns.map(|cols| {
             expand_projection_to_flat_paths(
                 cols, &meta,
             )
         });
 
     let (grouped_plan, _stats) =
-        backend.compile_expression_sync(&expr)?;
+        backend.compile_expression_sync(expr)?;
 
     let emit_empty_schema_once =
-        expr_top_literal_bool(&expr)
+        expr_top_literal_bool(expr)
             == Some(false);
 
     let groups = grouped_plan
@@ -66,16 +66,15 @@ pub fn scan_zarr_with_backend_sync(
     // For eager scans we materialize the entire dataset at once, so let each
     // batch be as large as it needs to be. The planner still applies geometry
     // bounds (chunk count cap), but we don't need to cap by row budget.
-    let batches = match &tree {
-        Some(t) => build_batches(t, usize::MAX),
-        None => Vec::new(),
-    };
+    let batches = tree.as_ref().map_or_else(
+        Vec::new,
+        |t| build_batches(t, usize::MAX),
+    );
 
     if let Some(max_chunks) = max_chunks_to_read {
-        let leaves_for_count = match &tree {
-            Some(t) => t.leaves(),
-            None => Vec::new(),
-        };
+        let leaves_for_count = tree
+            .as_ref()
+            .map_or_else(Vec::new, |t| t.leaves());
         let total_chunks =
             distinct_chunks_in_batches(
                 &batches,
@@ -105,7 +104,7 @@ pub fn scan_zarr_with_backend_sync(
                 .map_collect(|r| {
                     let df = chunk_to_df_from_grid_with_backend(
                         backend,
-                        r.idx.clone(),
+                        r.idx.as_slice(),
                         r.sig.as_ref(),
                         &r.array_shape,
                         &r.vars,

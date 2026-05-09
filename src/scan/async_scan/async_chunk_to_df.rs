@@ -27,7 +27,7 @@ use crate::reader::{
     compute_strides,
 };
 use crate::scan::shared::{
-    VarRead, build_coord_column, build_var_column,
+    build_coord_column, build_var_column,
     compute_in_bounds_mask, plan_var_reads,
 };
 use crate::shared::ChunkedDataBackendAsync;
@@ -41,7 +41,7 @@ pub async fn chunk_to_df_from_grid_with_backend<
     B: ChunkedDataBackendAsync,
 >(
     backend: &B,
-    idx: Vec<u64>,
+    idx: &[u64],
     sig: &ChunkGridSignature,
     array_shape: &[u64],
     vars: &[IStr],
@@ -74,7 +74,7 @@ pub async fn chunk_to_df_from_grid_with_backend<
     let var_reads = plan_var_reads(
         meta,
         dims,
-        &idx,
+        idx,
         chunk_shape,
         vars,
         with_columns,
@@ -138,31 +138,23 @@ pub async fn chunk_to_df_from_grid_with_backend<
     }
 
     for vr in &var_reads {
-        let VarRead {
-            name,
-            path,
-            var_dims,
-            var_chunk_shape,
-            offsets,
-            ..
-        } = vr;
         let data = loaded
-            .get(path)
+            .get(&vr.path)
             .ok_or_else(|| BackendError::Other {
                 msg: format!(
-                    "internal: missing read for variable path {path}",
+                    "internal: missing read for variable path {}",
+                    vr.path
                 ),
-            })?
-            .clone();
+            })?;
         let encoding = meta
-            .array_by_path(*name)
+            .array_by_path(vr.name)
             .and_then(|m| m.encoding.as_ref());
         cols.push(build_var_column(
-            name,
+            &vr.name,
             data,
-            var_dims,
-            var_chunk_shape,
-            offsets,
+            &vr.var_dims,
+            &vr.var_chunk_shape,
+            &vr.offsets,
             dims,
             chunk_shape,
             &strides,

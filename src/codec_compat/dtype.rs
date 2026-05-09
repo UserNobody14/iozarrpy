@@ -28,17 +28,15 @@ pub(crate) fn normalize_fixedscaleoffset_dtype_str(
 }
 
 fn split_endian_prefix(s: &str) -> (&str, &str) {
-    if let Some(rest) = s.strip_prefix('<') {
-        ("<", rest)
-    } else if let Some(rest) = s.strip_prefix('>')
-    {
-        (">", rest)
-    } else if let Some(rest) = s.strip_prefix('|')
-    {
-        ("|", rest)
-    } else {
-        ("<", s)
-    }
+    s.strip_prefix('<')
+        .map(|rest| ("<", rest))
+        .or_else(|| {
+            s.strip_prefix('>').map(|rest| (">", rest))
+        })
+        .or_else(|| {
+            s.strip_prefix('|').map(|rest| ("|", rest))
+        })
+        .unwrap_or(("<", s))
 }
 
 fn map_numpy_core_to_short(

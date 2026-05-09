@@ -158,10 +158,9 @@ impl ZarrIteratorInner {
         if let Some(max_chunks) =
             self.max_chunks_to_read
         {
-            let leaves_for_count = match &tree {
-                Some(t) => t.leaves(),
-                None => Vec::new(),
-            };
+            let leaves_for_count = tree
+                .as_ref()
+                .map_or_else(Vec::new, |t| t.leaves());
             let total_chunks =
                 distinct_chunks_in_batches(
                     &batches,
@@ -251,18 +250,18 @@ impl ZarrIteratorInner {
                 continue;
             }
 
-            let backend = self.backend.clone();
+            let backend = Arc::clone(&self.backend);
             let expanded_with_columns = state
                 .expanded_with_columns
                 .clone();
-            let meta = state.meta.clone();
+            let meta = Arc::clone(&state.meta);
 
             let chunk_dfs: Vec<(usize, DataFrame)> = reads
                 .maybe_par_iter(PARALLEL_CHUNK_READS)
                 .map_collect(|r| {
                     let df = chunk_to_df_from_grid_with_backend_sync(
                         backend.as_ref(),
-                        r.idx.clone(),
+                        r.idx.as_slice(),
                         r.sig.as_ref(),
                         &r.array_shape,
                         &r.vars,

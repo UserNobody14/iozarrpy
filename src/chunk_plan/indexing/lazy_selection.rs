@@ -285,34 +285,34 @@ impl SetOperations for LazyDimConstraint {
             (LazyDimConstraint::All, x) | (x, LazyDimConstraint::All) => x.clone(),
 
             (LazyDimConstraint::Unresolved(a), LazyDimConstraint::Unresolved(b)) => {
-                match a.intersect(b) {
-                    Some(vr) => LazyDimConstraint::Unresolved(vr),
-                    None => LazyDimConstraint::Empty,
-                }
+                a.intersect(b).map_or(
+                    LazyDimConstraint::Empty,
+                    LazyDimConstraint::Unresolved,
+                )
             }
             (LazyDimConstraint::InterpolationRange(a), LazyDimConstraint::InterpolationRange(b))
             | (LazyDimConstraint::InterpolationRange(a), LazyDimConstraint::Unresolved(b))
             | (LazyDimConstraint::Unresolved(b), LazyDimConstraint::InterpolationRange(a)) => {
-                match a.intersect(b) {
-                    Some(vr) => LazyDimConstraint::InterpolationRange(vr),
-                    None => LazyDimConstraint::Empty,
-                }
+                a.intersect(b).map_or(
+                    LazyDimConstraint::Empty,
+                    LazyDimConstraint::InterpolationRange,
+                )
             }
             // WrappingInterpolationRange preserves wrapping semantics through intersection
             (LazyDimConstraint::WrappingInterpolationRange(a), LazyDimConstraint::WrappingInterpolationRange(b)) => {
-                match a.intersect(b) {
-                    Some(vr) => LazyDimConstraint::WrappingInterpolationRange(vr),
-                    None => LazyDimConstraint::Empty,
-                }
+                a.intersect(b).map_or(
+                    LazyDimConstraint::Empty,
+                    LazyDimConstraint::WrappingInterpolationRange,
+                )
             }
             (LazyDimConstraint::WrappingInterpolationRange(a), LazyDimConstraint::Unresolved(b))
             | (LazyDimConstraint::Unresolved(b), LazyDimConstraint::WrappingInterpolationRange(a))
             | (LazyDimConstraint::WrappingInterpolationRange(a), LazyDimConstraint::InterpolationRange(b))
             | (LazyDimConstraint::InterpolationRange(b), LazyDimConstraint::WrappingInterpolationRange(a)) => {
-                match a.intersect(b) {
-                    Some(vr) => LazyDimConstraint::WrappingInterpolationRange(vr),
-                    None => LazyDimConstraint::Empty,
-                }
+                a.intersect(b).map_or(
+                    LazyDimConstraint::Empty,
+                    LazyDimConstraint::WrappingInterpolationRange,
+                )
             }
         }
     }

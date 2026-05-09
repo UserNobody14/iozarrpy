@@ -380,9 +380,9 @@ impl<
         {
             return set.contains(&canon);
         }
-        let meta = match self.backend.metadata() {
-            Ok(m) => m,
-            Err(_) => return false,
+        let Ok(meta) = self.backend.metadata()
+        else {
+            return false;
         };
         let set = coord_set_from_meta(&meta);
         let contains = set.contains(&canon);
@@ -408,11 +408,10 @@ impl<
                 return set.contains(&canon);
             }
         }
-        let meta =
-            match self.backend.metadata().await {
-                Ok(m) => m,
-                Err(_) => return false,
-            };
+        let Ok(meta) = self.backend.metadata().await
+        else {
+            return false;
+        };
         let set = coord_set_from_meta(&meta);
         let contains = set.contains(&canon);
         *self.coord_paths.write().await =
@@ -505,12 +504,12 @@ impl<
         if let Ok(g) = self.metadata.read()
             && let Some(m) = g.as_ref()
         {
-            return Ok(m.clone());
+            return Ok(Arc::clone(m));
         }
 
         let metadata = self.backend.metadata()?;
         if let Ok(mut g) = self.metadata.write() {
-            *g = Some(metadata.clone());
+            *g = Some(Arc::clone(&metadata));
         }
         Ok(metadata)
     }
@@ -532,12 +531,12 @@ impl<
         if let Some(metadata) =
             &*self.metadata.read().await
         {
-            return Ok(metadata.clone());
+            return Ok(Arc::clone(metadata));
         }
         let metadata =
             self.backend.metadata().await?;
         *self.metadata.write().await =
-            Some(metadata.clone());
+            Some(Arc::clone(&metadata));
         Ok(metadata)
     }
 }

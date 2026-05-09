@@ -53,7 +53,7 @@ pub(super) fn compile_struct_field_cmp(
     field_path: &ZarrPath,
     op: Operator,
     lit: &LiteralValue,
-    ctx: &mut LazyCompileCtx<'_>,
+    ctx: &LazyCompileCtx<'_>,
 ) -> LazyResult {
     let full_path = ZarrPath::single(*struct_col);
     let array_zp = field_path
@@ -84,7 +84,7 @@ pub(super) fn compile_struct_field_cmp(
         if ctx.dims.contains(dim) {
             let constraint =
                 LazyDimConstraint::Unresolved(
-                    vr.clone(),
+                    vr,
                 );
             let rect = LazyHyperRectangle::all()
                 .with_dim(*dim, constraint);

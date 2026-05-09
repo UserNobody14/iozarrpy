@@ -731,7 +731,7 @@ pub fn combine_per_leaf(
                 _ => Some(join_many(
                     child_dfs,
                     &join_keys,
-                    JoinType::Full,
+                    &JoinType::Full,
                     "join subtree",
                 )?),
             };
@@ -781,7 +781,7 @@ pub fn combine_per_leaf(
                                     coord_df,
                                 ],
                                 &coord_keys,
-                                JoinType::Left,
+                                &JoinType::Left,
                                 "coord broadcast",
                             )?
                         }
@@ -826,7 +826,7 @@ pub fn combine_per_leaf(
 fn join_many(
     child_dfs: Vec<DataFrame>,
     join_keys: &[PlSmallStr],
-    join_type: JoinType,
+    join_type: &JoinType,
     context: &str,
 ) -> BackendResult<DataFrame> {
     let live_keys: Vec<PlSmallStr> = join_keys
@@ -967,7 +967,7 @@ pub fn flatten_reads(
         for &slot in &slab.chunk_slots {
             out.push(ChunkRead {
                 leaf_idx: slab.leaf_idx,
-                sig: g.sig.clone(),
+                sig: Arc::clone(&g.sig),
                 array_shape: g
                     .array_shape
                     .clone(),
