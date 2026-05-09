@@ -929,13 +929,18 @@ pub fn vstack_leaf(
 }
 
 /// Per-leaf chunk read descriptors used by both sync and async drivers.
+///
+/// `sig` is `Arc` since it's shared across many chunks in a leaf.
+/// `array_shape` and `vars` are `Box<[T]>` since they're small slices
+/// (typically < 10-100 elements) cloned once per chunk - the overhead
+/// is minimal compared to the actual chunk I/O.
 pub struct ChunkRead {
     pub leaf_idx: usize,
     pub sig: Arc<ChunkGridSignature>,
-    pub array_shape: Arc<[u64]>,
-    pub vars: Arc<[IStr]>,
-    pub idx: Arc<[u64]>,
-    pub subset: Option<Arc<ChunkSubset>>,
+    pub array_shape: Box<[u64]>,
+    pub vars: Box<[IStr]>,
+    pub idx: Box<[u64]>,
+    pub subset: Option<Box<ChunkSubset>>,
 }
 
 /// Flatten a [`BatchPlan`]'s slabs into a list of individual chunk read tasks.
@@ -950,12 +955,12 @@ pub fn flatten_reads(
             out.push(ChunkRead {
                 leaf_idx: slab.leaf_idx,
                 sig: Arc::clone(&g.sig),
-                array_shape: Arc::clone(&g.array_shape),
-                vars: Arc::clone(&g.vars),
-                idx: Arc::clone(&g.chunk_indices[slot]),
+                array_shape: g.array_shape.to_vec().into_boxed_slice(),
+                vars: g.vars.to_vec().into_boxed_slice(),
+                idx: g.chunk_indices[slot].to_vec().into_boxed_slice(),
                 subset: g.chunk_subsets[slot]
                     .as_ref()
-                    .map(Arc::clone),
+                    .map(|s| Box::new((**s).clone())),
             });
         }
     }

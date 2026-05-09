@@ -76,8 +76,8 @@ fn process_array_meta_job<
         job.array_md.clone(),
     )?;
 
-    let shape: std::sync::Arc<[u64]> =
-        array.shape().into();
+    let shape: Box<[u64]> =
+        array.shape().to_vec().into_boxed_slice();
     let dims = dims_for_array(&array)
         .unwrap_or_else(|| {
             default_dims(shape.len())
@@ -91,14 +91,14 @@ fn process_array_meta_job<
     let zero_idx: Vec<u64> =
         vec![0u64; array.dimensionality()];
     let inner_grid = array.subchunk_grid();
-    let chunk_shape: std::sync::Arc<[u64]> =
+    let chunk_shape: Box<[u64]> =
         inner_grid
             .chunk_shape_u64(&zero_idx)
             .ok()
             .flatten()
-            .map(|cs| cs.into())
+            .map(|cs| cs.to_vec().into_boxed_slice())
             .unwrap_or_else(|| {
-                Arc::clone(&shape)
+                shape.clone()
             });
 
     let mut aux_coord_names = Vec::new();
