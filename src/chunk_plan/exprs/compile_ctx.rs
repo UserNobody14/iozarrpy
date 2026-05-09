@@ -83,14 +83,17 @@ impl<'a> LazyCompileCtx<'a> {
         &self.universe.dims
     }
 
-    /// Get the index of a dimension by name.
+    /// Get the index of a dimension. `dim` should already be interned;
+    /// `IStr` equality is one pointer compare.
+    #[inline]
     pub(crate) fn dim_index(
         &self,
-        dim: &str,
+        dim: IStr,
     ) -> Option<usize> {
-        self.universe.dims.iter().position(|d| {
-            <IStr as AsRef<str>>::as_ref(d) == dim
-        })
+        self.universe
+            .dims
+            .iter()
+            .position(|d| *d == dim)
     }
 
     /// Length of `dim` according to dim_analysis or the dim's coord array.

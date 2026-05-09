@@ -24,9 +24,9 @@ use smallvec::SmallVec;
 use zarrs::array::{ArraySubset, ChunkGrid};
 
 use crate::chunk_plan::coord_resolve::{
-    CachedResolver, CollectingResolver, ResolveKey,
+    CachedResolver, CollectingResolver,
+    MemoizingSyncResolver, ResolveKey,
     resolve_value_range_async,
-    resolve_value_range_sync,
 };
 use crate::chunk_plan::exprs::compile_ctx::{
     LazyCompileCtx, Universe, lookup_dim_len,
@@ -45,7 +45,7 @@ use crate::errors::BackendError;
 use crate::meta::ZarrMeta;
 use crate::shared::{
     ChunkedDataBackendAsync, ChunkedDataBackendSync,
-    IStr, MaybeParIter,
+    IStr,
 };
 
 // ============================================================================
@@ -638,17 +638,13 @@ fn wrap_root_groups(
 // Top-level entry points
 // ============================================================================
 
-/// Threshold above which we dispatch coord resolution to rayon. A single
-/// dim resolves faster sequentially because rayon's pool entry cost is
-/// real; ≥ 2 dims means independent coord arrays so it's worth paying.
-const PARALLEL_RESOLVE_THRESHOLD: usize = 2;
-
 /// Compile a Polars [`Expr`] into a [`GridJoinTree`] synchronously.
 ///
-/// Resolution is parallel across independent dims: a dry-run pass collects
-/// every `(dim, vr, expansion)` triple the expression touches, then rayon
-/// resolves them concurrently. The real compile then walks the expression
-/// against a lookup-only resolver.
+/// Single-pass: a memoizing resolver hits the backend inline on cache
+/// miss. For typical 1-3 dim queries this is faster than the dry-run +
+/// parallel-resolve dance because we avoid double-walking the expression
+/// and the rayon setup cost. Coord chunk loads inside each resolve still
+/// parallelize via `MaybeParIter` for multi-chunk arrays.
 pub fn compile_to_tree_sync<
     B: ChunkedDataBackendSync,
 >(
@@ -660,38 +656,8 @@ pub fn compile_to_tree_sync<
     BackendError,
 > {
     let universe = Universe::from_meta(meta);
-    let keys = collect_resolution_keys(
-        expr, meta, &universe,
-    );
-    let resolved: Vec<(
-        ResolveKey,
-        Vec<Range<u64>>,
-    )> = keys
-        .maybe_par_iter(PARALLEL_RESOLVE_THRESHOLD)
-        .map_collect(|key| {
-            let dim_len = lookup_dim_len(
-                meta, &key.dim,
-            )
-            .ok_or_else(|| unknown_dim(key.dim))?;
-            let r = resolve_value_range_sync(
-                backend,
-                &key.dim,
-                meta,
-                dim_len,
-                &key.vr,
-                key.expansion,
-            )?;
-            Ok::<_, BackendError>((
-                key.clone(),
-                r,
-            ))
-        })?;
-    let table: HashMap<
-        ResolveKey,
-        Vec<Range<u64>>,
-    > = resolved.into_iter().collect();
-    let resolver = CachedResolver::from_table(table);
-
+    let resolver =
+        MemoizingSyncResolver::new(backend);
     let plan = compile_expr_to_plan(
         expr,
         meta,
