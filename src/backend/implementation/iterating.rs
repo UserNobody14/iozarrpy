@@ -104,15 +104,10 @@ impl ZarrIteratorInner {
     ) -> Result<(), PyErr> {
         let meta = self.backend.metadata()?;
         let with_set: Option<BTreeSet<IStr>> =
-            if let Some(cols) = &self.with_columns {
-                Some(cols.iter().copied().collect())
-            } else {
-                Some(
-                    meta.tidy_column_order(None)
-                        .into_iter()
-                        .collect(),
-                )
-            };
+            self.with_columns.as_ref().map_or_else(
+                || Some(meta.tidy_column_order(None).into_iter().collect()),
+                |cols| Some(cols.iter().copied().collect()),
+            );
         let policy = ResolvedColumnPolicy::new(
             with_set, &self.expr, &meta,
         );
@@ -130,12 +125,9 @@ impl ZarrIteratorInner {
             expr_top_literal_bool(&self.expr)
                 == Some(false);
 
-        let batches = match &tree {
-            Some(t) => {
-                build_batches(t, self.batch_size)
-            }
-            None => Vec::new(),
-        };
+        let batches = tree
+            .as_ref()
+            .map_or_else(Vec::new, |t| build_batches(t, self.batch_size));
         // Always emit a single empty-schema batch when there's no actual data
         // to scan (literal-false predicate or pushdown trimmed every grid).
         // Polars needs at least one batch with the correct columns to resolve

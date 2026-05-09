@@ -13,5 +13,3 @@ pub mod expr_walk;
 pub mod literals;
 
 pub use compile::compile_expr;
-pub use compile_ctx::LazyCompileCtx;
-pub(crate) use literals::apply_time_encoding;

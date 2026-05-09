@@ -226,7 +226,7 @@ pub fn chunk_to_df_from_grid_with_backend<
                     DimMaterialization::Synthetic => None,
                     DimMaterialization::FromArray { path } => {
                         let col = loaded
-                            .get(&path)
+                            .get(path)
                             .ok_or_else(|| {
                                 BackendError::Other {
                                     msg: format!(

@@ -243,7 +243,6 @@ pub async fn chunk_to_df_from_grid_with_backend<
             let dim_step = dim_step.clone();
             let loaded = loaded.clone();
             let chunk_shape = chunk_shape.to_vec();
-            let meta = meta;
             let keep = keep.clone();
             let strides = strides.to_vec();
             let origin = origin.to_vec();
@@ -253,17 +252,18 @@ pub async fn chunk_to_df_from_grid_with_backend<
                     match &dim_step.mat {
                         DimMaterialization::Synthetic => None,
                         DimMaterialization::FromArray { path } => {
-                            let col = loaded
-                                .get(path)
-                                .ok_or_else(|| {
-                                    BackendError::Other {
-                                        msg: format!(
-                                            "internal: missing read for coord path {}",
-                                            path
-                                        ),
-                                    }
-                                })?
-                                .clone();
+                            let col = Arc::clone(
+                                loaded
+                                    .get(path)
+                                    .ok_or_else(|| {
+                                        BackendError::Other {
+                                            msg: format!(
+                                                "internal: missing read for coord path {}",
+                                                path
+                                            ),
+                                        }
+                                    })?,
+                            );
                             let expected_len =
                                 chunk_shape[dim_step.dim_idx] as usize;
                             if col.len() != expected_len {
@@ -301,22 +301,22 @@ pub async fn chunk_to_df_from_grid_with_backend<
         .map(|vs| {
             let vs = vs.clone();
             let loaded = loaded.clone();
-            let meta = meta;
             let dims = dims.to_vec();
             let chunk_shape = chunk_shape.to_vec();
             let strides = strides.to_vec();
             let keep = keep.clone();
 
             async move {
-                let data = loaded
-                    .get(&vs.path)
-                    .ok_or_else(|| BackendError::Other {
-                        msg: format!(
-                            "internal: missing read for variable path {}",
-                            vs.path
-                        ),
-                    })?
-                    .clone();
+                let data = Arc::clone(
+                    loaded
+                        .get(&vs.path)
+                        .ok_or_else(|| BackendError::Other {
+                            msg: format!(
+                                "internal: missing read for variable path {}",
+                                vs.path
+                            ),
+                        })?,
+                );
 
                 let encoding = meta
                     .array_by_path(vs.name)

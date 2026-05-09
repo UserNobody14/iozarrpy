@@ -230,10 +230,7 @@ pub(crate) fn load_zarr_meta_inner<
     TStorage: ?Sized + Send + Sync,
 >(
     store: &Arc<TStorage>,
-    nodes: &Vec<(
-        zarrs::node::NodePath,
-        NodeMetadata,
-    )>,
+    nodes: &[(zarrs::node::NodePath, NodeMetadata)],
     root_path_str: &str,
 ) -> BackendResult<ZarrMeta> {
     let jobs: Vec<ArrayMetaLoadJob> = nodes
