@@ -35,8 +35,8 @@ pub(super) fn compile_value_range_to_plan(
     vr: &ValueRangePresent,
     ctx: &LazyCompileCtx<'_>,
 ) -> LazyResult {
-    ensure_some!(ctx.dim_index(col));
     let dim = col.istr();
+    ensure_some!(ctx.dim_index(dim));
     let ranges = ctx.resolve(
         dim,
         vr,

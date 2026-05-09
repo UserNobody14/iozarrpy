@@ -374,46 +374,90 @@ fn detect_direction<T: PartialOrd>(
 // Native binary search via partition_point
 // ============================================================================
 
-/// Convert a value-range to an index range against a sorted typed slice.
-fn resolve_against_sorted<T: PartialOrd + Copy>(
+/// Ascending-sorted slice search. Comparators are monomorphic — no
+/// `match dir` inside the binary-search loop.
+#[inline]
+fn resolve_ascending<T: PartialOrd>(
     coords: &[T],
-    start: Bound<T>,
-    end: Bound<T>,
-    dir: Dir,
+    start: &Bound<T>,
+    end: &Bound<T>,
 ) -> Range<u64> {
-    let (start_b, end_b) = match dir {
-        Dir::Ascending => (start, end),
-        Dir::Descending => (end, start),
-    };
-    let lt = |v: &T, t: &T| match dir {
-        Dir::Ascending => *v < *t,
-        Dir::Descending => *v > *t,
-    };
-    let le = |v: &T, t: &T| match dir {
-        Dir::Ascending => *v <= *t,
-        Dir::Descending => *v >= *t,
-    };
-    let s_idx = match start_b {
-        Bound::Included(t) => coords
-            .partition_point(|v| lt(v, &t)),
-        Bound::Excluded(t) => coords
-            .partition_point(|v| le(v, &t)),
+    let s_idx = match start {
+        Bound::Included(t) => {
+            coords.partition_point(|v| v < t)
+        }
+        Bound::Excluded(t) => {
+            coords.partition_point(|v| v <= t)
+        }
         Bound::Unbounded => 0,
     };
-    let e_idx = match end_b {
-        Bound::Included(t) => coords
-            .partition_point(|v| le(v, &t)),
-        Bound::Excluded(t) => coords
-            .partition_point(|v| lt(v, &t)),
+    let e_idx = match end {
+        Bound::Included(t) => {
+            coords.partition_point(|v| v <= t)
+        }
+        Bound::Excluded(t) => {
+            coords.partition_point(|v| v < t)
+        }
         Bound::Unbounded => coords.len(),
     };
     (s_idx as u64)..(e_idx.max(s_idx) as u64)
+}
+
+/// Descending-sorted slice search. The result still spans contiguous
+/// indices in the original coord order: in a descending array the
+/// value-range *upper* governs the result *start* and vice versa, and the
+/// strict/non-strict comparator flips.
+#[inline]
+fn resolve_descending<T: PartialOrd>(
+    coords: &[T],
+    start: &Bound<T>,
+    end: &Bound<T>,
+) -> Range<u64> {
+    // start_idx uses the value-range UPPER bound (`end`), descending compare.
+    let s_idx = match end {
+        Bound::Included(t) => {
+            coords.partition_point(|v| v > t)
+        }
+        Bound::Excluded(t) => {
+            coords.partition_point(|v| v >= t)
+        }
+        Bound::Unbounded => 0,
+    };
+    // end_idx uses the value-range LOWER bound (`start`), descending compare.
+    let e_idx = match start {
+        Bound::Included(t) => {
+            coords.partition_point(|v| v >= t)
+        }
+        Bound::Excluded(t) => {
+            coords.partition_point(|v| v > t)
+        }
+        Bound::Unbounded => coords.len(),
+    };
+    (s_idx as u64)..(e_idx.max(s_idx) as u64)
+}
+
+#[inline]
+fn resolve_against_sorted<T: PartialOrd>(
+    coords: &[T],
+    start: &Bound<T>,
+    end: &Bound<T>,
+    dir: Dir,
+) -> Range<u64> {
+    match dir {
+        Dir::Ascending => {
+            resolve_ascending(coords, start, end)
+        }
+        Dir::Descending => {
+            resolve_descending(coords, start, end)
+        }
+    }
 }
 
 // ============================================================================
 // Target normalization: CoordScalar bounds → native f64/i64 bounds
 // ============================================================================
 
+#[inline]
 fn coord_to_f64(s: &CoordScalar) -> f64 {
     match s {
         CoordScalar::F64(v) => *v,
@@ -424,6 +468,7 @@ fn coord_to_f64(s: &CoordScalar) -> f64 {
     }
 }
 
+#[inline]
 fn coord_to_i64(s: &CoordScalar) -> i64 {
     match s {
         CoordScalar::I64(v) => *v,
@@ -434,6 +479,7 @@ fn coord_to_i64(s: &CoordScalar) -> i64 {
     }
 }
 
+#[inline]
 fn bound_map<T, F: Fn(&CoordScalar) -> T>(
     b: &Bound<CoordScalar>,
     f: F,
@@ -492,6 +538,7 @@ pub(crate) fn wrapping_ghost_ranges(
     ranges
 }
 
+#[inline]
 fn apply_expansion(
     r: Range<u64>,
     n: u64,
@@ -563,7 +610,7 @@ fn resolve_via_buffer(
                 coord_to_f64,
             );
             resolve_against_sorted(
-                coords, start, end, dir,
+                coords, &start, &end, dir,
             )
         }
         CoordBuffer::I64(coords) => {
@@ -584,7 +631,7 @@ fn resolve_via_buffer(
                 coord_to_i64,
             );
             resolve_against_sorted(
-                coords, start, end, dir,
+                coords, &start, &end, dir,
             )
         }
     };
@@ -698,7 +745,10 @@ pub(crate) async fn resolve_value_range_async<
 // CoordResolver impls
 // ============================================================================
 
-/// Lookup-only resolver backed by a pre-populated table.
+/// Lookup-only resolver backed by a pre-populated `HashMap`. `HashMap`
+/// scales O(1) for the large-N case (multi-row interpolation queries can
+/// have hundreds of distinct keys) and the per-lookup `vr.clone()` is
+/// dominated by the hash itself.
 pub(crate) struct CachedResolver {
     table:
         HashMap<ResolveKey, Vec<Range<u64>>>,
@@ -722,6 +772,7 @@ impl CachedResolver {
 }
 
 impl CoordResolver for CachedResolver {
+    #[inline]
     fn resolve(
         &self,
         dim: IStr,
@@ -745,6 +796,69 @@ impl CoordResolver for CachedResolver {
                     AsRef::<str>::as_ref(&dim),
                 ))
             })
+    }
+}
+
+/// Sync resolver that calls the backend on cache miss and memoizes per
+/// `(dim, vr, expansion)`. Single-pass compile uses this directly so the
+/// dry-run + parallel pre-resolve dance is avoided.
+pub(crate) struct MemoizingSyncResolver<
+    'b,
+    B: ChunkedDataBackendSync,
+> {
+    backend: &'b B,
+    cache: std::cell::RefCell<
+        HashMap<ResolveKey, Vec<Range<u64>>>,
+    >,
+}
+
+impl<'b, B: ChunkedDataBackendSync>
+    MemoizingSyncResolver<'b, B>
+{
+    pub(crate) fn new(backend: &'b B) -> Self {
+        Self {
+            backend,
+            cache: std::cell::RefCell::new(
+                HashMap::new(),
+            ),
+        }
+    }
+}
+
+impl<B: ChunkedDataBackendSync> CoordResolver
+    for MemoizingSyncResolver<'_, B>
+{
+    fn resolve(
+        &self,
+        dim: IStr,
+        meta: &ZarrMeta,
+        dim_len: u64,
+        vr: &ValueRangePresent,
+        expansion: Expansion,
+    ) -> Result<Vec<Range<u64>>, BackendError>
+    {
+        let key = ResolveKey {
+            dim,
+            vr: vr.clone(),
+            expansion,
+        };
+        if let Some(ranges) =
+            self.cache.borrow().get(&key)
+        {
+            return Ok(ranges.clone());
+        }
+        let ranges = resolve_value_range_sync(
+            self.backend,
+            &dim,
+            meta,
+            dim_len,
+            vr,
+            expansion,
+        )?;
+        self.cache
+            .borrow_mut()
+            .insert(key, ranges.clone());
+        Ok(ranges)
     }
 }
 
@@ -818,7 +932,7 @@ mod tests {
             bound_map(&v.0, coord_to_i64);
         let end = bound_map(&v.1, coord_to_i64);
         resolve_against_sorted(
-            coords, start, end, dir,
+            coords, &start, &end, dir,
         )
     }
 
@@ -895,8 +1009,8 @@ mod tests {
         let end = bound_map(&v.1, coord_to_f64);
         let r = resolve_against_sorted(
             &coords,
-            start,
-            end,
+            &start,
+            &end,
             Dir::Ascending,
         );
         assert_eq!(r, 4..8);
