@@ -222,13 +222,13 @@ pub(crate) fn postprocess_batch(
 pub(crate) fn empty_streaming_schema_batch(
     state: &IteratorState,
 ) -> Result<DataFrame, BackendError> {
-    let keys: Vec<IStr> =
-        match &state.output_columns {
-            Some(cols) => cols.clone(),
-            None => {
-                state.meta.tidy_column_order(None)
-            }
-        };
+    let keys: Vec<IStr> = state
+        .output_columns
+        .as_ref()
+        .map_or_else(
+            || state.meta.tidy_column_order(None),
+            Clone::clone,
+        );
     let df = DataFrame::empty_with_schema(
         &state
             .meta

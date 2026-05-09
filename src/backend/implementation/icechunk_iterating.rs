@@ -108,11 +108,10 @@ impl IcechunkIterator {
 
                 // Compute effective columns without cloning the outer Option
                 let effective_with_columns: Option<BTreeSet<IStr>> =
-                    if let Some(ref cols) = self.with_columns {
-                        Some(cols.iter().copied().collect())
-                    } else {
-                        Some(meta.tidy_column_order(None).into_iter().collect())
-                    };
+                    self.with_columns.as_ref().map_or_else(
+                        || Some(meta.tidy_column_order(None).into_iter().collect()),
+                        |cols| Some(cols.iter().copied().collect()),
+                    );
 
                 let policy = ResolvedColumnPolicy::new(
                     effective_with_columns.clone(),
@@ -132,10 +131,9 @@ impl IcechunkIterator {
                 let literal_false =
                     expr_top_literal_bool(&expr) == Some(false);
 
-                let batches = match &tree {
-                    Some(t) => build_batches(t, batch_size),
-                    None => Vec::new(),
-                };
+                let batches = tree
+                    .as_ref()
+                    .map_or_else(Vec::new, |t| build_batches(t, batch_size));
                 // Emit one empty-schema batch when we have nothing to read so
                 // Polars can still resolve downstream projection / filter expressions.
                 let emit_empty_schema_once = literal_false || batches.is_empty();

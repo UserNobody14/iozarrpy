@@ -465,20 +465,16 @@ fn build_one_group(
                 ),
             ))
         })?;
-    let chunk_grid: Arc<ChunkGrid> =
-        match &arr_meta.inner_chunk_grid {
-            Some(g) => Arc::clone(g),
-            None => {
-                Arc::clone(&arr_meta.outer_chunk_grid)
-            }
-        };
+    let chunk_grid: Arc<ChunkGrid> = arr_meta
+        .inner_chunk_grid
+        .as_ref()
+        .map_or_else(
+            || Arc::clone(&arr_meta.outer_chunk_grid),
+            Arc::clone,
+        );
     let array_shape: std::sync::Arc<[u64]> =
         chunk_grid.array_shape().to_vec().into();
-    let chunk_shape: Vec<u64> = arr_meta
-        .chunk_shape
-        .iter()
-        .copied()
-        .collect();
+    let chunk_shape: Vec<u64> = arr_meta.chunk_shape.to_vec();
 
     let mut seen: BTreeSet<Vec<u64>> =
         BTreeSet::new();
@@ -566,9 +562,9 @@ fn compute_chunk_subset(
         .map(|((s, cs), a)| (s + cs).min(*a))
         .collect();
     let mut bbox_start: Vec<u64> =
-        std::iter::repeat(u64::MAX).take(ndim).collect();
+        std::iter::repeat_n(u64::MAX, ndim).collect();
     let mut bbox_end: Vec<u64> =
-        std::iter::repeat(0u64).take(ndim).collect();
+        std::iter::repeat_n(0u64, ndim).collect();
     for subset in subsets {
         let ranges = subset.to_ranges();
         for d in 0..ndim {

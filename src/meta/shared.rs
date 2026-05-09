@@ -91,15 +91,12 @@ fn process_array_meta_job<
     let zero_idx: Vec<u64> =
         vec![0u64; array.dimensionality()];
     let inner_grid = array.subchunk_grid();
-    let chunk_shape: Box<[u64]> =
-        inner_grid
-            .chunk_shape_u64(&zero_idx)
-            .ok()
-            .flatten()
-            .map(|cs| cs.to_vec().into_boxed_slice())
-            .unwrap_or_else(|| {
-                shape.clone()
-            });
+    let chunk_shape: Box<[u64]> = inner_grid
+        .chunk_shape_u64(&zero_idx)
+        .ok()
+        .flatten()
+        .map(|cs| cs.to_vec().into_boxed_slice())
+        .unwrap_or_else(|| shape.clone());
 
     let mut aux_coord_names = Vec::new();
     if let Some(attrs) =

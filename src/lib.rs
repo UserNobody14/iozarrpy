@@ -3,6 +3,13 @@
 #![allow(clippy::type_complexity)]
 #![allow(clippy::single_range_in_vec_init)]
 #![warn(clippy::clone_on_ref_ptr)]
+#![warn(clippy::needless_pass_by_value)]
+#![warn(clippy::redundant_allocation)]
+#![warn(clippy::borrowed_box)]
+#![warn(clippy::inefficient_to_string)]
+#![warn(clippy::needless_range_loop)]
+#![warn(clippy::manual_ok_or)]
+#![warn(clippy::option_if_let_else)]
 
 use pyo3::prelude::*;
 

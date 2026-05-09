@@ -21,7 +21,7 @@ pub fn compute_dims_and_lengths_unified(
         })
         .collect();
     (
-        meta.dim_analysis.all_dims.iter().copied().collect(),
+        meta.dim_analysis.all_dims.to_vec(),
         dim_lengths,
     )
 }
