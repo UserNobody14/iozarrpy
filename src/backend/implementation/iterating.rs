@@ -19,7 +19,6 @@ use crate::chunk_plan::indexing::grid_join_reader::{
 };
 use crate::errors::MaxChunksToReadExceededSnafu;
 use crate::scan::chunk_to_df_from_grid_with_backend_sync;
-use crate::scan::column_policy::ResolvedColumnPolicy;
 use crate::shared::HasMetadataBackendSync;
 use crate::shared::IStr;
 use crate::shared::MaybeParIter;
@@ -37,6 +36,7 @@ use super::iterating_common::{
     DEFAULT_BATCH_SIZE, IteratorState,
     build_batches, distinct_chunks_in_batches,
     empty_streaming_schema_batch,
+    expand_with_columns_for_io,
     expr_top_literal_bool,
     output_columns_for_streaming_batch,
     postprocess_batch,
@@ -121,11 +121,10 @@ impl ZarrIteratorInner {
                     cols.iter().cloned().collect()
                 },
             );
-        let policy = ResolvedColumnPolicy::new(
-            with_set, &self.expr, &meta,
-        );
         let expanded_with_columns =
-            policy.physical_superset().cloned();
+            expand_with_columns_for_io(
+                with_set, &self.expr, &meta,
+            );
 
         let (grouped_plan, _stats) = self
             .backend
@@ -140,7 +139,6 @@ impl ZarrIteratorInner {
         let groups = grouped_plan
             .owned_grid_groups_for_io(
                 literal_false,
-                meta.as_ref(),
             )?;
 
         let tree = GridJoinTree::build(groups);
@@ -160,9 +158,14 @@ impl ZarrIteratorInner {
         if let Some(max_chunks) =
             self.max_chunks_to_read
         {
+            let leaves_for_count = match &tree {
+                Some(t) => t.leaves(),
+                None => Vec::new(),
+            };
             let total_chunks =
                 distinct_chunks_in_batches(
                     &batches,
+                    &leaves_for_count,
                 );
             ensure!(
                 total_chunks <= max_chunks,

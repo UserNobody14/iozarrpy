@@ -25,7 +25,6 @@ use crate::errors::BackendError;
 use crate::errors::CreateTokioRuntimeForSyncStoreSnafu;
 use crate::errors::MaxChunksToReadExceededSnafu;
 use crate::scan::async_scan::chunk_to_df_from_grid_with_backend;
-use crate::scan::column_policy::ResolvedColumnPolicy;
 use crate::shared::ChunkedExpressionCompilerAsync;
 use crate::shared::HasMetadataBackendAsync;
 use crate::shared::IStr;
@@ -35,6 +34,7 @@ use super::iterating_common::{
     DEFAULT_BATCH_SIZE, IteratorState,
     build_batches, distinct_chunks_in_batches,
     empty_streaming_schema_batch,
+    expand_with_columns_for_io,
     expr_top_literal_bool,
     output_columns_for_streaming_batch,
     postprocess_batch,
@@ -112,12 +112,11 @@ impl IcechunkIterator {
                     Some(meta.tidy_column_order(None).into_iter().collect())
                 });
 
-                let policy = ResolvedColumnPolicy::new(
+                let expanded_with_columns = expand_with_columns_for_io(
                     effective_with_columns.clone(),
                     &expr,
                     &meta,
                 );
-                let expanded_with_columns = policy.physical_superset().cloned();
 
                 let (grouped_plan, _stats) =
                     backend.compile_expression_async(&expr).await?;
@@ -126,7 +125,7 @@ impl IcechunkIterator {
                     expr_top_literal_bool(&expr) == Some(false);
 
                 let groups = grouped_plan
-                    .owned_grid_groups_for_io(literal_false, meta.as_ref())?;
+                    .owned_grid_groups_for_io(literal_false)?;
 
                 let tree = GridJoinTree::build(groups);
                 let batches = match &tree {
@@ -138,7 +137,14 @@ impl IcechunkIterator {
                 let emit_empty_schema_once = literal_false || batches.is_empty();
 
                 if let Some(max_chunks) = max_chunks_to_read {
-                    let total_chunks = distinct_chunks_in_batches(&batches);
+                    let leaves_for_count = match &tree {
+                        Some(t) => t.leaves(),
+                        None => Vec::new(),
+                    };
+                    let total_chunks = distinct_chunks_in_batches(
+                        &batches,
+                        &leaves_for_count,
+                    );
                     ensure!(
                         total_chunks <= max_chunks,
                         MaxChunksToReadExceededSnafu {

@@ -9,13 +9,51 @@ use std::sync::Arc;
 use polars::prelude::*;
 use snafu::ResultExt;
 
+use crate::chunk_plan::collect_column_refs;
 use crate::chunk_plan::indexing::grid_join_reader::{BatchPlan, BatchPlanner};
 use crate::chunk_plan::GridJoinTree;
 use crate::errors::{BackendError, PolarsSnafu};
 use crate::meta::ZarrMeta;
 use crate::shared::FromManyIstrs;
 use crate::shared::IStr;
+use crate::shared::expand_projection_to_flat_paths;
 use crate::shared::restructure_to_structs;
+
+/// All column names referenced by a Polars predicate expression.
+pub(crate) fn predicate_column_refs(
+    expr: &Expr,
+) -> BTreeSet<IStr> {
+    let mut refs: Vec<IStr> = Vec::new();
+    collect_column_refs(expr, &mut refs);
+    refs.into_iter().collect()
+}
+
+/// Build the chunk-read column superset for a streaming/eager scan: union
+/// `with_columns` with the predicate's column refs and every dataset
+/// dimension, then run [`expand_projection_to_flat_paths`].
+///
+/// Returns `None` only when `with_columns` is `None` (i.e. caller wants the
+/// full schema and downstream code will treat that as "no projection").
+pub(crate) fn expand_with_columns_for_io(
+    with_columns: Option<BTreeSet<IStr>>,
+    predicate: &Expr,
+    meta: &ZarrMeta,
+) -> Option<BTreeSet<IStr>> {
+    let mut cols = with_columns?;
+    for r in predicate_column_refs(predicate) {
+        cols.insert(r);
+    }
+    // Always include every dataset dim so its `__<dim>` column survives
+    // `should_include_column` filtering inside chunk_to_df. (User-facing
+    // `<dim>` rendering happens via `finalize_dim_columns` and the
+    // GridJoinTree's coord_leaves; including them here is essentially free.)
+    for d in &meta.dim_analysis.all_dims {
+        cols.insert(*d);
+    }
+    Some(expand_projection_to_flat_paths(
+        &cols, meta,
+    ))
+}
 
 /// Default batch size in rows when not specified.
 pub(crate) const DEFAULT_BATCH_SIZE: usize =
@@ -257,13 +295,30 @@ pub(crate) fn empty_streaming_schema_batch(
 }
 
 /// Convenience: count distinct chunks across pre-built batches.
+///
+/// 1D dim-coordinate leaves (auto-included by the planner so the
+/// [`crate::chunk_plan::indexing::GridJoinTree`] can broadcast their values
+/// onto structural joins) are excluded from this count: they aren't
+/// user-data reads and shouldn't count against `max_chunks_to_read`.
 pub(crate) fn distinct_chunks_in_batches(
     batches: &[BatchPlan],
+    leaves: &[&crate::chunk_plan::indexing::plan::OwnedGridGroup],
 ) -> usize {
+    let is_dim_coord_leaf = |idx: usize| -> bool {
+        let Some(g) = leaves.get(idx) else {
+            return false;
+        };
+        g.sig.dims().len() == 1
+            && g.vars.len() == 1
+            && g.vars[0] == g.sig.dims()[0]
+    };
     let mut seen: BTreeSet<(usize, usize)> =
         BTreeSet::new();
     for b in batches {
         for slab in &b.batch.slabs {
+            if is_dim_coord_leaf(slab.leaf_idx) {
+                continue;
+            }
             for &slot in &slab.chunk_slots {
                 seen.insert((
                     slab.leaf_idx,

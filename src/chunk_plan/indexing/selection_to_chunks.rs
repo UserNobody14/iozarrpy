@@ -12,7 +12,47 @@ use crate::chunk_plan::indexing::selection::ArraySubsetList;
 use crate::errors::BackendError;
 
 use crate::meta::ZarrMeta;
-use crate::shared::{IntoIStr, IStr, MaybeParIter};
+use crate::shared::{IStr, IntoIStr};
+
+/// Data vars + every 1D dim-coord array (`var name == dim name`) for any dim
+/// referenced by a data var. The coord arrays produce extra grid groups so
+/// the [`crate::chunk_plan::indexing::GridJoinTree`] can drain them as
+/// `coord_leaves` and broadcast their values onto the structural join
+/// instead of re-reading them per chunk inside `chunk_to_df`.
+fn data_vars_with_dim_coords(
+    meta: &ZarrMeta,
+) -> Vec<IStr> {
+    let mut out: Vec<IStr> =
+        meta.all_data_var_paths();
+    let mut seen: std::collections::BTreeSet<
+        IStr,
+    > = out.iter().copied().collect();
+    let snapshot: Vec<IStr> = out.clone();
+    for v in &snapshot {
+        let Some(am) = meta.array_by_path(*v)
+        else {
+            continue;
+        };
+        for d in &am.dims {
+            if !seen.insert(*d) {
+                continue;
+            }
+            let Some(coord_meta) =
+                meta.array_by_path(*d)
+            else {
+                continue;
+            };
+            if coord_meta.shape.len() != 1
+                || coord_meta.dims.len() != 1
+                || &coord_meta.dims[0] != d
+            {
+                continue;
+            }
+            out.push(*d);
+        }
+    }
+    out
+}
 
 /// Create an ArraySubsetList that covers the entire array shape.
 fn all_chunks_subset(
@@ -45,11 +85,13 @@ fn var_plan_part_from_meta(
 ) -> Result<VarPlanPart, BackendError> {
     let Some(var_meta) = meta.array_by_path(var)
     else {
-        return Err(BackendError::UnknownZarrArray {
-            name: var.istr(),
-            available_zarr_arrays: meta
-                .all_zarr_array_paths(),
-        });
+        return Err(
+            BackendError::UnknownZarrArray {
+                name: var.istr(),
+                available_zarr_arrays: meta
+                    .all_zarr_array_paths(),
+            },
+        );
     };
 
     let all_zeroes_dimensionality =
@@ -68,7 +110,9 @@ fn var_plan_part_from_meta(
                 },
             )?;
         raw_shape.map(|v| {
-            v.into_iter().map(|n| n.get()).collect()
+            v.into_iter()
+                .map(|n| n.get())
+                .collect()
         })
     };
 
@@ -86,35 +130,36 @@ fn var_plan_part_from_meta(
                     },
                 )?;
             raw_shape.map(|v| {
-                v.into_iter().map(|n| n.get()).collect()
+                v.into_iter()
+                    .map(|n| n.get())
+                    .collect()
             })
         }
         None => None,
     };
 
-    let sig = super::types::ChunkGridSignature::new(
-        var_meta.dims.clone(),
-        outer_chunk_shape,
-        inner_chunk_shape,
-    )?;
+    let sig =
+        super::types::ChunkGridSignature::new(
+            var_meta.dims.clone(),
+            outer_chunk_shape,
+            inner_chunk_shape,
+        )?;
 
-    let chunk_plan = if let Some(sel) = maybe_sel {
+    let chunk_plan = if let Some(sel) = maybe_sel
+    {
         sel.clone().into()
     } else {
         all_chunks_subset(&var_meta.shape)
     };
 
-    let chunk_grid = match &var_meta.inner_chunk_grid {
+    let chunk_grid = match &var_meta
+        .inner_chunk_grid
+    {
         Some(grid) => grid.clone(),
         None => var_meta.outer_chunk_grid.clone(),
     };
 
-    Ok((
-        var.istr(),
-        sig,
-        chunk_plan,
-        chunk_grid,
-    ))
+    Ok((var.istr(), sig, chunk_plan, chunk_grid))
 }
 
 /// Convert a DatasetSelection to a GroupedChunkPlan using metadata only.
@@ -126,10 +171,9 @@ pub fn selection_to_grouped_chunk_plan_unified_from_meta(
     selection: &DatasetSelection,
     meta: &ZarrMeta,
 ) -> Result<GroupedChunkPlan, BackendError> {
-    let mut grouped_plan =
-        GroupedChunkPlan::new();
+    let grouped_plan = GroupedChunkPlan::new();
 
-    let mut sig_cache: BTreeMap<
+    let sig_cache: BTreeMap<
         ChunkGridSignature,
         Arc<ChunkGridSignature>,
     > = BTreeMap::new();
@@ -142,7 +186,8 @@ pub fn selection_to_grouped_chunk_plan_unified_from_meta(
         >,
     )> = match selection {
         DatasetSelection::NoSelectionMade => {
-            all_vars = meta.all_data_var_paths();
+            all_vars =
+                data_vars_with_dim_coords(meta);
             all_vars
                 .iter()
                 .map(|v| (v.as_ref(), None))
@@ -159,33 +204,125 @@ pub fn selection_to_grouped_chunk_plan_unified_from_meta(
             .collect(),
     };
 
-    // Below this many variables the rayon scheduling overhead exceeds the
-    // gain from parallel signature/chunk-grid construction. Tiny queries
-    // (single-variable lookups in particular) regress noticeably when forced
-    // through `par_iter`, so fall back to a plain map.
-    const PARALLEL_PLAN_VARS: usize = 4;
+    use rayon::prelude::*;
+    use std::sync::{Arc as StdArc, Mutex};
 
-    let parts: Vec<VarPlanPart> = vars_to_process
-        .maybe_par_iter(PARALLEL_PLAN_VARS)
-        .map_collect(|(var, maybe_sel)| {
-            var_plan_part_from_meta(
-                var, *maybe_sel, meta,
-            )
-        })?;
+    // Use mutex to collect the results from the parallel iteration.
+    let grouped_plan_mutex = StdArc::new(
+        Mutex::new(GroupedChunkPlan::new()),
+    );
+    let sig_cache_mutex =
+        StdArc::new(Mutex::new(sig_cache));
 
-    for (var, sig, chunk_plan, chunk_grid) in parts
-    {
-        let sig_arc = sig_cache
-            .entry(sig.clone())
-            .or_insert_with(|| Arc::new(sig))
-            .clone();
-        grouped_plan.insert(
-            var,
-            sig_arc,
-            chunk_plan,
-            chunk_grid,
-        );
-    }
+    let results: Result<(), BackendError> = vars_to_process.par_iter().map(|(var, maybe_sel)| {
+        let var_meta = meta.array_by_path(*var)
+            .ok_or_else(|| BackendError::UnknownZarrArray {
+                name: var.istr(),
+                available_zarr_arrays: meta.all_zarr_array_paths(),
+            })?;
+
+        // All zeroes, with the length of the number of dimensions these chunks operate on
+        let all_zeroes_dimensionality = vec![0u64; var_meta.shape.len()];
+
+        // Extract outer chunk shape (with error context)
+        let outer_chunk_shape: Option<SmallVec<[u64; 4]>> = {
+            let raw_shape = var_meta
+                .outer_chunk_grid
+                .chunk_shape(all_zeroes_dimensionality.as_slice())
+                .context(
+                    crate::errors::backend::IncompatibleDimensionalitySnafu {
+                        dims: var_meta.dims.clone().to_vec(),
+                        shape: var_meta.shape.clone().to_vec(),
+                        paths: vec![var.istr()],
+                    },
+                )?;
+            raw_shape.map(|v| {
+                v.into_iter().map(|n| n.get()).collect()
+            })
+        };
+
+        // Extract inner chunk shape (with error context)
+        let inner_chunk_shape: Option<SmallVec<[u64; 4]>> = match var_meta.inner_chunk_grid.as_ref() {
+            Some(grid) => {
+                let raw_shape = grid
+                    .chunk_shape(&all_zeroes_dimensionality)
+                    .context(
+                        crate::errors::backend::IncompatibleDimensionalitySnafu {
+                            dims: var_meta.dims.clone().to_vec(),
+                            shape: var_meta.shape.clone().to_vec(),
+                            paths: vec![var.istr()],
+                        },
+                    )?;
+                raw_shape.map(|v| {
+                    v.into_iter().map(|n| n.get()).collect()
+                })
+            }
+            None => None,
+        };
+
+        let sig = ChunkGridSignature::new(
+            var_meta.dims.clone(),
+            outer_chunk_shape,
+            inner_chunk_shape,
+        )?;
+
+        // Share signature cache mutably with mutex.
+        let sig_arc = {
+            let mut sig_cache = sig_cache_mutex.lock().unwrap();
+            sig_cache
+                .entry(sig.clone())
+                .or_insert_with(|| Arc::new(sig))
+                .clone()
+        };
+
+        // Create chunk plan
+        let chunk_plan = if let Some(sel) = maybe_sel {
+            (*sel).clone().into()
+        } else {
+            all_chunks_subset(&var_meta.shape)
+        };
+
+        let chunk_grid = match &var_meta.inner_chunk_grid {
+            Some(grid) => grid.clone(),
+            None => var_meta.outer_chunk_grid.clone(),
+        };
+
+        {
+            let mut grouped_plan = grouped_plan_mutex.lock().unwrap();
+            grouped_plan.insert(
+                var.istr(),
+                sig_arc,
+                chunk_plan,
+                chunk_grid,
+            );
+        }
+
+        Ok(())
+    }).try_reduce(|| (), |_, _| Ok(()));
+    let sig_cache =
+        StdArc::try_unwrap(sig_cache_mutex)
+            .unwrap_or_else(|arc| {
+                (*arc)
+                    .lock()
+                    .unwrap()
+                    .clone()
+                    .into()
+            })
+            .into_inner()
+            .unwrap();
+    let grouped_plan =
+        StdArc::try_unwrap(grouped_plan_mutex)
+            .unwrap_or_else(|arc| {
+                (*arc)
+                    .lock()
+                    .unwrap()
+                    .clone()
+                    .into()
+            })
+            .into_inner()
+            .unwrap();
+
+    results?;
 
     Ok(grouped_plan)
 }

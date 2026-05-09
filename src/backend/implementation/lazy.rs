@@ -15,7 +15,6 @@ use crate::chunk_plan::indexing::grid_join_reader::{
 };
 use crate::errors::BackendError;
 use crate::errors::MaxChunksToReadExceededSnafu;
-use crate::scan::column_policy::ResolvedColumnPolicy;
 use crate::scan::sync_scan::chunk_to_df_from_grid_with_backend;
 use crate::shared::ChunkedExpressionCompilerSync;
 use crate::shared::FullyCachedZarrBackendSync;
@@ -50,18 +49,6 @@ pub fn scan_zarr_with_backend_sync(
                 cols, &meta,
             )
         });
-    let _enrich_policy =
-        ResolvedColumnPolicy::new(
-            with_columns.clone().or_else(|| {
-                Some(
-                    meta.tidy_column_order(None)
-                        .into_iter()
-                        .collect(),
-                )
-            }),
-            &expr,
-            &meta,
-        );
 
     let (grouped_plan, _stats) =
         backend.compile_expression_sync(&expr)?;
@@ -73,7 +60,6 @@ pub fn scan_zarr_with_backend_sync(
     let groups = grouped_plan
         .owned_grid_groups_for_io(
             emit_empty_schema_once,
-            &meta,
         )?;
 
     let tree = GridJoinTree::build(groups);
@@ -86,8 +72,15 @@ pub fn scan_zarr_with_backend_sync(
     };
 
     if let Some(max_chunks) = max_chunks_to_read {
+        let leaves_for_count = match &tree {
+            Some(t) => t.leaves(),
+            None => Vec::new(),
+        };
         let total_chunks =
-            distinct_chunks_in_batches(&batches);
+            distinct_chunks_in_batches(
+                &batches,
+                &leaves_for_count,
+            );
         ensure!(
             total_chunks <= max_chunks,
             MaxChunksToReadExceededSnafu {

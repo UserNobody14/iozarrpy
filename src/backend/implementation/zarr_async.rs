@@ -59,7 +59,6 @@ where
     let groups = grouped_plan
         .owned_grid_groups_for_io(
             emit_empty_schema_once,
-            &meta,
         )?;
 
     let tree = GridJoinTree::build(groups);
@@ -69,8 +68,15 @@ where
     };
 
     if let Some(max_chunks) = max_chunks_to_read {
+        let leaves_for_count = match &tree {
+            Some(t) => t.leaves(),
+            None => Vec::new(),
+        };
         let total_chunks =
-            distinct_chunks_in_batches(&batches);
+            distinct_chunks_in_batches(
+                &batches,
+                &leaves_for_count,
+            );
         ensure!(
             total_chunks <= max_chunks,
             MaxChunksToReadExceededSnafu {

@@ -318,18 +318,32 @@ def test_interpolate_nd_date_coords_plan_and_clamp_low_only(tmp_path: Path) -> N
     chunks = ZarrBackend.from_url(str(zarr_path)).selected_chunks_debug( expr)
     assert chunks == {
         "coord_reads": 0,
-        "grids": [ {
-            "chunks": [
-                {
-                    "indices": [0],
-                    "origin": [0],
-                    "shape": [10],
-                    "shards": []
-                }
-            ],
-            "dims": ["d"],
-            "variables": ["value"],
-        }],
+        "grids": [
+            {
+                "chunks": [
+                    {
+                        "indices": [0],
+                        "origin": [0],
+                        "shape": [10],
+                        "shards": []
+                    }
+                ],
+                "dims": ["d"],
+                "variables": ["value"],
+            },
+            {
+                "chunks": [
+                    {
+                        "indices": [0],
+                        "origin": [0],
+                        "shape": [100],
+                        "shards": []
+                    }
+                ],
+                "dims": ["d"],
+                "variables": ["d"],
+            },
+        ],
     }
 
 

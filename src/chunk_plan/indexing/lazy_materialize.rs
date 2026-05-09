@@ -1364,7 +1364,7 @@ fn build_var_grouping(
     BTreeMap<Arc<ChunkGridSignature>, Vec<IStr>>,
     BTreeMap<IStr, Arc<ChunkGridSignature>>,
 )> {
-    let var_list: Vec<IStr> = match vars {
+    let mut var_list: Vec<IStr> = match vars {
         VarSet::Specific(v) if v.is_empty() => {
             return None;
         }
@@ -1373,6 +1373,41 @@ fn build_var_grouping(
         }
         VarSet::Specific(v) => v.to_vec(),
     };
+
+    // Auto-include the 1D dim-coord array for every dimension touched by the
+    // var list. These become coord-broadcast leaves in the
+    // [`crate::chunk_plan::indexing::GridJoinTree`] (via
+    // `GridJoinTree::Join::coord_leaves`) so the user-facing `<dim>` column is
+    // populated by joining the coord values onto the synthetic `__<dim>`
+    // positions, instead of being re-read per chunk inside `chunk_to_df`.
+    let mut seen: std::collections::BTreeSet<
+        IStr,
+    > = var_list.iter().copied().collect();
+    let mut to_add: Vec<IStr> = Vec::new();
+    for v in &var_list {
+        let Some(am) = meta.array_by_path(*v)
+        else {
+            continue;
+        };
+        for d in &am.dims {
+            if !seen.insert(*d) {
+                continue;
+            }
+            let Some(coord_meta) =
+                meta.array_by_path(*d)
+            else {
+                continue;
+            };
+            if coord_meta.shape.len() != 1
+                || coord_meta.dims.len() != 1
+                || &coord_meta.dims[0] != d
+            {
+                continue;
+            }
+            to_add.push(*d);
+        }
+    }
+    var_list.extend(to_add);
 
     let mut sig_cache: BTreeMap<
         ChunkGridSignature,
@@ -1470,6 +1505,12 @@ pub(crate) fn resolve_expr_plan_sync<
                 }
             }
 
+            drop_orphan_coord_sigs(
+                &mut by_dims,
+                &by_sig,
+                meta,
+            );
+
             if by_dims.is_empty() {
                 Ok(DatasetSelection::Empty)
             } else {
@@ -1543,6 +1584,12 @@ pub(crate) async fn resolve_expr_plan_async<
                 }
             }
 
+            drop_orphan_coord_sigs(
+                &mut by_dims,
+                &by_sig,
+                meta,
+            );
+
             if by_dims.is_empty() {
                 Ok(DatasetSelection::Empty)
             } else {
@@ -1561,6 +1608,70 @@ pub(crate) async fn resolve_expr_plan_async<
 // ============================================================================
 // Shared helpers
 // ============================================================================
+
+/// Drop sigs that only contain auto-included 1D dim-coord arrays whose
+/// dim is not represented by any *surviving* data-var sig in `by_dims`,
+/// **but only when the input var list actually contained data vars**.
+///
+/// Motivation: a query like `pl.col("y") > 1000` (unsatisfiable) empties
+/// the data var's `(y, x)` sig, leaving auto-included coord sigs `(y)` and
+/// `(x)` standing. Those coord sigs would then produce row-bearing batches
+/// with only `[y]`/`[x]` columns, and downstream predicate evaluation would
+/// fail on the missing data columns.
+///
+/// However, queries that only reference dim coords (e.g. a filter on `time`
+/// with no data-var projection) legitimately have no data vars in the input;
+/// pruning the coord sigs there would empty the selection entirely.
+fn drop_orphan_coord_sigs(
+    by_dims: &mut BTreeMap<
+        Arc<ChunkGridSignature>,
+        DataArraySelection,
+    >,
+    by_sig: &BTreeMap<
+        Arc<ChunkGridSignature>,
+        Vec<IStr>,
+    >,
+    meta: &ZarrMeta,
+) {
+    let data_vars: std::collections::BTreeSet<
+        IStr,
+    > = meta
+        .all_data_var_paths()
+        .into_iter()
+        .collect();
+    let input_had_data_var =
+        by_sig.values().any(|vars| {
+            vars.iter()
+                .any(|v| data_vars.contains(v))
+        });
+    if !input_had_data_var {
+        return;
+    }
+    let surviving_data_dims: std::collections::BTreeSet<IStr> = by_dims
+        .keys()
+        .filter(|sig| {
+            by_sig
+                .get(*sig)
+                .map(|vars| vars.iter().any(|v| data_vars.contains(v)))
+                .unwrap_or(false)
+        })
+        .flat_map(|sig| sig.dims().iter().copied().collect::<Vec<_>>())
+        .collect();
+    by_dims.retain(|sig, _| {
+        let Some(vars) = by_sig.get(sig) else {
+            return true;
+        };
+        let has_data_var = vars
+            .iter()
+            .any(|v| data_vars.contains(v));
+        if has_data_var {
+            return true;
+        }
+        sig.dims().iter().any(|d| {
+            surviving_data_dims.contains(d)
+        })
+    });
+}
 
 /// Try to resolve a value range immediately for an index-only dimension (no coordinate array).
 fn try_resolve_index_only(

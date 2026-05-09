@@ -322,62 +322,21 @@ impl GroupedChunkPlan {
         )
     }
 
-    /// Consolidated groups, optionally clearing for a literal-false predicate.
+    /// Consolidated groups, optionally cleared for a literal-false predicate.
     ///
-    /// Drops "redundant dim coordinate" groups: a 1D group whose only variable
-    /// has the same name as its dim **and** that dim already appears in a
-    /// higher-dim variable in `meta`. The higher-dim group materializes the
-    /// dim column via
-    /// [`crate::scan::column_policy::DimMaterialization::FromArray`], so
-    /// scheduling the standalone dim-coord group adds duplicate reads and
-    /// forces an extra `Independent` subtree at plan time.
-    ///
-    /// Auxiliary 1D coords sharing a dim with a larger grid (e.g. `latitude`,
-    /// `longitude`, `station_id` along `point`) are *kept* because the larger
-    /// grid does not materialize them.
+    /// 1D dim-coord groups are *not* filtered out here — they flow through to
+    /// [`crate::chunk_plan::indexing::GridJoinTree::build`] where they are
+    /// drained into [`crate::chunk_plan::indexing::GridJoinTree::Join::coord_leaves`]
+    /// and broadcast onto the structural join via the
+    /// [`crate::chunk_plan::indexing::grid_join_reader::CombineNode`] tree.
     pub(crate) fn owned_grid_groups_for_io(
         &self,
         literal_false_clear: bool,
-        meta: &crate::meta::ZarrMeta,
     ) -> BackendResult<Vec<OwnedGridGroup>> {
         if literal_false_clear {
             return Ok(Vec::new());
         }
-        let multi_dim_dim_set: BTreeSet<IStr> =
-            meta.all_array_paths()
-                .into_iter()
-                .filter_map(|p| {
-                    meta.array_by_path(p)
-                })
-                .filter(|m| m.dims.len() > 1)
-                .flat_map(|m| {
-                    m.dims
-                        .iter()
-                        .copied()
-                        .collect::<Vec<_>>()
-                })
-                .collect();
-        let groups: Vec<OwnedGridGroup> = self
-            .iter_consolidated_chunks()
-            .collect::<BackendResult<_>>()?;
-        Ok(groups
-            .into_iter()
-            .filter(|g| {
-                let dims = g.sig.dims();
-                if dims.len() != 1 {
-                    return true;
-                }
-                let dim = dims[0];
-                if !multi_dim_dim_set
-                    .contains(&dim)
-                {
-                    return true;
-                }
-                // Only drop when the group is exactly the dim's coordinate.
-                !(g.vars.len() == 1
-                    && g.vars[0] == dim)
-            })
-            .collect())
+        self.iter_consolidated_chunks().collect()
     }
 
     /// Get the internal var_to_grid map.
