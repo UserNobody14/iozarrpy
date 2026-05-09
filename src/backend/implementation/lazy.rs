@@ -88,10 +88,10 @@ pub fn scan_zarr_with_backend_sync(
                 .map_collect(|r| {
                     let df = chunk_to_df_from_grid_with_backend(
                         backend,
-                        r.idx.as_ref(),
+                        &r.idx,
                         r.sig.as_ref(),
-                        r.array_shape.as_ref(),
-                        r.vars.as_ref(),
+                        &r.array_shape,
+                        &r.vars,
                         chunk_expanded.as_ref(),
                         r.subset.as_deref(),
                         &meta,
