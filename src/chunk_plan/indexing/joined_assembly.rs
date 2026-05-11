@@ -146,6 +146,21 @@ fn assemble_single(
     let chunk_len =
         checked_chunk_len(chunk_shape)?;
 
+    // A var with the same name as one of the leaf's dims (e.g. a 1D coord
+    // grouped into the same signature as its data var) emits the user-facing
+    // `<dim>` column directly via `build_var_column`. Skip the integer-position
+    // dim column for those dims to avoid a duplicate column name; the var's
+    // gather already broadcasts across the other dims of the leaf.
+    let shadowed_dims: std::collections::BTreeSet<
+        IStr,
+    > = chunks[0]
+        .raw
+        .var_reads
+        .iter()
+        .map(|vr| vr.name)
+        .filter(|n| dims.iter().any(|d| d == n))
+        .collect();
+
     let mut per_chunk_dfs: Vec<DataFrame> =
         Vec::with_capacity(chunks.len());
 
@@ -180,6 +195,9 @@ fn assemble_single(
         for (dim_idx, dim_name) in
             dims.iter().enumerate()
         {
+            if shadowed_dims.contains(dim_name) {
+                continue;
+            }
             cols.push(build_coord_column(
                 dim_name.as_ref(),
                 dim_idx,
@@ -460,6 +478,33 @@ fn assemble_joined(
             .insert(leaves[c].sig.dims()[0], c);
     }
 
+    // A var inside a structural leaf whose name matches an output dim emits
+    // the user-facing `<dim>` column directly via the leaf-gather path. Track
+    // those dims so we skip the integer-position dim column for them. (Coord
+    // leaves take precedence — they're the planner's "preferred" coord source.)
+    let mut structural_var_dims: std::collections::BTreeSet<IStr> =
+        std::collections::BTreeSet::new();
+    for &leaf_idx in structural_leaves {
+        let Some(chunks) = by_leaf.get(&leaf_idx)
+        else {
+            continue;
+        };
+        let Some(first) = chunks.first() else {
+            continue;
+        };
+        for vr in &first.raw.var_reads {
+            if !coord_for_dim.contains_key(&vr.name)
+                && geometry
+                    .dims
+                    .iter()
+                    .any(|d| d == &vr.name)
+            {
+                structural_var_dims
+                    .insert(vr.name);
+            }
+        }
+    }
+
     let mut columns: Vec<Column> = Vec::new();
 
     for (d_out, &dim_name) in
@@ -479,6 +524,11 @@ fn assemble_joined(
                     meta,
                 ),
             );
+        } else if structural_var_dims
+            .contains(&dim_name)
+        {
+            // Handled by a structural leaf's var emission below; skip the
+            // integer dim column to avoid a duplicate name.
         } else {
             columns.push(
                 build_dim_column_from_positions(
@@ -500,7 +550,11 @@ fn assemble_joined(
             continue;
         }
         for col in build_leaf_var_columns(
-            leaf, chunks, &geometry, meta,
+            leaf,
+            chunks,
+            &geometry,
+            meta,
+            &coord_for_dim,
         ) {
             columns.push(col);
         }
@@ -666,6 +720,7 @@ fn build_leaf_var_columns(
     chunks: &[BatchChunkRead],
     geometry: &OutputGeometry,
     meta: &ZarrMeta,
+    coord_for_dim: &BTreeMap<IStr, usize>,
 ) -> Vec<Column> {
     let leaf_dims = leaf.sig.dims();
     let leaf_chunk_shape =
@@ -746,10 +801,14 @@ fn build_leaf_var_columns(
     for (var_pos, vr) in
         var_reads.iter().enumerate()
     {
-        if geometry
-            .dims
-            .iter()
-            .any(|d| d == &vr.name)
+        // Skip a var iff a coord_leaf already provides the output column under
+        // the same name. (When no coord_leaf serves this dim, the var emission
+        // IS the dim column.)
+        if coord_for_dim.contains_key(&vr.name)
+            && geometry
+                .dims
+                .iter()
+                .any(|d| d == &vr.name)
         {
             continue;
         }
