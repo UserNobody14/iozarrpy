@@ -24,8 +24,8 @@ pub fn checked_chunk_len(
                 max: usize::MAX,
             }
         )?;
-        acc = acc.checked_mul(d_usize).ok_or(
-            BackendError::other(
+        acc = acc.checked_mul(d_usize).ok_or_else(
+            || BackendError::other(
                 "chunk size overflow".to_string(),
             ),
         )?;

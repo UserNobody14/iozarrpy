@@ -75,7 +75,7 @@ pub enum VarSet {
 enum BuilderState {
     NoConstraint,
     Empty,
-    Active { rects: RectangleSet, vars: VarSet },
+    Active { rects: Box<RectangleSet>, vars: VarSet },
 }
 
 // ============================================================================
@@ -118,7 +118,7 @@ impl<'a> GridJoinTreeBuilder<'a> {
                 s.insert(name);
                 self.state =
                     BuilderState::Active {
-                        rects: self.full_set(),
+                        rects: Box::new(self.full_set()),
                         vars: VarSet::Specific(s),
                     };
             }
@@ -138,7 +138,7 @@ impl<'a> GridJoinTreeBuilder<'a> {
             BuilderState::NoConstraint => {
                 self.state =
                     BuilderState::Active {
-                        rects: self.full_set(),
+                        rects: Box::new(self.full_set()),
                         vars: VarSet::All,
                     };
             }
@@ -171,7 +171,7 @@ impl<'a> GridJoinTreeBuilder<'a> {
             BuilderState::Empty => BuilderState::Empty,
             BuilderState::NoConstraint => {
                 BuilderState::Active {
-                    rects: other.clone(),
+                    rects: Box::new(other.clone()),
                     vars: VarSet::Specific(
                         BTreeSet::new(),
                     ),
@@ -186,7 +186,7 @@ impl<'a> GridJoinTreeBuilder<'a> {
                     BuilderState::Empty
                 } else {
                     BuilderState::Active {
-                        rects: r,
+                        rects: Box::new(r),
                         vars,
                     }
                 }
@@ -269,10 +269,10 @@ impl<'a> GridJoinTreeBuilder<'a> {
         let (rects, vars) = match state {
             BuilderState::Empty => return Ok(None),
             BuilderState::NoConstraint => (
-                RectangleSet::full(
+                Box::new(RectangleSet::full(
                     universe.dims.clone(),
                     universe.shape.clone(),
-                ),
+                )),
                 VarSet::All,
             ),
             BuilderState::Active {
