@@ -159,29 +159,28 @@ fn build_buffer(
             let mut out: Vec<f64> =
                 Vec::with_capacity(n);
             for chunk in chunks {
-                match chunk.as_ref() {
-                    ColumnData::F64(v) => {
-                        out.extend_from_slice(v);
-                    }
-                    ColumnData::F32(v) => {
-                        out.extend(
-                            v.iter()
-                                .map(|&x| x as f64),
+                if let Some(v) =
+                    chunk.as_f64_values()
+                {
+                    out.extend_from_slice(v);
+                } else if let Some(v) =
+                    chunk.as_f32_values()
+                {
+                    out.extend(
+                        v.iter().map(|&x| x as f64),
+                    );
+                } else {
+                    // Mixed-dtype chunks
+                    // shouldn't happen; fall
+                    // through via get_i64 cast
+                    // for safety.
+                    for i in 0..chunk.len() {
+                        out.push(
+                            chunk
+                                .get_i64(i)
+                                .unwrap_or(0)
+                                as f64,
                         );
-                    }
-                    _ => {
-                        // Mixed-dtype chunks
-                        // shouldn't happen; fall
-                        // through via get_i64 cast
-                        // for safety.
-                        for i in 0..chunk.len() {
-                            out.push(
-                                chunk
-                                    .get_i64(i)
-                                    .unwrap_or(0)
-                                    as f64,
-                            );
-                        }
                     }
                 }
             }
@@ -209,46 +208,53 @@ fn decode_chunk_to_i64(
     te: Option<&TimeEncoding>,
     out: &mut Vec<i64>,
 ) {
-    match (chunk, te) {
-        (ColumnData::F64(v), Some(enc)) => {
-            // F64 raw + time encoding: decode each
-            // value to i64 ns; drop NaN/non-finite.
-            for &x in v {
-                if let Some(ns) = enc.decode_f64(x)
-                {
-                    out.push(ns);
+    match te {
+        Some(enc) => {
+            if let Some(v) = chunk.as_f64_values() {
+                // F64 raw + time encoding: decode each
+                // value to i64 ns; drop NaN/non-finite.
+                for &x in v {
+                    if let Some(ns) =
+                        enc.decode_f64(x)
+                    {
+                        out.push(ns);
+                    }
                 }
+                return;
             }
-        }
-        (ColumnData::F32(v), Some(enc)) => {
-            for &x in v {
-                if let Some(ns) =
-                    enc.decode_f64(x as f64)
-                {
-                    out.push(ns);
+            if let Some(v) = chunk.as_f32_values() {
+                for &x in v {
+                    if let Some(ns) =
+                        enc.decode_f64(x as f64)
+                    {
+                        out.push(ns);
+                    }
                 }
+                return;
+            }
+            if let Some(v) = chunk.as_i64_values() {
+                out.extend(
+                    v.iter().map(|&x| enc.decode(x)),
+                );
+                return;
             }
         }
-        (ColumnData::I64(v), Some(enc)) => {
-            out.extend(
-                v.iter().map(|&x| enc.decode(x)),
-            );
-        }
-        (ColumnData::I64(v), None) => {
-            out.extend_from_slice(v);
-        }
-        _ => {
-            // Other integer widths or float-without-encoding (rare for
-            // I64 buffer): cast each element via get_i64 then optionally
-            // apply time encoding.
-            for i in 0..chunk.len() {
-                let raw =
-                    chunk.get_i64(i).unwrap_or(0);
-                let val = te
-                    .map_or(raw, |enc| enc.decode(raw));
-                out.push(val);
+        None => {
+            if let Some(v) = chunk.as_i64_values() {
+                out.extend_from_slice(v);
+                return;
             }
         }
+    }
+    // Other integer widths or float-without-encoding (rare for
+    // I64 buffer): cast each element via get_i64 then optionally
+    // apply time encoding.
+    for i in 0..chunk.len() {
+        let raw =
+            chunk.get_i64(i).unwrap_or(0);
+        let val = te
+            .map_or(raw, |enc| enc.decode(raw));
+        out.push(val);
     }
 }
 

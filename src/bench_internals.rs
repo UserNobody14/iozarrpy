@@ -30,6 +30,10 @@ pub use crate::chunk_plan::{
 
 pub use crate::errors::BackendError;
 
+pub use crate::shared::{
+    FromManyIstrs, IStr, IntoIStr, IntoManyIstrs,
+};
+
 pub use crate::meta::{
     DimensionAnalysis, VarEncoding,
     ZarrArrayMeta, ZarrMeta, ZarrNode,
