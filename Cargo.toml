@@ -98,6 +98,7 @@ polars = { git = "https://github.com/pola-rs/polars.git", tag = "py-1.40.1", fea
 # `polars-expr`/`polars-plan` feature chain). Add it directly so the Expr pickle/bincode
 # layout matches Python Polars when FFI plugins are present.
 polars-lazy = { git = "https://github.com/pola-rs/polars.git", tag = "py-1.40.1", features = ["ffi_plugin"] }
+polars-arrow = { git = "https://github.com/pola-rs/polars.git", tag = "py-1.40.1" }
 pyo3-polars = { git = "https://github.com/pola-rs/polars.git", tag = "py-1.40.1", features = [
     "object",
     "dtype-extension",
@@ -146,6 +147,7 @@ snafu = {version = "0.8.9", features = ["backtrace"] }
 # Profiling/tracing support (behind feature flag)
 console-subscriber = { version = "0.4", optional = true }
 tracing = { version = "0.1", optional = true }
+bytemuck = "1.25.0"
 
 [dev-dependencies]
 criterion = { version = "0.8", features = ["html_reports"] }
@@ -159,6 +161,11 @@ bench = []
 
 [[bench]]
 name = "chunk_processing"
+harness = false
+required-features = ["bench"]
+
+[[bench]]
+name = "var_column"
 harness = false
 required-features = ["bench"]
 
@@ -179,6 +186,19 @@ codegen-units = 1
 inherits = "dev"
 debug = "line-tables-only"
 codegen-units = 256
+
+# Bench profile: this toolchain SIGSEGVs in LLVM when compiling polars at
+# opt-level >= 1, so dependencies stay at opt-level=0 (the default for dev).
+# Our crate (rainbear) is built at opt-level=3 to get realistic numbers for
+# the code under test. Benchmark *ratios* are valid; absolute numbers are
+# pessimistic for the dependency surface (Series::new etc.).
+[profile.bench]
+inherits = "dev"
+codegen-units = 16
+debug = "line-tables-only"
+
+[profile.bench.package.rainbear]
+opt-level = 3
 
 # Patch zarrs to use the fork with consolidated metadata support
 [patch.crates-io]

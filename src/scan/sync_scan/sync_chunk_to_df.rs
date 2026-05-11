@@ -47,7 +47,7 @@ fn read_coord_range_chunked<
     len: u64,
 ) -> Result<ColumnData, BackendError> {
     if len == 0 {
-        return Ok(ColumnData::I64(vec![]));
+        return Ok(ColumnData::empty_i64());
     }
 
     // For 1D coordinate arrays, compute which chunks we need
@@ -105,9 +105,8 @@ fn read_coord_range_chunked<
         });
     }
 
-    Ok(result_data.unwrap_or_else(|| {
-        ColumnData::I64(vec![])
-    }))
+    Ok(result_data
+        .unwrap_or_else(ColumnData::empty_i64))
 }
 
 fn execute_read_sync<

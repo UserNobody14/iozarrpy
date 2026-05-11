@@ -56,7 +56,7 @@ async fn read_coord_range_chunked<
     len: u64,
 ) -> Result<ColumnData, BackendError> {
     if len == 0 {
-        return Ok(ColumnData::I64(vec![]));
+        return Ok(ColumnData::empty_i64());
     }
 
     let first_chunk = start / coord_chunk_shape;
@@ -121,9 +121,8 @@ async fn read_coord_range_chunked<
         });
     }
 
-    Ok(result_data.unwrap_or_else(|| {
-        ColumnData::I64(vec![])
-    }))
+    Ok(result_data
+        .unwrap_or_else(ColumnData::empty_i64))
 }
 
 async fn execute_read_async<
