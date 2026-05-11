@@ -82,7 +82,14 @@ enum ScheduleNode {
         driver_leaf: usize,
         driver_cursor: usize,
         participants: Vec<usize>,
-        join_axes_per_participant: Vec<Vec<usize>>,
+        /// Per participant, axes paired by **effective join-dim index**:
+        /// `axes[k] = Some(axis)` if the leaf has the k-th join dim
+        /// (`axis` is its position in the leaf's signature); `None` if
+        /// the leaf doesn't have that dim (e.g. a 1D coord leaf w.r.t.
+        /// the orthogonal join dims). All participants share the same
+        /// length so `overlapping_chunks` can pair driver and leaf axes
+        /// by dim.
+        join_axes_per_participant: Vec<Vec<Option<usize>>>,
     },
     Independent {
         children: Vec<ScheduleNode>,
@@ -297,7 +304,7 @@ fn build_schedule(
                         tree, leaves,
                     );
                 let mut participants = Vec::new();
-                let mut join_axes_per_participant: Vec<Vec<usize>> = Vec::new();
+                let mut join_axes_per_participant: Vec<Vec<Option<usize>>> = Vec::new();
                 collect_join_participants(
                     tree,
                     leaves,
@@ -514,18 +521,22 @@ fn collect_join_participants(
     leaves: &[&OwnedGridGroup],
     inherited_join: &[IStr],
     participants: &mut Vec<usize>,
-    join_axes_per_leaf: &mut Vec<Vec<usize>>,
+    join_axes_per_leaf: &mut Vec<Vec<Option<usize>>>,
 ) {
     match tree {
         GridJoinTree::Leaf(g) => {
             participants
                 .push(leaf_index_of(leaves, g));
-            let axes: Vec<usize> = inherited_join
+            // Structural-subtree leaves have every join dim in their sig (tree
+            // build guarantees the intersection). `Some` for every effective
+            // dim; the `Option` shape is kept uniform so coord and structural
+            // participants share the same `axes[k]` interpretation.
+            let axes: Vec<Option<usize>> = inherited_join
                 .iter()
                 .map(|d| {
-                    g.sig.dims().iter().position(|sd| sd == d).expect(
+                    Some(g.sig.dims().iter().position(|sd| sd == d).expect(
                         "join dim should be present in leaf signature; tree build should guarantee this",
-                    )
+                    ))
                 })
                 .collect();
             join_axes_per_leaf.push(axes);
@@ -554,9 +565,14 @@ fn collect_join_participants(
             for c in coord_leaves {
                 let idx =
                     leaf_index_of(leaves, c);
-                let axes: Vec<usize> = effective
+                // Pair by *effective dim index*: `Some(axis)` if this coord
+                // covers the k-th join dim, `None` otherwise. Keeps the parallel
+                // shape with structural-subtree leaves so `overlapping_chunks`
+                // can zip driver and leaf axes dim-by-dim and skip the
+                // orthogonal dims a 1D coord doesn't constrain.
+                let axes: Vec<Option<usize>> = effective
                     .iter()
-                    .filter_map(|d| {
+                    .map(|d| {
                         c.sig
                             .dims()
                             .iter()
@@ -614,30 +630,42 @@ fn axis_interval(
 }
 
 /// Set of `leaf` chunk slots that overlap any of `driver_slots` on every join
-/// dim. `driver_axes` and `leaf_axes` are positional axes (same length).
+/// dim the leaf actually has. `driver_axes` and `leaf_axes` are parallel
+/// arrays indexed by **effective join-dim**: `Some(axis)` if that participant
+/// has the k-th join dim, `None` otherwise. Dims the leaf lacks (e.g. a 1D
+/// coord on a dim orthogonal to the slab's other dims) impose no constraint
+/// on that leaf and are skipped.
 fn overlapping_chunks(
     driver: &OwnedGridGroup,
     driver_slots: &[usize],
     leaf: &OwnedGridGroup,
-    driver_axes: &[usize],
-    leaf_axes: &[usize],
+    driver_axes: &[Option<usize>],
+    leaf_axes: &[Option<usize>],
 ) -> Vec<usize> {
-    if leaf_axes.is_empty() {
+    debug_assert_eq!(
+        driver_axes.len(),
+        leaf_axes.len(),
+        "driver and leaf axes must be paired by effective dim"
+    );
+    if leaf_axes.iter().all(Option::is_none) {
+        // No join dims constrain this leaf — every chunk is a candidate.
         return (0..leaf.chunk_indices.len())
             .collect();
     }
-    let driver_intervals: Vec<Vec<(u64, u64)>> =
+    let driver_intervals: Vec<Option<Vec<(u64, u64)>>> =
         driver_axes
             .iter()
-            .map(|&ax| {
-                driver_slots
-                    .iter()
-                    .map(|&s| {
-                        axis_interval(
-                            driver, s, ax,
-                        )
-                    })
-                    .collect()
+            .map(|maybe_ax| {
+                maybe_ax.map(|ax| {
+                    driver_slots
+                        .iter()
+                        .map(|&s| {
+                            axis_interval(
+                                driver, s, ax,
+                            )
+                        })
+                        .collect()
+                })
             })
             .collect();
 
@@ -645,13 +673,24 @@ fn overlapping_chunks(
         BTreeSet::new();
     for slot in 0..leaf.chunk_indices.len() {
         let mut all_axes_overlap = true;
-        for (k, &leaf_ax) in
+        for (k, leaf_ax_opt) in
             leaf_axes.iter().enumerate()
         {
+            let Some(leaf_ax) = *leaf_ax_opt
+            else {
+                continue;
+            };
+            // If the driver lacks this dim we cannot constrain on it either;
+            // the leaf chunk is a candidate w.r.t. this axis.
+            let Some(driver_intervals_k) =
+                driver_intervals[k].as_ref()
+            else {
+                continue;
+            };
             let (lstart, lend) = axis_interval(
                 leaf, slot, leaf_ax,
             );
-            let any_overlap = driver_intervals[k]
+            let any_overlap = driver_intervals_k
                 .iter()
                 .any(|(ds, de)| {
                     !(*de <= lstart
