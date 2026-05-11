@@ -120,11 +120,8 @@ impl PyIcechunkBackend {
             branch.unwrap_or_else(|| {
                 "main".to_string()
             });
-        let root_clone = root.clone();
         let resolved_opts =
-            PyBackendOptions::resolve(
-                options.as_ref(),
-            );
+            PyBackendOptions::resolve(options);
 
         future_into_py(py, async move {
             // Create filesystem storage
@@ -163,7 +160,7 @@ impl PyIcechunkBackend {
             })?;
 
             let backend =
-                IcechunkBackendAsync::from_session(session, root_clone);
+                IcechunkBackendAsync::from_session(session, root);
             let backend =
                 to_fully_cached_icechunk_async(
                     backend,
@@ -214,11 +211,8 @@ impl PyIcechunkBackend {
         root: Option<String>,
         options: Option<PyBackendOptions>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let root_clone = root.clone();
         let resolved_opts =
-            PyBackendOptions::resolve(
-                options.as_ref(),
-            );
+            PyBackendOptions::resolve(options);
 
         // Extract session bytes from the Python object
         let session_bytes =
@@ -234,7 +228,7 @@ impl PyIcechunkBackend {
 
         future_into_py(py, async move {
             let backend =
-                IcechunkBackendAsync::from_session(inner_session, root_clone);
+                IcechunkBackendAsync::from_session(inner_session, root);
             let backend =
                 to_fully_cached_icechunk_async(
                     backend,

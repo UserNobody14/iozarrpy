@@ -46,7 +46,7 @@ pub(super) fn compile_value_range_to_plan(
         ctx.universe.dims.clone(),
         ctx.universe.shape.clone(),
         dim,
-        ranges,
+        &ranges,
     );
     Ok(ExprPlan::active(VarSet::All, rects))
 }
@@ -57,7 +57,7 @@ pub(super) fn compile_struct_field_cmp(
     field_path: &ZarrPath,
     op: Operator,
     lit: &LiteralValue,
-    ctx: &mut LazyCompileCtx<'_>,
+    ctx: &LazyCompileCtx<'_>,
 ) -> LazyResult {
     let full_path = ZarrPath::single(*struct_col);
     let array_zp = field_path
@@ -96,7 +96,7 @@ pub(super) fn compile_struct_field_cmp(
                     ctx.universe.dims.clone(),
                     ctx.universe.shape.clone(),
                     dim,
-                    ranges,
+                    &ranges,
                 );
             return Ok(ExprPlan::active(
                 VarSet::All,

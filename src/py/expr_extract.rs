@@ -50,7 +50,7 @@ pub(crate) fn extract_expr(
                 std::panic::AssertUnwindSafe(|| {
                     let pyexpr: PyExpr =
                         predicate.extract()?;
-                    Ok::<Expr, PyErr>(pyexpr.0.clone())
+                    Ok::<Expr, PyErr>(pyexpr.0)
                 }),
             )
             .map_err(|_| {

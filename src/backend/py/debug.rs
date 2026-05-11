@@ -202,11 +202,11 @@ pub(crate) fn extract_grids_sync<
     B: HasMetadataBackendSync<ZarrMeta>
         + ChunkedDataBackendSync,
 >(
-    backend: Arc<B>,
-    expr: polars::prelude::Expr,
+    backend: &Arc<B>,
+    expr: &polars::prelude::Expr,
 ) -> PyResult<(Vec<GridInfo>, u64)> {
-    let (tree, _stats) = Arc::clone(&backend)
-        .compile_expression_to_tree_sync(&expr)?;
+    let (tree, _stats) = Arc::clone(backend)
+        .compile_expression_to_tree_sync(expr)?;
     Ok((grids_from_tree(tree.as_ref()), 0))
 }
 

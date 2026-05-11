@@ -47,7 +47,7 @@ struct ProcessedArrayMetaJob {
 fn process_array_meta_job<
     TStorage: ?Sized + Send + Sync,
 >(
-    store: Arc<TStorage>,
+    store: &Arc<TStorage>,
     root_path_str: &str,
     job: &ArrayMetaLoadJob,
 ) -> Result<ProcessedArrayMetaJob, BackendError> {
@@ -71,7 +71,7 @@ fn process_array_meta_job<
     let parent_zp = rel_zp.parent();
 
     let array = Array::new_with_metadata(
-        Arc::clone(&store),
+        Arc::clone(store),
         path_str,
         job.array_md.clone(),
     )?;
@@ -257,14 +257,13 @@ pub(crate) fn load_zarr_meta_inner<
         )
         .collect();
 
-    let store_arc = Arc::clone(store);
     let mut processed: Vec<
         ProcessedArrayMetaJob,
     > = jobs
         .maybe_par_iter(PARALLEL_ZARR_META_ARRAYS)
         .map_collect(|job| {
             process_array_meta_job(
-                Arc::clone(&store_arc),
+                store,
                 root_path_str,
                 job,
             )

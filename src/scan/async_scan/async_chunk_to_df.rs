@@ -324,7 +324,7 @@ pub async fn chunk_to_df_from_grid_with_backend<
 
                 Ok(build_var_column(
                     &vs.name,
-                    data,
+                    &data,
                     &vs.var_dims,
                     &vs.var_chunk_shape,
                     &vs.offsets,

@@ -304,16 +304,16 @@ pub fn compute_in_bounds_mask(
             array_shape[d]
                 .saturating_sub(origin[d]),
         );
-        let (start, end) = if let Some(sub) =
-            chunk_subset
-        {
-            let s = sub.ranges[d].start;
-            let e =
-                sub.ranges[d].end.min(edge_end);
-            (s, e)
-        } else {
-            (0u64, edge_end)
-        };
+        let (start, end) = chunk_subset.map_or(
+            (0u64, edge_end),
+            |sub| {
+                let s = sub.ranges[d].start;
+                let e = sub.ranges[d]
+                    .end
+                    .min(edge_end);
+                (s, e)
+            },
+        );
         if start >= end {
             return KeepMask::Sparse(Vec::new());
         }
@@ -422,12 +422,12 @@ pub(crate) fn apply_encoding(
 
 /// Build a variable column for the DataFrame.
 ///
-/// Takes `data` by value so the common fast path
-/// (`KeepMask::All` + same shape) can hand the
-/// buffer directly to Polars with zero copying.
+/// Takes `data` by reference; the fast path borrows
+/// the buffer into a Series without copying, and the
+/// encoded path clones once via `data.as_ref().clone()`.
 pub fn build_var_column(
     name: &IStr,
-    data: Arc<ColumnData>,
+    data: &Arc<ColumnData>,
     var_dims: &[IStr],
     var_chunk_shape: &[u64],
     var_offsets: &[u64],
@@ -468,7 +468,7 @@ pub fn build_var_column(
             KeepMask::All(_) => {
                 // Cannot zero-copy when encoding
                 // needs to transform data.
-                (*data).clone()
+                data.as_ref().clone()
             }
             KeepMask::Sparse(idx) => {
                 data.take_indices(idx)

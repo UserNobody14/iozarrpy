@@ -139,11 +139,6 @@ impl DimensionAnalysis {
 }
 
 impl ZarrMeta {
-    /// True if there are any child groups
-    pub fn is_hierarchical(&self) -> bool {
-        !self.root.children.is_empty()
-    }
-
     pub fn array_by_path<T: IntoIStr>(
         &self,
         path: T,

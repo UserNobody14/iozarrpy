@@ -49,10 +49,11 @@ where
     )
     .await?;
 
-    let batches = match &tree {
-        Some(t) => build_batches(t, usize::MAX),
-        None => Vec::new(),
-    };
+    let batches = tree
+        .as_ref()
+        .map_or_else(Vec::new, |t| {
+            build_batches(t, usize::MAX)
+        });
 
     if let Some(max_chunks) = max_chunks_to_read {
         let total_chunks =

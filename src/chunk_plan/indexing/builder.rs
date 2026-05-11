@@ -203,10 +203,10 @@ impl<'a> GridJoinTreeBuilder<'a> {
             ExprPlan::Empty => {
                 self.set_empty();
             }
-            ExprPlan::Active { vars, rects } => {
-                apply_vars(self, vars);
-                if !rects.dims.is_empty() {
-                    self.intersect_rects(rects);
+            ExprPlan::Active(p) => {
+                apply_vars(self, &p.vars);
+                if !p.rects.dims.is_empty() {
+                    self.intersect_rects(&p.rects);
                 }
             }
         }

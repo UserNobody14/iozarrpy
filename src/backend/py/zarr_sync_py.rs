@@ -58,9 +58,7 @@ impl PyZarrBackendSync {
 
         let backend = to_fully_cached_sync(
             backend,
-            PyBackendOptions::resolve(
-                options.as_ref(),
-            ),
+            PyBackendOptions::resolve(options),
         )?;
         Ok(Self {
             inner: Arc::new(backend),
@@ -86,9 +84,7 @@ impl PyZarrBackendSync {
             ZarrBackendSync::new(store_input)?;
         let backend = to_fully_cached_sync(
             backend,
-            PyBackendOptions::resolve(
-                options.as_ref(),
-            ),
+            PyBackendOptions::resolve(options),
         )?;
         Ok(Self {
             inner: Arc::new(backend),
@@ -132,8 +128,8 @@ impl PyZarrBackendSync {
         });
         let df = scan_zarr_with_backend_sync(
             &self.inner,
-            prd.clone(),
-            with_cols_set,
+            &prd,
+            with_cols_set.as_ref(),
             max_chunks_to_read,
         )?;
 
@@ -243,7 +239,7 @@ impl PyZarrBackendSync {
         let expr = extract_expr(predicate)?;
 
         let (grids, coord_reads) =
-            extract_grids_sync(backend, expr)?;
+            extract_grids_sync(&backend, &expr)?;
 
         grids_to_python(py, grids, coord_reads)
     }

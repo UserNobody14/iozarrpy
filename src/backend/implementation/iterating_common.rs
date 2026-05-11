@@ -125,28 +125,15 @@ pub(crate) fn output_columns_for_streaming_batch(
             }
         };
 
-    match polars_requested {
-        None => {
-            let mut out =
-                meta.tidy_column_order(None);
-            let mut seen: BTreeSet<IStr> =
-                out.iter().copied().collect();
-            append_from_expanded(
-                &mut out, &mut seen,
-            );
-            Some(out)
-        }
-        Some(req) => {
-            let mut out: Vec<IStr> =
-                req.iter().copied().collect();
-            let mut seen: BTreeSet<IStr> =
-                out.iter().copied().collect();
-            append_from_expanded(
-                &mut out, &mut seen,
-            );
-            Some(out)
-        }
-    }
+    let mut out: Vec<IStr> = polars_requested
+        .map_or_else(
+            || meta.tidy_column_order(None),
+            |req| req.iter().copied().collect(),
+        );
+    let mut seen: BTreeSet<IStr> =
+        out.iter().copied().collect();
+    append_from_expanded(&mut out, &mut seen);
+    Some(out)
 }
 
 /// Keep only columns Polars asked for; order matches `output_columns`.

@@ -121,6 +121,15 @@ impl VarSet {
     }
 }
 
+/// Variables + rectangles carried by an `ExprPlan::Active`. Boxed inside the
+/// enum so the discriminator stays small and `NoConstraint`/`Empty` don't
+/// pay the full payload's stack footprint on every value.
+#[derive(Debug, Clone)]
+pub struct ActivePlan {
+    pub(crate) vars: VarSet,
+    pub(crate) rects: RectangleSet,
+}
+
 /// Result of compiling a Polars expression for chunk planning.
 #[derive(Debug, Clone)]
 pub enum ExprPlan {
@@ -129,13 +138,20 @@ pub enum ExprPlan {
     /// Everything excluded.
     Empty,
     /// Active constraints on dimensions + which variables are needed.
-    Active {
-        vars: VarSet,
-        rects: RectangleSet,
-    },
+    Active(Box<ActivePlan>),
 }
 
 impl ExprPlan {
+    fn boxed_active(
+        vars: VarSet,
+        rects: RectangleSet,
+    ) -> Self {
+        Self::Active(Box::new(ActivePlan {
+            vars,
+            rects,
+        }))
+    }
+
     /// Active plan that carries variables but no rect constraint. The
     /// `RectangleSet` is the empty-dims sentinel; combine helpers treat it
     /// as identity so var-only plans don't filter the index cube.
@@ -145,13 +161,13 @@ impl ExprPlan {
         if vars.is_empty() {
             Self::NoConstraint
         } else {
-            Self::Active {
+            Self::boxed_active(
                 vars,
-                rects: RectangleSet::empty(
+                RectangleSet::empty(
                     SmallVec::new(),
                     SmallVec::new(),
                 ),
-            }
+            )
         }
     }
 
@@ -164,7 +180,7 @@ impl ExprPlan {
         if rects.is_empty() && !rects.dims.is_empty() {
             Self::Empty
         } else {
-            Self::Active { vars, rects }
+            Self::boxed_active(vars, rects)
         }
     }
 
@@ -182,11 +198,12 @@ impl ExprPlan {
                 Self::unconstrained_vars(vars)
             }
             Self::Empty => Self::Empty,
-            Self::Active { rects, .. } => {
+            Self::Active(mut p) => {
                 if vars.is_empty() {
                     Self::NoConstraint
                 } else {
-                    Self::Active { vars, rects }
+                    p.vars = vars;
+                    Self::Active(p)
                 }
             }
         }
@@ -195,19 +212,17 @@ impl ExprPlan {
     /// Add variables without changing rectangles.
     pub(crate) fn add_vars(
         &self,
-        extra: VarSet,
+        extra: &VarSet,
     ) -> Self {
         match self {
             Self::NoConstraint => {
                 Self::NoConstraint
             }
             Self::Empty => Self::Empty,
-            Self::Active { vars, rects } => {
-                Self::Active {
-                    vars: vars.union(&extra),
-                    rects: rects.clone(),
-                }
-            }
+            Self::Active(p) => Self::boxed_active(
+                p.vars.union(extra),
+                p.rects.clone(),
+            ),
         }
     }
 
@@ -222,21 +237,16 @@ impl ExprPlan {
             }
             (Self::Empty, _)
             | (_, Self::Empty) => Self::Empty,
-            (
-                Self::Active {
-                    vars: va,
-                    rects: ra,
-                },
-                Self::Active {
-                    vars: vb,
-                    rects: rb,
-                },
-            ) => Self::active(
-                va.intersect(vb),
-                combine_rects(ra, rb, |a, b| {
-                    a.intersect(b)
-                }),
-            ),
+            (Self::Active(a), Self::Active(b)) => {
+                Self::active(
+                    a.vars.intersect(&b.vars),
+                    combine_rects(
+                        &a.rects,
+                        &b.rects,
+                        |a, b| a.intersect(b),
+                    ),
+                )
+            }
         }
     }
 
@@ -251,23 +261,16 @@ impl ExprPlan {
             }
             (Self::Empty, x)
             | (x, Self::Empty) => x.clone(),
-            (
-                Self::Active {
-                    vars: va,
-                    rects: ra,
-                },
-                Self::Active {
-                    vars: vb,
-                    rects: rb,
-                },
-            ) => Self::Active {
-                vars: va.union(vb),
-                rects: combine_rects(
-                    ra,
-                    rb,
-                    |a, b| a.union(b),
-                ),
-            },
+            (Self::Active(a), Self::Active(b)) => {
+                Self::boxed_active(
+                    a.vars.union(&b.vars),
+                    combine_rects(
+                        &a.rects,
+                        &b.rects,
+                        |a, b| a.union(b),
+                    ),
+                )
+            }
         }
     }
 
@@ -282,36 +285,28 @@ impl ExprPlan {
             (Self::NoConstraint, _) => {
                 Self::NoConstraint
             }
-            (
-                Self::Active {
-                    vars: va,
-                    rects: ra,
-                },
-                Self::Active {
-                    vars: vb,
-                    rects: rb,
-                },
-            ) => {
+            (Self::Active(a), Self::Active(b)) => {
                 // Both vars-only: the difference is purely about variables.
-                if ra.dims.is_empty()
-                    && rb.dims.is_empty()
+                if a.rects.dims.is_empty()
+                    && b.rects.dims.is_empty()
                 {
-                    let v_diff =
-                        va.difference(vb);
+                    let v_diff = a
+                        .vars
+                        .difference(&b.vars);
                     if v_diff.is_empty() {
                         return Self::Empty;
                     }
-                    return Self::Active {
-                        vars: v_diff,
-                        rects: ra.clone(),
-                    };
+                    return Self::boxed_active(
+                        v_diff,
+                        a.rects.clone(),
+                    );
                 }
                 // Filter A by NOT B: keep A's vars.
                 Self::active(
-                    va.clone(),
+                    a.vars.clone(),
                     combine_rects(
-                        ra,
-                        rb,
+                        &a.rects,
+                        &b.rects,
                         |a, b| a.difference(b),
                     ),
                 )
@@ -331,20 +326,20 @@ impl ExprPlan {
         match self {
             Self::NoConstraint => Self::Empty,
             Self::Empty => Self::NoConstraint,
-            Self::Active { vars, rects } => {
-                if rects.dims.is_empty() {
+            Self::Active(p) => {
+                if p.rects.dims.is_empty() {
                     // vars-only: complement in
                     // var-space is conservative.
                     return Self::NoConstraint;
                 }
-                let negated = rects.negate();
+                let negated = p.rects.negate();
                 if negated.is_empty() {
                     Self::Empty
                 } else {
-                    Self::Active {
-                        vars: vars.clone(),
-                        rects: negated,
-                    }
+                    Self::boxed_active(
+                        p.vars.clone(),
+                        negated,
+                    )
                 }
             }
         }

@@ -23,7 +23,6 @@ pub use crate::shared::{
     ChunkedDataBackendSync,
 };
 
-pub use crate::chunk_plan::exprs::expr_plan::ExprPlan;
 pub use crate::chunk_plan::{
     ChunkGridSignature, ChunkSubset, compile_expr,
     compute_dims_and_lengths_unified,

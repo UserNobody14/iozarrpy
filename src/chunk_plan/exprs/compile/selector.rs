@@ -101,17 +101,14 @@ pub(super) fn compile_selector_lazy(
                 .all_array_paths()
                 .iter()
                 .filter(|v| {
-                    if let Some(array_meta) = ctx
-                        .meta
+                    ctx.meta
                         .array_by_path(v.istr())
-                    {
-                        dtype_selector.matches(
-                            &array_meta
-                                .polars_dtype,
-                        )
-                    } else {
-                        true
-                    }
+                        .is_none_or(|array_meta| {
+                            dtype_selector.matches(
+                                &array_meta
+                                    .polars_dtype,
+                            )
+                        })
                 })
                 .cloned()
                 .collect();

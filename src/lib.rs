@@ -10,6 +10,13 @@
 #![warn(clippy::needless_range_loop)]
 #![warn(clippy::manual_ok_or)]
 #![warn(clippy::option_if_let_else)]
+// Additional perf lints (pedantic / nursery groups, opted-in)
+#![warn(clippy::large_types_passed_by_value)]
+#![warn(clippy::iter_with_drain)]
+#![warn(clippy::redundant_clone)]
+#![warn(clippy::needless_pass_by_ref_mut)]
+#![warn(clippy::manual_let_else)]
+#![warn(clippy::trivial_regex)]
 
 use pyo3::prelude::*;
 
