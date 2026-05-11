@@ -191,3 +191,8 @@ zarrs_chunk_grid = { git = "https://github.com/UserNobody14/zarrs.git", branch =
 zarrs_chunk_key_encoding = { git = "https://github.com/UserNobody14/zarrs.git", branch = "main" }
 zarrs_codec = { git = "https://github.com/UserNobody14/zarrs.git", branch = "main" }
 zarrs_plugin = { git = "https://github.com/UserNobody14/zarrs.git", branch = "main" }
+
+# Temporary profile for profiling: full debug symbols, no opt cost beyond dev.
+[profile.profile]
+inherits = "maturin-dev"
+debug = 2
