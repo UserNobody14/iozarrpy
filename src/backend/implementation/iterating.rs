@@ -14,11 +14,12 @@ use pyo3::prelude::*;
 use snafu::ensure;
 
 use crate::chunk_plan::GridJoinTree;
-use crate::chunk_plan::indexing::grid_join_reader::{
-    assemble_batch_dataframe, flatten_reads,
+use crate::chunk_plan::indexing::grid_join_reader::flatten_reads;
+use crate::chunk_plan::indexing::joined_assembly::{
+    BatchChunkRead, assemble_joined_batch,
 };
 use crate::errors::MaxChunksToReadExceededSnafu;
-use crate::scan::chunk_to_df_from_grid_with_backend_sync;
+use crate::scan::read_chunk_raw_from_grid_with_backend_sync;
 use crate::shared::HasMetadataBackendSync;
 use crate::shared::IStr;
 use crate::shared::MaybeParIter;
@@ -256,26 +257,35 @@ impl ZarrIteratorInner {
                 .clone();
             let meta = Arc::clone(&state.meta);
 
-            let chunk_dfs: Vec<(usize, DataFrame)> = reads
+            let chunk_reads: Vec<BatchChunkRead> = reads
                 .maybe_par_iter(PARALLEL_CHUNK_READS)
                 .map_collect(|r| {
-                    let df = chunk_to_df_from_grid_with_backend_sync(
+                    let raw = read_chunk_raw_from_grid_with_backend_sync(
                         backend.as_ref(),
                         r.idx.as_slice(),
                         r.sig.as_ref(),
-                        &r.array_shape,
                         &r.vars,
                         expanded_with_columns.as_ref(),
-                        r.subset.as_ref(),
                         &meta,
                     )?;
-                    Ok::<_, crate::errors::BackendError>((r.leaf_idx, df))
+                    Ok::<_, crate::errors::BackendError>(BatchChunkRead {
+                        leaf_idx: r.leaf_idx,
+                        slot: r.slot,
+                        raw,
+                    })
                 })?;
 
-            let combined =
-                assemble_batch_dataframe(
-                    &plan, chunk_dfs,
-                )?;
+            let leaves = state
+                .tree
+                .as_ref()
+                .expect("tree present when batches non-empty")
+                .leaves();
+            let combined = assemble_joined_batch(
+                &plan,
+                &leaves,
+                chunk_reads,
+                &state.meta,
+            )?;
             let Some(combined) = combined else {
                 continue;
             };

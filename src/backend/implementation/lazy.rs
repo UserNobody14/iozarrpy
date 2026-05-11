@@ -10,12 +10,13 @@ use crate::backend::implementation::iterating_common::{
     build_batches, distinct_chunks_in_batches, expr_top_literal_bool,
 };
 use crate::chunk_plan::GridJoinTree;
-use crate::chunk_plan::indexing::grid_join_reader::{
-    assemble_batch_dataframe, flatten_reads,
+use crate::chunk_plan::indexing::grid_join_reader::flatten_reads;
+use crate::chunk_plan::indexing::joined_assembly::{
+    BatchChunkRead, assemble_joined_batch,
 };
 use crate::errors::BackendError;
 use crate::errors::MaxChunksToReadExceededSnafu;
-use crate::scan::sync_scan::chunk_to_df_from_grid_with_backend;
+use crate::scan::sync_scan::read_chunk_raw_from_grid_with_backend;
 use crate::shared::ChunkedExpressionCompilerSync;
 use crate::shared::FullyCachedZarrBackendSync;
 use crate::shared::IStr;
@@ -99,27 +100,30 @@ pub fn scan_zarr_with_backend_sync(
             if reads.is_empty() {
                 continue;
             }
-            let chunk_dfs: Vec<(usize, DataFrame)> = reads
+            let chunk_reads: Vec<BatchChunkRead> = reads
                 .maybe_par_iter(PARALLEL_CHUNK_READS)
                 .map_collect(|r| {
-                    let df = chunk_to_df_from_grid_with_backend(
+                    let raw = read_chunk_raw_from_grid_with_backend(
                         backend,
                         r.idx.as_slice(),
                         r.sig.as_ref(),
-                        &r.array_shape,
                         &r.vars,
                         chunk_expanded.as_ref(),
-                        r.subset.as_ref(),
                         &meta,
                     )?;
-                    Ok::<_, BackendError>((r.leaf_idx, df))
+                    Ok::<_, BackendError>(BatchChunkRead {
+                        leaf_idx: r.leaf_idx,
+                        slot: r.slot,
+                        raw,
+                    })
                 })?;
 
-            if let Some(df) =
-                assemble_batch_dataframe(
-                    plan, chunk_dfs,
-                )?
-            {
+            if let Some(df) = assemble_joined_batch(
+                plan,
+                &leaves,
+                chunk_reads,
+                &meta,
+            )? {
                 batch_dfs.push(df);
             }
         }

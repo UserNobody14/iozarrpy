@@ -8,6 +8,7 @@
 
 pub mod grid_join_reader;
 pub mod grid_join_tree;
+pub mod joined_assembly;
 pub mod plan;
 pub mod selection;
 pub mod selection_base;

@@ -18,13 +18,14 @@ use snafu::ensure;
 use tokio::sync::Semaphore;
 
 use crate::chunk_plan::GridJoinTree;
-use crate::chunk_plan::indexing::grid_join_reader::{
-    assemble_batch_dataframe, flatten_reads,
+use crate::chunk_plan::indexing::grid_join_reader::flatten_reads;
+use crate::chunk_plan::indexing::joined_assembly::{
+    BatchChunkRead, assemble_joined_batch,
 };
 use crate::errors::BackendError;
 use crate::errors::CreateTokioRuntimeForSyncStoreSnafu;
 use crate::errors::MaxChunksToReadExceededSnafu;
-use crate::scan::async_scan::chunk_to_df_from_grid_with_backend;
+use crate::scan::async_scan::read_chunk_raw_from_grid_with_backend;
 use crate::shared::ChunkedExpressionCompilerAsync;
 use crate::shared::HasMetadataBackendAsync;
 use crate::shared::IStr;
@@ -240,7 +241,7 @@ impl IcechunkIterator {
                 self.max_concurrency;
             let meta = Arc::clone(&state.meta);
 
-            let chunk_dfs: Result<Vec<(usize, DataFrame)>, PyErr> =
+            let chunk_reads_res: Result<Vec<BatchChunkRead>, PyErr> =
                 self.runtime.block_on(async {
                     let semaphore = Arc::new(Semaphore::new(max_concurrency));
                     let mut futs = FuturesUnordered::new();
@@ -251,41 +252,49 @@ impl IcechunkIterator {
                         let expanded = expanded_with_columns.clone();
                         let meta = Arc::clone(&meta);
                         let leaf_idx = r.leaf_idx;
+                        let slot = r.slot;
                         let sig = Arc::clone(&r.sig);
-                        let array_shape = r.array_shape.clone();
                         let vars = r.vars.clone();
                         let idx = r.idx.clone();
-                        let subset = r.subset.clone();
 
                         futs.push(async move {
                             let _permit =
                                 sem.acquire().await.expect("semaphore closed");
-                            let df = chunk_to_df_from_grid_with_backend(
+                            let raw = read_chunk_raw_from_grid_with_backend(
                                 backend.as_ref(),
                                 idx.as_slice(),
                                 sig.as_ref(),
-                                &array_shape,
                                 &vars,
                                 expanded.as_ref(),
-                                subset.as_ref(),
                                 &meta,
                             )
                             .await?;
-                            Ok::<_, BackendError>((leaf_idx, df))
+                            Ok::<_, BackendError>(BatchChunkRead {
+                                leaf_idx,
+                                slot,
+                                raw,
+                            })
                         });
                     }
 
-                    let mut dfs = Vec::new();
+                    let mut out = Vec::new();
                     while let Some(r) = futs.next().await {
-                        dfs.push(r?);
+                        out.push(r?);
                     }
-                    Ok(dfs)
+                    Ok(out)
                 });
 
-            let combined =
-                assemble_batch_dataframe(
-                    &plan, chunk_dfs?,
-                )?;
+            let leaves = state
+                .tree
+                .as_ref()
+                .expect("tree present when batches non-empty")
+                .leaves();
+            let combined = assemble_joined_batch(
+                &plan,
+                &leaves,
+                chunk_reads_res?,
+                &state.meta,
+            )?;
             let Some(combined) = combined else {
                 continue;
             };

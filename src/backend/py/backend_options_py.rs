@@ -9,7 +9,7 @@ use crate::shared::BackendOptions;
 /// All knobs are keyword-only and have sensible defaults; pass an
 /// instance as `options=` to any backend constructor (`from_url`,
 /// `from_store`, `from_filesystem`, `from_session`).
-#[pyclass(name = "BackendOptions", frozen)]
+#[pyclass(name = "BackendOptions", frozen, from_py_object)]
 #[derive(Clone, Copy)]
 pub struct PyBackendOptions {
     pub inner: BackendOptions,

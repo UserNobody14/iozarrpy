@@ -8,13 +8,14 @@ use crate::backend::implementation::iterating_common::{
     build_batches, distinct_chunks_in_batches, expr_top_literal_bool,
 };
 use crate::chunk_plan::GridJoinTree;
-use crate::chunk_plan::indexing::grid_join_reader::{
-    assemble_batch_dataframe, flatten_reads,
+use crate::chunk_plan::indexing::grid_join_reader::flatten_reads;
+use crate::chunk_plan::indexing::joined_assembly::{
+    BatchChunkRead, assemble_joined_batch,
 };
 use crate::errors::BackendError;
 use crate::errors::MaxChunksToReadExceededSnafu;
 use crate::meta::ZarrMeta;
-use crate::scan::async_scan::chunk_to_df_from_grid_with_backend;
+use crate::scan::async_scan::read_chunk_raw_from_grid_with_backend;
 use crate::shared::ChunkedDataBackendAsync;
 use crate::shared::ChunkedExpressionCompilerAsync;
 use crate::shared::HasMetadataBackendAsync;
@@ -110,45 +111,44 @@ where
                 let backend = Arc::clone(&backend);
                 let meta = Arc::clone(&meta);
                 let leaf_idx = r.leaf_idx;
+                let slot = r.slot;
                 let sig = Arc::clone(&r.sig);
-                let array_shape =
-                    r.array_shape.clone();
                 let vars = r.vars.clone();
                 let idx = r.idx.clone();
-                let subset = r.subset.clone();
 
                 futs.push(async move {
                     let _permit =
                         sem.acquire_owned().await.expect("semaphore closed");
-                    let df = chunk_to_df_from_grid_with_backend(
+                    let raw = read_chunk_raw_from_grid_with_backend(
                         backend.as_ref(),
                         idx.as_slice(),
                         sig.as_ref(),
-                        &array_shape,
                         &vars,
                         None,
-                        subset.as_ref(),
                         &meta,
                     )
                     .await?;
-                    Ok::<_, BackendError>((leaf_idx, df))
+                    Ok::<_, BackendError>(BatchChunkRead {
+                        leaf_idx,
+                        slot,
+                        raw,
+                    })
                 });
             }
 
-            let mut chunk_dfs: Vec<(
-                usize,
-                polars::prelude::DataFrame,
-            )> = Vec::new();
+            let mut chunk_reads: Vec<BatchChunkRead> =
+                Vec::new();
             while let Some(r) = futs.next().await
             {
-                chunk_dfs.push(r?);
+                chunk_reads.push(r?);
             }
 
-            if let Some(df) =
-                assemble_batch_dataframe(
-                    plan, chunk_dfs,
-                )?
-            {
+            if let Some(df) = assemble_joined_batch(
+                plan,
+                &leaves,
+                chunk_reads,
+                &meta,
+            )? {
                 batch_dfs.push(df);
             }
         }

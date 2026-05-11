@@ -16,7 +16,7 @@ pub use crate::scan::shared::{
     should_include_column,
 };
 
-pub use crate::scan::sync_scan::chunk_to_df_from_grid_with_backend;
+pub use crate::scan::sync_scan::read_chunk_raw_from_grid_with_backend;
 
 pub use crate::shared::{
     ChunkedDataBackendAsync,
