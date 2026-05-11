@@ -68,13 +68,6 @@ impl CoordBuffer {
             CoordBuffer::I64(v) => v.len(),
         }
     }
-
-    fn truncate(&mut self, n: usize) {
-        match self {
-            CoordBuffer::F64(v) => v.truncate(n),
-            CoordBuffer::I64(v) => v.truncate(n),
-        }
-    }
 }
 
 #[derive(Debug)]
@@ -251,10 +244,8 @@ fn decode_chunk_to_i64(
             for i in 0..chunk.len() {
                 let raw =
                     chunk.get_i64(i).unwrap_or(0);
-                let val = match te {
-                    Some(enc) => enc.decode(raw),
-                    None => raw,
-                };
+                let val = te
+                    .map_or(raw, |enc| enc.decode(raw));
                 out.push(val);
             }
         }

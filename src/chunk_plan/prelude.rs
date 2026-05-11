@@ -3,5 +3,3 @@ pub(super) use polars::prelude::{
     FunctionExpr, LiteralValue, Operator,
     Selector,
 };
-
-pub(super) use crate::meta::TimeEncoding;

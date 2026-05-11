@@ -35,7 +35,7 @@ fn resolve_row_constraints(
             ctx.universe.dims.clone(),
             ctx.universe.shape.clone(),
             *dim,
-            ranges,
+            &ranges,
         );
         acc = Some(match acc {
             Some(prev) => prev.intersect(&one),

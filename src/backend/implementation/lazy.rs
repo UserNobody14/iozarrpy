@@ -33,8 +33,8 @@ const PARALLEL_CHUNK_READS: usize = 2;
 /// diagonal-concats the per-batch DataFrames.
 pub fn scan_zarr_with_backend_sync(
     backend: &Arc<FullyCachedZarrBackendSync>,
-    expr: polars::prelude::Expr,
-    with_columns: Option<BTreeSet<IStr>>,
+    expr: &polars::prelude::Expr,
+    with_columns: Option<&BTreeSet<IStr>>,
     max_chunks_to_read: Option<usize>,
 ) -> Result<
     polars::prelude::DataFrame,
@@ -42,15 +42,12 @@ pub fn scan_zarr_with_backend_sync(
 > {
     let meta = backend.metadata()?;
 
-    let chunk_expanded =
-        with_columns.as_ref().map(|cols| {
-            expand_projection_to_flat_paths(
-                cols, &meta,
-            )
-        });
+    let chunk_expanded = with_columns.map(|cols| {
+        expand_projection_to_flat_paths(cols, &meta)
+    });
 
     let (tree, _stats) = compile_to_tree_sync(
-        &expr, &meta, backend,
+        expr, &meta, backend,
     )?;
 
     // For eager scans we materialize the entire dataset at once, so let each
@@ -110,7 +107,6 @@ pub fn scan_zarr_with_backend_sync(
 
     let result = if batch_dfs.is_empty() {
         let keys: Option<Vec<IStr>> = with_columns
-            .as_ref()
             .map(|cols| cols.iter().copied().collect());
         let schema = meta.tidy_schema(keys.as_deref());
         DataFrame::empty_with_schema(&schema)

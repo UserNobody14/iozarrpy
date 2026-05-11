@@ -52,9 +52,7 @@ impl PyZarrBackend {
 
         let backend = to_fully_cached_async(
             backend,
-            PyBackendOptions::resolve(
-                options.as_ref(),
-            ),
+            PyBackendOptions::resolve(options),
         )?;
         Ok(Self {
             inner: Arc::new(backend),
@@ -80,9 +78,7 @@ impl PyZarrBackend {
             ZarrBackendAsync::new(store_input)?;
         let backend = to_fully_cached_async(
             backend,
-            PyBackendOptions::resolve(
-                options.as_ref(),
-            ),
+            PyBackendOptions::resolve(options),
         )?;
         Ok(Self {
             inner: Arc::new(backend),
