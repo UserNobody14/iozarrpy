@@ -618,6 +618,16 @@ fn build_dim_column_from_coord(
         .get(&coord_leaf_idx)
         .map(Vec::as_slice)
         .unwrap_or(&[]);
+    // No coord chunks reached this batch (e.g. overlapping_chunks pruned them
+    // away). Fall back to the integer-position column so we still emit a
+    // shaped `<dim>` column rather than panicking on an empty gather.
+    if chunks.is_empty() {
+        return build_dim_column_from_positions(
+            dim_name.as_ref(),
+            geometry,
+            d_out,
+        );
+    }
     let cs = coord_leaf.sig.retrieval_shape();
     let chunk_size_d = cs[0];
     let positions = &geometry.positions[d_out];
