@@ -150,7 +150,7 @@ impl PyBackendOptions {
                     .iter()
                     .map(|s| s.as_ref())
                     .collect();
-                names.sort();
+                names.sort_unstable();
                 format!("{names:?}")
             }
         };
