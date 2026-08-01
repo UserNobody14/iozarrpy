@@ -21,7 +21,7 @@ pub use crate::scan::sync_scan::chunk_to_df_from_grid_with_backend;
 pub use crate::shared::{
     ChunkedDataBackendAsync,
     ChunkedDataBackendSync, IStr, IntoIStr,
-    IntoManyIstrs,
+    IntoManyIstrs, FromManyIstrs,
 };
 
 pub use crate::chunk_plan::{
@@ -31,10 +31,6 @@ pub use crate::chunk_plan::{
 };
 
 pub use crate::errors::BackendError;
-
-pub use crate::shared::{
-    FromManyIstrs, IStr, IntoIStr, IntoManyIstrs,
-};
 
 pub use crate::meta::{
     DimensionAnalysis, VarEncoding,
