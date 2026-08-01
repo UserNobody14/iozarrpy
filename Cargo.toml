@@ -109,7 +109,7 @@ pyo3-polars = { git = "https://github.com/pola-rs/polars.git", tag = "py-1.43.2"
 ] }
 tokio = { version = "1.45.1", features = ["rt-multi-thread", "macros", "sync", "parking_lot"] }
 url = "2.5.4"
-zarrs = { version = "0.23.10", features = [
+zarrs = { version = "0.23.13", features = [
     "async",
     "sharding",
     "zlib",
@@ -187,18 +187,8 @@ inherits = "dev"
 debug = "line-tables-only"
 codegen-units = 256
 
-# Patch zarrs to use the fork with consolidated metadata support
 [patch.crates-io]
 # Polars patches object_store to this fork (custom DNS resolver, arrow-rs-object-store#728).
 # A git dependency's own [patch.crates-io] is ignored, so polars-io fails to build against
 # stock object_store unless we mirror the patch here. Keep the rev in sync with the polars tag.
 object_store = { git = "https://github.com/kdn36/arrow-rs-object-store", rev = "f50a6e5c564b2b5933eca15cd20ff9b5614374a1" }
-zarrs = { git = "https://github.com/UserNobody14/zarrs.git", branch = "main" }
-zarrs_storage = { git = "https://github.com/UserNobody14/zarrs.git", branch = "main" }
-zarrs_metadata = { git = "https://github.com/UserNobody14/zarrs.git", branch = "main" }
-zarrs_metadata_ext = { git = "https://github.com/UserNobody14/zarrs.git", branch = "main" }
-zarrs_data_type = { git = "https://github.com/UserNobody14/zarrs.git", branch = "main" }
-zarrs_chunk_grid = { git = "https://github.com/UserNobody14/zarrs.git", branch = "main" }
-zarrs_chunk_key_encoding = { git = "https://github.com/UserNobody14/zarrs.git", branch = "main" }
-zarrs_codec = { git = "https://github.com/UserNobody14/zarrs.git", branch = "main" }
-zarrs_plugin = { git = "https://github.com/UserNobody14/zarrs.git", branch = "main" }
