@@ -22,7 +22,7 @@ crate-type = ["cdylib", "rlib"]
 # matching `requires-python` in pyproject.toml. Without it, maturin cannot cross-compile wheels
 # (aarch64/i686) without being told a concrete interpreter via `-i`.
 # "extension-module" is enabled via feature flag (only for cdylib builds, not tests)
-pyo3 = { version = "0.28", features = ["abi3-py312"] }
+pyo3 = { version = "0.29", features = ["abi3-py312"] }
 
 # Get polars from git.
 #
@@ -30,7 +30,7 @@ pyo3 = { version = "0.28", features = ["abi3-py312"] }
 # deserialization can decode to the wrong FunctionExpr variants (feature-gated enum variant index drift).
 #
 # This list is mirrored from Polars' `polars-python` crate for the `py-1.37.1` tag.
-polars = { git = "https://github.com/pola-rs/polars.git", tag = "py-1.40.1", features = [
+polars = { git = "https://github.com/pola-rs/polars.git", tag = "py-1.43.2", features = [
     "abs",
     "approx_unique",
     "arg_where",
@@ -99,8 +99,8 @@ polars = { git = "https://github.com/pola-rs/polars.git", tag = "py-1.40.1", fea
 # `FfiPlugin` lives behind `polars-lazy/ffi_plugin` (which enables the correct downstream
 # `polars-expr`/`polars-plan` feature chain). Add it directly so the Expr pickle/bincode
 # layout matches Python Polars when FFI plugins are present.
-polars-lazy = { git = "https://github.com/pola-rs/polars.git", tag = "py-1.40.1", features = ["ffi_plugin"] }
-pyo3-polars = { git = "https://github.com/pola-rs/polars.git", tag = "py-1.40.1", features = [
+polars-lazy = { git = "https://github.com/pola-rs/polars.git", tag = "py-1.43.2", features = ["ffi_plugin"] }
+pyo3-polars = { git = "https://github.com/pola-rs/polars.git", tag = "py-1.43.2", features = [
     "object",
     "dtype-extension",
     "derive",
@@ -131,14 +131,14 @@ icechunk = "0.3.22"
 serde_json = "1.0.145"
 chrono = { version = "0.4.42", features = ["clock", "std", "serde"] }
 futures = "0.3.31"
-pyo3-async-runtimes = { version = "0.28.0", features = ["tokio-runtime"] }
+pyo3-async-runtimes = { version = "0.29.0", features = ["tokio-runtime"] }
 regex = "1.9"
 regex-syntax = "0.8.5"
 smallvec = "1.13"
 async-trait = "0.1"
 internment = { version = "0.8", features = ["arc"] }
 # 0.10.x pins object_store 0.12; zarrs_object_store needs 0.13 — stay on 0.9 until pyo3-object_store aligns.
-pyo3-object_store = "0.9.0"
+pyo3-object_store = "0.12.0"
 ambassador = "0.5.0"
 parking_lot = "0.12.5"
 moka = { version = "0.12.13", features = ["future", "sync"] }
