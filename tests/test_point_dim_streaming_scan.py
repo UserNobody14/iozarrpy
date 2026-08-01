@@ -232,19 +232,9 @@ def test_alt_realistic_chunks_debug(nz_style_point_zarr: str) -> None:
     )
     assert scdb["grids"] == [
         {
-            "dims": ["lead_time"],
-            "variables": ["lead_time"],
-            "chunks": [{"indices": [0], "origin": [0], "shape": [3], "shards": []}],
-        },
-        {
             "dims": ["point"],
             "variables": ["latitude", "longitude", "station_id"],
             "chunks": [{"indices": [0], "origin": [0], "shape": [4], "shards": []}],
-        },
-        {
-            "dims": ["time"],
-            "variables": ["time"],
-            "chunks": [{"indices": [0], "origin": [0], "shape": [2], "shards": []}],
         },
         {
             "dims": ["time", "lead_time", "point"],

@@ -28,7 +28,7 @@ use crate::meta::ZarrNode;
 
 /// Build this many array nodes on the Rayon pool; below that, stay sequential to
 /// avoid thread-pool overhead on tiny hierarchies.
-const PARALLEL_ZARR_META_ARRAYS: usize = 8;
+const PARALLEL_ZARR_META_ARRAYS: usize = 2;
 
 struct ArrayMetaLoadJob {
     traverse_idx: usize,
@@ -71,7 +71,7 @@ fn process_array_meta_job<
     let parent_zp = rel_zp.parent();
 
     let array = Array::new_with_metadata(
-        store.clone(),
+        Arc::clone(&store),
         path_str,
         job.array_md.clone(),
     )?;
@@ -97,7 +97,9 @@ fn process_array_meta_job<
             .ok()
             .flatten()
             .map(|cs| cs.into())
-            .unwrap_or_else(|| shape.clone());
+            .unwrap_or_else(|| {
+                Arc::clone(&shape)
+            });
 
     let mut aux_coord_names = Vec::new();
     if let Some(attrs) =
@@ -171,7 +173,7 @@ pub(crate) fn build_node_tree(
 
         for (leaf, arr) in arrays {
             node.arrays
-                .insert(*leaf, arr.clone());
+                .insert(*leaf, Arc::clone(arr));
 
             for dim in &arr.dims {
                 dims_set.insert(*dim);
@@ -258,14 +260,14 @@ pub(crate) fn load_zarr_meta_inner<
         )
         .collect();
 
-    let store_arc = store.clone();
+    let store_arc = Arc::clone(store);
     let mut processed: Vec<
         ProcessedArrayMetaJob,
     > = jobs
         .maybe_par_iter(PARALLEL_ZARR_META_ARRAYS)
         .map_collect(|job| {
             process_array_meta_job(
-                store_arc.clone(),
+                Arc::clone(&store_arc),
                 root_path_str,
                 job,
             )

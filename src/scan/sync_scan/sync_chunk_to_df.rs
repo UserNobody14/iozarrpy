@@ -24,6 +24,7 @@ use crate::scan::shared::{
 };
 use crate::shared::ChunkedDataBackendSync;
 use crate::shared::IStr;
+use crate::shared::MaybeParIter;
 use polars::prelude::*;
 use snafu::ResultExt;
 
@@ -148,7 +149,7 @@ pub fn chunk_to_df_from_grid_with_backend<
     B: ChunkedDataBackendSync,
 >(
     backend: &B,
-    idx: Vec<u64>,
+    idx: &[u64],
     sig: &ChunkGridSignature,
     array_shape: &[u64],
     vars: &[IStr],
@@ -162,7 +163,8 @@ pub fn chunk_to_df_from_grid_with_backend<
     // Compute origin from chunk indices
     let origin: Vec<u64> = idx
         .iter()
-        .zip(chunk_shape.iter())
+        .copied()
+        .zip(chunk_shape.iter().copied())
         .map(|(i, s)| i * s)
         .collect();
 
@@ -182,7 +184,7 @@ pub fn chunk_to_df_from_grid_with_backend<
     let plan = build_chunk_physical_plan(
         meta,
         dims,
-        &idx,
+        idx,
         chunk_shape,
         &origin,
         vars,
@@ -200,89 +202,107 @@ pub fn chunk_to_df_from_grid_with_backend<
         loaded.insert(*path, data);
     }
 
-    // Build DataFrame columns
-    let mut cols: Vec<Column> = Vec::new();
+    // Build DataFrame columns concurrently
     let height = keep.len();
 
-    for dim_step in &plan.dims {
-        let coord_data: Option<&ColumnData> =
-            match &dim_step.mat {
-                DimMaterialization::Synthetic => None,
-                DimMaterialization::FromArray {
-                    path,
-                } => {
-                    let col = loaded
-                        .get(path)
-                        .ok_or_else(|| {
-                            BackendError::Other {
-                                msg: format!(
-                                    "internal: missing read for coord path {}",
-                                    path
-                                ),
-                            }
-                        })?
-                        .as_ref();
-                    let expected_len =
-                        chunk_shape[dim_step.dim_idx]
-                            as usize;
-                    if col.len() != expected_len {
-                        return Err(
-                            BackendError::CoordLengthMismatch {
-                                name: dim_step.dim_name,
-                                expected_len: chunk_shape
-                                    [dim_step.dim_idx],
-                                coord_len: col.len()
-                                    as u64,
-                            },
+    // Wrap shared data in Arc for thread-safe sharing across parallel workers
+    let loaded = Arc::new(loaded);
+    let keep = Arc::new(keep);
+    let strides = Arc::new(strides);
+    let origin = Arc::new(origin);
+    let chunk_shape =
+        Arc::new(chunk_shape.to_vec());
+    let dims = Arc::new(dims.to_vec());
+    let meta = Arc::new(meta);
+
+    const PARALLEL_THRESHOLD: usize = 4;
+
+    // Build coordinate columns in parallel (thresholded)
+    let coord_cols: Vec<Column> = plan
+        .dims
+        .maybe_par_iter(PARALLEL_THRESHOLD)
+        .map_collect(|dim_step| -> BackendResult<Column> {
+            let coord_data: Option<Arc<ColumnData>> =
+                match &dim_step.mat {
+                    DimMaterialization::Synthetic => None,
+                    DimMaterialization::FromArray { path } => {
+                        let col = Arc::clone(
+                            loaded.get(path).ok_or_else(|| {
+                                BackendError::Other {
+                                    msg: format!(
+                                        "internal: missing read for coord path {}",
+                                        path
+                                    ),
+                                }
+                            })?,
                         );
+                        let expected_len =
+                            chunk_shape[dim_step.dim_idx] as usize;
+                        if col.len() != expected_len {
+                            return Err(BackendError::CoordLengthMismatch {
+                                name: dim_step.dim_name,
+                                expected_len: chunk_shape[dim_step.dim_idx],
+                                coord_len: col.len() as u64,
+                            });
+                        }
+                        Some(col)
                     }
-                    Some(col)
-                }
-            };
+                };
 
-        let encoding = meta
-            .array_by_path(dim_step.dim_name)
-            .and_then(|m| m.encoding.as_ref());
+            let encoding = meta
+                .array_by_path(dim_step.dim_name)
+                .and_then(|m| m.encoding.as_ref());
 
-        cols.push(build_coord_column(
-            dim_step.dim_name.as_ref(),
-            dim_step.dim_idx,
-            &keep,
-            &strides,
-            chunk_shape,
-            &origin,
-            coord_data,
-            encoding,
-        ));
-    }
+            Ok(build_coord_column(
+                dim_step.dim_name.as_ref(),
+                dim_step.dim_idx,
+                &keep,
+                &strides,
+                &chunk_shape,
+                &origin,
+                coord_data.as_ref().map(|c| c.as_ref()),
+                encoding,
+            ))
+        })?;
 
-    for vs in &plan.vars {
-        let data = loaded
-            .get(&vs.path)
-            .ok_or_else(|| BackendError::Other {
-                msg: format!(
-                    "internal: missing read for variable path {}",
-                    vs.path
-                ),
-            })?
-            .clone();
-        let encoding = meta
-            .array_by_path(vs.name)
-            .and_then(|m| m.encoding.as_ref());
+    // Build variable columns in parallel (thresholded)
+    let var_cols: Vec<Column> = plan
+        .vars
+        .maybe_par_iter(PARALLEL_THRESHOLD)
+        .map_collect(|vs| -> BackendResult<Column> {
+            let data = Arc::clone(
+                loaded.get(&vs.path).ok_or_else(|| BackendError::Other {
+                    msg: format!(
+                        "internal: missing read for variable path {}",
+                        vs.path
+                    ),
+                })?,
+            );
 
-        cols.push(build_var_column(
-            &vs.name,
-            data,
-            &vs.var_dims,
-            &vs.var_chunk_shape,
-            &vs.offsets,
-            dims,
-            chunk_shape,
-            &strides,
-            &keep,
-            encoding,
-        ));
-    }
+            let encoding = meta
+                .array_by_path(vs.name)
+                .and_then(|m| m.encoding.as_ref());
+
+            Ok(build_var_column(
+                &vs.name,
+                data,
+                &vs.var_dims,
+                &vs.var_chunk_shape,
+                &vs.offsets,
+                &dims,
+                &chunk_shape,
+                &strides,
+                &keep,
+                encoding,
+            ))
+        })?;
+
+    // Combine columns in order: dims first, then vars
+    let mut cols = Vec::with_capacity(
+        coord_cols.len() + var_cols.len(),
+    );
+    cols.extend(coord_cols);
+    cols.extend(var_cols);
 
     DataFrame::new(height, cols).context(
         PolarsSnafu {

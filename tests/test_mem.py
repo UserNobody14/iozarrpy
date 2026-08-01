@@ -97,12 +97,12 @@ async def test_remote_mem4() -> None:
         )
     df = await rainbear.scan_zarr_async(
         remote_ds,
-        pl.col([
-            "time", "lead_time", "y", "x", "80m_wind_speed"
-        ]).filter((pl.col("time") == datetime(2025, 12, 30, 0, 0, 0))
-        & (pl.col("lead_time") == timedelta(hours=1))
-        & (pl.col("y") == 13)
-        & (pl.col("x") == 13)),
+        pl.col(["time", "lead_time", "y", "x", "80m_wind_speed"]).filter(
+            (pl.col("time") == datetime(2025, 12, 30, 0, 0, 0))
+            & (pl.col("lead_time") == timedelta(hours=1))
+            & (pl.col("y") == 13)
+            & (pl.col("x") == 13)
+        ),
     )
     # Column order depends on dataset dimension order (y comes before x in this dataset)
     assert df.columns == ["time", "lead_time", "y", "x", "80m_wind_speed"]
@@ -117,7 +117,7 @@ def test_remote_mem2() -> None:
         pytest.skip(
             "Set RAINBEAR_REMOTE_MEM=<remote_ds> to run this test against a remote dataset."
         )
-    [ch, coord_reads] = ZarrBackend.from_url(remote_ds).selected_chunks_debug(
+    sdbr = ZarrBackend.from_url(remote_ds).selected_chunks_debug(
         (
             (pl.col("time") == datetime(2025, 12, 30, 0, 0, 0))
             & (pl.col("lead_time") == timedelta(hours=1))
@@ -128,14 +128,59 @@ def test_remote_mem2() -> None:
             # (pl.col("x") <= 6)
         ),
     )
-    print(ch)
-    assert coord_reads == 5
-    assert ch == [
+    print(sdbr)
+    assert sdbr["grids"] == [
         {
-            "indices": [17496, 0, 0, 0],
-            "origin": [17496, 0, 0, 0],
-            "shape": [1, 31, 54, 108],
-        }
+            "dims": ["time", "lead_time", "y", "x"],
+            "variables": [
+                "10m_u_component_of_wind",
+                "10m_v_component_of_wind",
+                "10m_wind_speed",
+                "10m_wind_speed_P10",
+                "10m_wind_speed_P90",
+                "10m_wind_speed_gust",
+                "2m_dewpoint_temperature",
+                "2m_temperature",
+                "80m_u_component_of_wind",
+                "80m_v_component_of_wind",
+                "80m_wind_speed",
+                "80m_wind_speed_P10",
+                "80m_wind_speed_P90",
+                "geopotential",
+                "log_total_precipitation_1hr",
+                "mean_sea_level_pressure",
+                "prob_of_precipitation_1hr",
+                "specific_humidity",
+                "surface_solar_radiation_downwards",
+                "surface_solar_radiation_downwards_P10",
+                "surface_solar_radiation_downwards_P90",
+                "temperature",
+                "total_cloud_cover",
+                "total_precipitation_1hr",
+                "u_component_of_wind",
+                "v_component_of_wind",
+            ],
+            "chunks": [
+                {
+                    "indices": [17496, 0, 0, 0],
+                    "origin": [17496, 0, 0, 0],
+                    "shape": [1, 31, 54, 108],
+                    "shards": [],
+                }
+            ],
+        },
+        {
+            "dims": ["y", "x"],
+            "variables": ["latitude", "longitude"],
+            "chunks": [
+                {
+                    "indices": [0, 0],
+                    "origin": [0, 0],
+                    "shape": [1059, 1799],
+                    "shards": [],
+                }
+            ],
+        },
     ]
 
 

@@ -13,7 +13,7 @@ use pyo3::PyErr;
 use pyo3::prelude::*;
 use snafu::ensure;
 
-use crate::chunk_plan::GridJoinTree;
+use crate::chunk_plan::compile_to_tree_sync;
 use crate::chunk_plan::indexing::grid_join_reader::{
     assemble_batch_dataframe, flatten_reads,
 };
@@ -23,9 +23,7 @@ use crate::scan::column_policy::ResolvedColumnPolicy;
 use crate::shared::HasMetadataBackendSync;
 use crate::shared::IStr;
 use crate::shared::MaybeParIter;
-use crate::shared::{
-    ChunkedExpressionCompilerSync, FullyCachedZarrBackendSync,
-};
+use crate::shared::FullyCachedZarrBackendSync;
 
 /// Below this many chunk reads per batch the rayon scheduling overhead exceeds
 /// the gain from parallel decode (single-chunk batches in particular regress
@@ -105,45 +103,38 @@ impl ZarrIteratorInner {
         &mut self,
     ) -> Result<(), PyErr> {
         let meta = self.backend.metadata()?;
-        let effective_with_columns = self
-            .with_columns
-            .clone()
-            .or_else(|| {
+        let with_set: Option<BTreeSet<IStr>> =
+            if let Some(cols) = &self.with_columns
+            {
+                Some(
+                    cols.iter()
+                        .copied()
+                        .collect(),
+                )
+            } else {
                 Some(
                     meta.tidy_column_order(None)
                         .into_iter()
                         .collect(),
                 )
-            });
-        let with_set: Option<BTreeSet<IStr>> =
-            effective_with_columns.as_ref().map(
-                |cols| {
-                    cols.iter().cloned().collect()
-                },
-            );
+            };
         let policy = ResolvedColumnPolicy::new(
             with_set, &self.expr, &meta,
         );
         let expanded_with_columns =
             policy.physical_superset().cloned();
 
-        let (grouped_plan, _stats) = self
-            .backend
-            .compile_expression_sync(
+        let (tree, _stats) =
+            compile_to_tree_sync(
                 &self.expr,
+                &meta,
+                self.backend.as_ref(),
             )?;
 
         let literal_false =
             expr_top_literal_bool(&self.expr)
                 == Some(false);
 
-        let groups = grouped_plan
-            .owned_grid_groups_for_io(
-                literal_false,
-                meta.as_ref(),
-            )?;
-
-        let tree = GridJoinTree::build(groups);
         let batches = match &tree {
             Some(t) => {
                 build_batches(t, self.batch_size)
@@ -248,23 +239,24 @@ impl ZarrIteratorInner {
                 continue;
             }
 
-            let backend = self.backend.clone();
+            let backend =
+                Arc::clone(&self.backend);
             let expanded_with_columns = state
                 .expanded_with_columns
                 .clone();
-            let meta = state.meta.clone();
+            let meta = Arc::clone(&state.meta);
 
             let chunk_dfs: Vec<(usize, DataFrame)> = reads
                 .maybe_par_iter(PARALLEL_CHUNK_READS)
                 .map_collect(|r| {
                     let df = chunk_to_df_from_grid_with_backend_sync(
                         backend.as_ref(),
-                        r.idx.clone(),
+                        r.idx.as_ref(),
                         r.sig.as_ref(),
-                        &r.array_shape,
-                        &r.vars,
+                        r.array_shape.as_ref(),
+                        r.vars.as_ref(),
                         expanded_with_columns.as_ref(),
-                        r.subset.as_ref(),
+                        r.subset.as_deref(),
                         &meta,
                     )?;
                     Ok::<_, crate::errors::BackendError>((r.leaf_idx, df))

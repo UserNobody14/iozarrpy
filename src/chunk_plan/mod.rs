@@ -1,11 +1,16 @@
-//! Chunk planning: compile a Polars predicate `Expr` into a conservative set of Zarr chunk indices.
+//! Chunk planning: compile a Polars predicate `Expr` into a [`GridJoinTree`].
 //!
 //! The compilation flow:
-//! 1. Compile expression to `ExprPlan` (no I/O)
-//! 2. Resolve constraints inline via the backend (binary search on cached coordinate chunks)
-//! 3. Convert to `GroupedChunkPlan`
+//! 1. Compile expression to `ExprPlan` (no I/O).
+//! 2. Walk the plan in [`indexing::builder::GridJoinTreeBuilder`], resolving
+//!    each per-dim constraint against the backend (binary search on cached
+//!    coordinate chunks) and accumulating per-dim index ranges.
+//! 3. `finalize` groups vars by [`ChunkGridSignature`], drops redundant
+//!    1D dim-coord groups, and emits the [`GridJoinTree`] consumed by
+//!    `grid_join_reader`.
 
 mod compile_entry;
+pub(crate) mod coord_resolve;
 mod prelude;
 
 pub(crate) mod exprs;
@@ -14,18 +19,14 @@ pub(crate) mod indexing;
 mod selection;
 pub use compile_entry::compute_dims_and_lengths_unified;
 pub use exprs::LazyCompileCtx;
-pub(crate) use exprs::apply_time_encoding;
 pub use exprs::compile_expr;
 pub(crate) use exprs::compile_node::collect_column_refs;
 
 pub use indexing::ChunkSubset;
-pub use indexing::GroupedChunkPlan;
-pub(crate) use indexing::lazy_materialize::{
-    resolve_expr_plan_async,
-    resolve_expr_plan_sync,
-};
-pub(crate) use indexing::resolver_traits::ResolutionError;
-pub use indexing::selection_to_chunks::selection_to_grouped_chunk_plan_unified_from_meta;
 pub use indexing::types::ChunkGridSignature;
 
-pub(crate) use indexing::GridJoinTree;
+pub use indexing::GridJoinTree;
+pub use indexing::{
+    PlannerStats, compile_to_tree_async,
+    compile_to_tree_sync,
+};

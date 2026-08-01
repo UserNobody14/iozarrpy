@@ -74,9 +74,11 @@ where
 impl<T: IntoIStr + Clone> IntoManyIstrs<T>
     for &[T]
 {
+    #[inline]
     fn into_istrs(self) -> Vec<IStr> {
         self.iter()
-            .map(|t| t.clone().istr())
+            .cloned()
+            .map(IntoIStr::istr)
             .collect()
     }
 }
@@ -98,13 +100,14 @@ impl<T: FromIStr, I: Borrow<IStr>, const N: usize>
     }
 }
 
-impl<T: IntoIStr> IntoManyIstrs<T> for &Arc<[T]>
-where
-    T: Clone + IntoIStr,
+impl<T: IntoIStr + Clone> IntoManyIstrs<T>
+    for &Arc<[T]>
 {
+    #[inline]
     fn into_istrs(self) -> Vec<IStr> {
         self.iter()
-            .map(|t| t.clone().istr())
+            .cloned()
+            .map(IntoIStr::istr)
             .collect()
     }
 }
@@ -115,33 +118,37 @@ where
 // }
 
 impl FromIStr for IStr {
-    // No-op
+    #[inline]
     fn from_istr(istr: IStr) -> Self {
         istr
     }
 }
 
 impl FromIStr for String {
+    #[inline]
     fn from_istr(istr: IStr) -> Self {
-        istr.clone().to_string()
+        istr.to_string()
     }
 }
 
 impl FromIStr for PlSmallStr {
+    #[inline]
     fn from_istr(istr: IStr) -> Self {
-        PlSmallStr::from(istr.clone().to_string())
+        PlSmallStr::from(istr.as_ref())
     }
 }
 
 impl IntoIStr for PlSmallStr {
+    #[inline]
     fn istr(self) -> IStr {
         IStr::from(self.as_str())
     }
 }
 
 impl IntoIStr for &PlSmallStr {
+    #[inline]
     fn istr(self) -> IStr {
-        IStr::from(self.clone().as_str())
+        IStr::from(self.as_str())
     }
 }
 

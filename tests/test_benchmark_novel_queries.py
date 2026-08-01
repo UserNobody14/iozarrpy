@@ -138,8 +138,9 @@ def base_time() -> datetime:
 
 
 @pytest.fixture(scope="module")
-def xarray_dataset(bench_dataset_path: str):
+def xarray_dataset(bench_dataset_path: str, skip_xarray_benchmarks: bool):
     """Open xarray dataset once, reuse for all iterations."""
+    _skip_if_xarray_benchmarks_disabled(skip_xarray_benchmarks)
     ds = xr.open_zarr(bench_dataset_path, chunks=None)
     yield ds
     ds.close()
@@ -170,6 +171,11 @@ def query_set_medium() -> list[QueryBounds]:
 
 
 _columns = ["y", "x", "time", "lead_time", "temperature"]
+
+
+def _skip_if_xarray_benchmarks_disabled(skip_xarray_benchmarks: bool) -> None:
+    if skip_xarray_benchmarks:
+        pytest.skip("xarray comparison benchmarks disabled")
 
 
 # ---------------------------------------------------------------------------
@@ -318,9 +324,14 @@ def run_n_queries_backend_sync(
 
 @pytest.mark.benchmark(group="novel_10q")
 def test_bench_novel_10q_xarray_fresh(
-    benchmark, bench_dataset_path: str, query_set_small: list[QueryBounds], base_time: datetime
+    benchmark,
+    bench_dataset_path: str,
+    query_set_small: list[QueryBounds],
+    base_time: datetime,
+    skip_xarray_benchmarks: bool,
 ) -> None:
     """10 novel queries, each opening fresh xarray."""
+    _skip_if_xarray_benchmarks_disabled(skip_xarray_benchmarks)
     results = benchmark(run_n_queries_xarray_fresh, bench_dataset_path, query_set_small, base_time)
     assert len(results) == 10
     assert all(r > 0 for r in results)
@@ -383,9 +394,14 @@ def test_bench_novel_10q_backend_sync(
 
 @pytest.mark.benchmark(group="novel_50q")
 def test_bench_novel_50q_xarray_fresh(
-    benchmark, bench_dataset_path: str, query_set_medium: list[QueryBounds], base_time: datetime
+    benchmark,
+    bench_dataset_path: str,
+    query_set_medium: list[QueryBounds],
+    base_time: datetime,
+    skip_xarray_benchmarks: bool,
 ) -> None:
     """50 novel queries, each opening fresh xarray."""
+    _skip_if_xarray_benchmarks_disabled(skip_xarray_benchmarks)
     results = benchmark(run_n_queries_xarray_fresh, bench_dataset_path, query_set_medium, base_time)
     assert len(results) == 50
     assert all(r > 0 for r in results)
@@ -454,9 +470,14 @@ def single_query(query_set_small: list[QueryBounds]) -> QueryBounds:
 
 @pytest.mark.benchmark(group="single_novel")
 def test_bench_single_xarray_fresh(
-    benchmark, bench_dataset_path: str, single_query: QueryBounds, base_time: datetime
+    benchmark,
+    bench_dataset_path: str,
+    single_query: QueryBounds,
+    base_time: datetime,
+    skip_xarray_benchmarks: bool,
 ) -> None:
     """Single query opening fresh xarray."""
+    _skip_if_xarray_benchmarks_disabled(skip_xarray_benchmarks)
     result = benchmark(impl_xarray_fresh, bench_dataset_path, single_query, base_time)
     assert result > 0
 
@@ -560,8 +581,9 @@ def remote_backend(remote_dataset_path: str | None):
 
 
 @pytest.fixture(scope="module")
-def remote_xarray(remote_dataset_path: str | None):
+def remote_xarray(remote_dataset_path: str | None, skip_xarray_benchmarks: bool):
     """Open remote xarray dataset once."""
+    _skip_if_xarray_benchmarks_disabled(skip_xarray_benchmarks)
     if not remote_dataset_path:
         pytest.skip("Set RAINBEAR_REMOTE_4D for remote benchmarks")
     ds = xr.open_zarr(remote_dataset_path, chunks=None).load()
@@ -576,8 +598,10 @@ def test_bench_remote_10q_xarray_fresh(
     remote_dataset_path: str | None,
     query_set_small: list[QueryBounds],
     base_time: datetime,
+    skip_xarray_benchmarks: bool,
 ) -> None:
     """10 novel queries on remote, each opening fresh xarray."""
+    _skip_if_xarray_benchmarks_disabled(skip_xarray_benchmarks)
     if not remote_dataset_path:
         pytest.skip("Set RAINBEAR_REMOTE_4D for remote benchmarks")
     results = benchmark(run_n_queries_xarray_fresh, remote_dataset_path, query_set_small, base_time)

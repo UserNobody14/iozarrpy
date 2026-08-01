@@ -171,7 +171,7 @@ pub async fn chunk_to_df_from_grid_with_backend<
     B: ChunkedDataBackendAsync,
 >(
     backend: &B,
-    idx: Vec<u64>,
+    idx: &[u64],
     sig: &ChunkGridSignature,
     array_shape: &[u64],
     vars: &[IStr],
@@ -185,7 +185,8 @@ pub async fn chunk_to_df_from_grid_with_backend<
     // Compute origin from chunk indices
     let origin: Vec<u64> = idx
         .iter()
-        .zip(chunk_shape.iter())
+        .copied()
+        .zip(chunk_shape.iter().copied())
         .map(|(i, s)| i * s)
         .collect();
 
@@ -205,7 +206,7 @@ pub async fn chunk_to_df_from_grid_with_backend<
     let plan = build_chunk_physical_plan(
         meta,
         dims,
-        &idx,
+        idx,
         chunk_shape,
         &origin,
         vars,
@@ -230,90 +231,125 @@ pub async fn chunk_to_df_from_grid_with_backend<
         loaded.insert(path, data);
     }
 
-    // Build DataFrame columns
-    let mut cols: Vec<Column> = Vec::new();
     let height = keep.len();
 
-    for dim_step in &plan.dims {
-        let coord_data: Option<&ColumnData> =
-            match &dim_step.mat {
-                DimMaterialization::Synthetic => None,
-                DimMaterialization::FromArray {
-                    path,
-                } => {
-                    let col = loaded
-                        .get(path)
-                        .ok_or_else(|| {
-                            BackendError::Other {
-                                msg: format!(
-                                    "internal: missing read for coord path {}",
-                                    path
-                                ),
+    // Build columns concurrently
+    use futures::future::try_join_all;
+
+    let coord_col_futures: Vec<_> = plan
+        .dims
+        .iter()
+        .map(|dim_step| {
+            let dim_step = dim_step.clone();
+            let loaded = loaded.clone();
+            let chunk_shape = chunk_shape.to_vec();
+            let keep = keep.clone();
+            let strides = strides.to_vec();
+            let origin = origin.to_vec();
+
+            async move {
+                let coord_data: Option<Arc<ColumnData>> =
+                    match &dim_step.mat {
+                        DimMaterialization::Synthetic => None,
+                        DimMaterialization::FromArray { path } => {
+                            let col = Arc::clone(
+                                loaded.get(path).ok_or_else(|| {
+                                    BackendError::Other {
+                                        msg: format!(
+                                            "internal: missing read for coord path {}",
+                                            path
+                                        ),
+                                    }
+                                })?,
+                            );
+                            let expected_len =
+                                chunk_shape[dim_step.dim_idx] as usize;
+                            if col.len() != expected_len {
+                                return Err(BackendError::CoordLengthMismatch {
+                                    name: dim_step.dim_name,
+                                    expected_len: chunk_shape[dim_step.dim_idx],
+                                    coord_len: col.len() as u64,
+                                });
                             }
-                        })?
-                        .as_ref();
-                    let expected_len =
-                        chunk_shape[dim_step.dim_idx]
-                            as usize;
-                    if col.len() != expected_len {
-                        return Err(
-                            BackendError::CoordLengthMismatch {
-                                name: dim_step.dim_name,
-                                expected_len: chunk_shape
-                                    [dim_step.dim_idx],
-                                coord_len: col.len()
-                                    as u64,
-                            },
-                        );
-                    }
-                    Some(col)
-                }
-            };
+                            Some(col)
+                        }
+                    };
 
-        let encoding = meta
-            .array_by_path(dim_step.dim_name)
-            .and_then(|m| m.encoding.as_ref());
+                let encoding = meta
+                    .array_by_path(dim_step.dim_name)
+                    .and_then(|m| m.encoding.clone());
 
-        cols.push(build_coord_column(
-            dim_step.dim_name.as_ref(),
-            dim_step.dim_idx,
-            &keep,
-            &strides,
-            chunk_shape,
-            &origin,
-            coord_data,
-            encoding,
-        ));
-    }
+                Ok(build_coord_column(
+                    dim_step.dim_name.as_ref(),
+                    dim_step.dim_idx,
+                    &keep,
+                    &strides,
+                    &chunk_shape,
+                    &origin,
+                    coord_data.as_ref().map(|c| c.as_ref()),
+                    encoding.as_ref(),
+                ))
+            }
+        })
+        .collect::<Vec<_>>();
 
-    for vs in &plan.vars {
-        let data = loaded
-            .get(&vs.path)
-            .ok_or_else(|| BackendError::Other {
-                msg: format!(
-                    "internal: missing read for variable path {}",
-                    vs.path
-                ),
-            })?
-            .clone();
+    let var_col_futures: Vec<_> = plan
+        .vars
+        .iter()
+        .map(|vs| {
+            let vs = vs.clone();
+            let loaded = loaded.clone();
+            let dims = dims.to_vec();
+            let chunk_shape = chunk_shape.to_vec();
+            let strides = strides.to_vec();
+            let keep = keep.clone();
 
-        let encoding = meta
-            .array_by_path(vs.name)
-            .and_then(|m| m.encoding.as_ref());
+            async move {
+                let data = Arc::clone(
+                    loaded.get(&vs.path).ok_or_else(|| BackendError::Other {
+                        msg: format!(
+                            "internal: missing read for variable path {}",
+                            vs.path
+                        ),
+                    })?,
+                );
 
-        cols.push(build_var_column(
-            &vs.name,
-            data,
-            &vs.var_dims,
-            &vs.var_chunk_shape,
-            &vs.offsets,
-            dims,
-            chunk_shape,
-            &strides,
-            &keep,
-            encoding,
-        ));
-    }
+                let encoding = meta
+                    .array_by_path(vs.name)
+                    .and_then(|m| m.encoding.clone());
+
+                Ok(build_var_column(
+                    &vs.name,
+                    data,
+                    &vs.var_dims,
+                    &vs.var_chunk_shape,
+                    &vs.offsets,
+                    &dims,
+                    &chunk_shape,
+                    &strides,
+                    &keep,
+                    encoding.as_ref(),
+                ))
+            }
+        })
+        .collect::<Vec<_>>();
+
+    // Run all the column builders concurrently
+    let (coord_cols_res, var_cols_res): (
+        Vec<Column>,
+        Vec<Column>,
+    ) = futures::try_join!(
+        try_join_all(coord_col_futures),
+        try_join_all(var_col_futures)
+    )?;
+
+    let mut cols: Vec<Column> =
+        Vec::with_capacity(
+            coord_cols_res.len()
+                + var_cols_res.len(),
+        );
+    cols.extend(coord_cols_res);
+    cols.extend(var_cols_res);
 
     DataFrame::new(height, cols).context(
         PolarsSnafu {

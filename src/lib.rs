@@ -2,6 +2,7 @@
 #![allow(clippy::too_many_arguments)]
 #![allow(clippy::type_complexity)]
 #![allow(clippy::single_range_in_vec_init)]
+#![warn(clippy::clone_on_ref_ptr)]
 
 use pyo3::prelude::*;
 
@@ -19,8 +20,6 @@ mod store;
 #[cfg(feature = "bench")]
 #[doc(hidden)]
 pub mod bench_internals;
-
-pub(crate) use shared::PlannerStats;
 
 #[pymodule]
 fn _core(

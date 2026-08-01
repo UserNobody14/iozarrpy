@@ -4,6 +4,8 @@
 //! Resolution to concrete `DatasetSelection` is handled by
 //! `resolve_expr_plan_sync`/`resolve_expr_plan_async` in `lazy_materialize`.
 
+use std::collections::BTreeSet;
+
 use smallvec::SmallVec;
 
 use crate::chunk_plan::indexing::lazy_selection::LazyArraySelection;
@@ -50,10 +52,12 @@ impl VarSet {
                 Self::Specific(a),
                 Self::Specific(b),
             ) => {
+                let b_set: BTreeSet<IStr> =
+                    b.iter().copied().collect();
                 let v: SmallVec<[IStr; 8]> = a
                     .iter()
-                    .filter(|v| b.contains(v))
-                    .cloned()
+                    .filter(|v| b_set.contains(v))
+                    .copied()
                     .collect();
                 Self::Specific(v)
             }
@@ -72,10 +76,13 @@ impl VarSet {
                 Self::Specific(a),
                 Self::Specific(b),
             ) => {
-                let mut v = a.clone();
-                for item in b {
-                    if !v.contains(item) {
-                        v.push(*item);
+                let mut v: SmallVec<[IStr; 8]> =
+                    a.iter().copied().collect();
+                let mut seen: BTreeSet<IStr> =
+                    v.iter().copied().collect();
+                for &item in b {
+                    if seen.insert(item) {
+                        v.push(item);
                     }
                 }
                 Self::Specific(v)
@@ -101,10 +108,14 @@ impl VarSet {
                 Self::Specific(a),
                 Self::Specific(b),
             ) => {
+                let b_set: BTreeSet<IStr> =
+                    b.iter().copied().collect();
                 let v: SmallVec<[IStr; 8]> = a
                     .iter()
-                    .filter(|v| !b.contains(v))
-                    .cloned()
+                    .filter(|v| {
+                        !b_set.contains(v)
+                    })
+                    .copied()
                     .collect();
                 Self::Specific(v)
             }

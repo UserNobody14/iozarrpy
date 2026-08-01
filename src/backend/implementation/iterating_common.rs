@@ -15,11 +15,9 @@ use crate::errors::{BackendError, PolarsSnafu};
 use crate::meta::ZarrMeta;
 use crate::shared::FromManyIstrs;
 use crate::shared::IStr;
-use crate::shared::restructure_to_structs;
-
 /// Default batch size in rows when not specified.
 pub(crate) const DEFAULT_BATCH_SIZE: usize =
-    10_000;
+    50_000;
 
 /// Top-level boolean literal after stripping [`Expr::Alias`], if any.
 pub(crate) fn expr_top_literal_bool(
@@ -90,7 +88,7 @@ pub(crate) fn output_columns_for_streaming_batch(
         .dim_analysis
         .all_dims
         .iter()
-        .cloned()
+        .copied()
         .collect();
 
     let append_from_expanded =
@@ -132,7 +130,7 @@ pub(crate) fn output_columns_for_streaming_batch(
             let mut out =
                 meta.tidy_column_order(None);
             let mut seen: BTreeSet<IStr> =
-                out.iter().cloned().collect();
+                out.iter().copied().collect();
             append_from_expanded(
                 &mut out, &mut seen,
             );
@@ -140,9 +138,9 @@ pub(crate) fn output_columns_for_streaming_batch(
         }
         Some(req) => {
             let mut out: Vec<IStr> =
-                req.iter().cloned().collect();
+                req.iter().copied().collect();
             let mut seen: BTreeSet<IStr> =
-                out.iter().cloned().collect();
+                out.iter().copied().collect();
             append_from_expanded(
                 &mut out, &mut seen,
             );
@@ -164,7 +162,7 @@ pub(crate) fn project_to_polars_output(
     }
     let names: Vec<PlSmallStr> =
         Vec::<PlSmallStr>::from_istrs(
-            cols.iter().cloned(),
+            cols.iter().copied(),
         );
     let filtered_names: Vec<PlSmallStr> = names
         .into_iter()
@@ -214,15 +212,6 @@ pub(crate) fn postprocess_batch(
 
     state.total_rows_yielded += result.height();
 
-    let result = if state.meta.is_hierarchical() {
-        restructure_to_structs(
-            &result,
-            &state.meta,
-        )?
-    } else {
-        result
-    };
-
     project_to_polars_output(
         result,
         state.output_columns.as_deref(),
@@ -245,11 +234,6 @@ pub(crate) fn empty_streaming_schema_batch(
             .meta
             .tidy_schema(Some(keys.as_slice())),
     );
-    let df = if state.meta.is_hierarchical() {
-        restructure_to_structs(&df, &state.meta)?
-    } else {
-        df
-    };
     project_to_polars_output(
         df,
         state.output_columns.as_deref(),

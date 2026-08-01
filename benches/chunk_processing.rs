@@ -553,7 +553,7 @@ fn bench_chunk_to_df(c: &mut Criterion) {
         b.iter(|| {
             chunk_to_df_from_grid_with_backend(
                 black_box(&backend),
-                black_box(vec![2, 3, 1]),
+                black_box(&[2u64, 3, 1][..]),
                 black_box(&sig),
                 black_box(&array_shape),
                 black_box(&vars),
@@ -570,7 +570,7 @@ fn bench_chunk_to_df(c: &mut Criterion) {
         b.iter(|| {
             chunk_to_df_from_grid_with_backend(
                 black_box(&backend),
-                black_box(vec![9, 9, 4]),
+                black_box(&[9u64, 9, 4][..]),
                 black_box(&sig),
                 black_box(&array_shape),
                 black_box(&vars),
@@ -662,32 +662,6 @@ fn bench_compile_expr(c: &mut Criterion) {
 }
 
 // =============================================================================
-// Benchmark: selection_to_grouped_chunk_plan
-// =============================================================================
-
-fn bench_selection_to_plan(c: &mut Criterion) {
-    let mut group =
-        c.benchmark_group("selection_to_plan");
-
-    let meta = make_test_meta();
-
-    // NoSelectionMade — creates plans covering all chunks
-    let no_selection =
-        DatasetSelection::NoSelectionMade;
-    group.bench_function("no_selection_made", |b| {
-        b.iter(|| {
-            selection_to_grouped_chunk_plan_unified_from_meta(
-                black_box(&no_selection),
-                black_box(&meta),
-            )
-            .unwrap()
-        })
-    });
-
-    group.finish();
-}
-
-// =============================================================================
 // Criterion harness
 // =============================================================================
 
@@ -699,6 +673,5 @@ criterion_group!(
     bench_var_indices,
     bench_chunk_to_df,
     bench_compile_expr,
-    bench_selection_to_plan,
 );
 criterion_main!(benches);

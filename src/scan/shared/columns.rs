@@ -16,6 +16,7 @@ use crate::shared::IStr;
 /// For interior chunks (the common case), all elements are kept
 /// and we avoid allocating a full index list — the O(chunk_len × ndim)
 /// mask computation is replaced by an O(ndim) check.
+#[derive(Clone)]
 pub enum KeepMask {
     /// All elements `0..len` are in bounds (interior chunk).
     All(usize),
