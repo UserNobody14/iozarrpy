@@ -18,9 +18,11 @@ name = "_core"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-# "abi3-py39" tells pyo3 (and maturin) to build using the stable ABI with minimum Python version 3.9
+# "abi3-py312" tells pyo3 (and maturin) to build using the stable ABI with minimum Python version 3.12,
+# matching `requires-python` in pyproject.toml. Without it, maturin cannot cross-compile wheels
+# (aarch64/i686) without being told a concrete interpreter via `-i`.
 # "extension-module" is enabled via feature flag (only for cdylib builds, not tests)
-pyo3 = { version = "0.28" }
+pyo3 = { version = "0.28", features = ["abi3-py312"] }
 
 # Get polars from git.
 #
