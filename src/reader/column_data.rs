@@ -443,7 +443,7 @@ impl ColumnData {
     ) -> ColumnData {
         match self {
             ColumnData::I64(v) => {
-                primitive_map(v, |x| f(x))
+                primitive_map(v, &f)
                     .map(ColumnData::I64)
                     .unwrap()
             }
@@ -969,73 +969,73 @@ impl ColumnData {
                 ColumnData::I8(a),
                 ColumnData::I8(b),
             ) => ColumnData::I8(
-                primitive_concat(a, b),
+                primitive_concat(&a, b),
             ),
             (
                 ColumnData::I16(a),
                 ColumnData::I16(b),
             ) => ColumnData::I16(
-                primitive_concat(a, b),
+                primitive_concat(&a, b),
             ),
             (
                 ColumnData::I32(a),
                 ColumnData::I32(b),
             ) => ColumnData::I32(
-                primitive_concat(a, b),
+                primitive_concat(&a, b),
             ),
             (
                 ColumnData::I64(a),
                 ColumnData::I64(b),
             ) => ColumnData::I64(
-                primitive_concat(a, b),
+                primitive_concat(&a, b),
             ),
             (
                 ColumnData::U8(a),
                 ColumnData::U8(b),
             ) => ColumnData::U8(
-                primitive_concat(a, b),
+                primitive_concat(&a, b),
             ),
             (
                 ColumnData::U16(a),
                 ColumnData::U16(b),
             ) => ColumnData::U16(
-                primitive_concat(a, b),
+                primitive_concat(&a, b),
             ),
             (
                 ColumnData::U32(a),
                 ColumnData::U32(b),
             ) => ColumnData::U32(
-                primitive_concat(a, b),
+                primitive_concat(&a, b),
             ),
             (
                 ColumnData::U64(a),
                 ColumnData::U64(b),
             ) => ColumnData::U64(
-                primitive_concat(a, b),
+                primitive_concat(&a, b),
             ),
             (
                 ColumnData::F32(a),
                 ColumnData::F32(b),
             ) => ColumnData::F32(
-                primitive_concat(a, b),
+                primitive_concat(&a, b),
             ),
             (
                 ColumnData::F64(a),
                 ColumnData::F64(b),
             ) => ColumnData::F64(
-                primitive_concat(a, b),
+                primitive_concat(&a, b),
             ),
             (
                 ColumnData::Str(a),
                 ColumnData::Str(b),
-            ) => {
-                ColumnData::Str(concat_utf8(a, b))
-            }
+            ) => ColumnData::Str(concat_utf8(
+                &a, b,
+            )),
             (
                 ColumnData::Bin(a),
                 ColumnData::Bin(b),
             ) => ColumnData::Bin(concat_binary(
-                a, b,
+                &a, b,
             )),
             _ => panic!(
                 "ColumnData::concat type mismatch"
@@ -1092,7 +1092,7 @@ where
 }
 
 fn primitive_concat<T>(
-    a: PrimitiveArray<T>,
+    a: &PrimitiveArray<T>,
     b: &PrimitiveArray<T>,
 ) -> PrimitiveArray<T>
 where
@@ -1282,7 +1282,7 @@ fn repeat_tile_binary(
 }
 
 fn concat_utf8(
-    a: Utf8Array<i64>,
+    a: &Utf8Array<i64>,
     b: &Utf8Array<i64>,
 ) -> Utf8Array<i64> {
     let av = a.values().as_slice();
@@ -1312,7 +1312,7 @@ fn concat_utf8(
 }
 
 fn concat_binary(
-    a: BinaryArray<i64>,
+    a: &BinaryArray<i64>,
     b: &BinaryArray<i64>,
 ) -> BinaryArray<i64> {
     let av = a.values().as_slice();
@@ -1695,7 +1695,7 @@ mod tests {
 
     #[test]
     fn utf8_take_and_repeat() {
-        let arr = Utf8Array::<i64>::from(&[
+        let arr = Utf8Array::<i64>::from([
             Some("alpha"),
             Some("beta"),
             Some("gamma"),

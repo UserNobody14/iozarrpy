@@ -584,10 +584,8 @@ fn build_dim_contrib_tables(
         let mut tbl: Vec<u64> =
             Vec::with_capacity(chunk_size);
         for l in 0..(chunk_size as u64) {
-            let var_local = match clamp_to {
-                Some(max) => l.min(max),
-                None => l,
-            };
+            let var_local = clamp_to
+                .map_or(l, |max| l.min(max));
             tbl.push(
                 (var_local + offset) * stride,
             );
@@ -1018,7 +1016,11 @@ mod tests {
         );
         assert_eq!(cartesian.len(), chunk_len);
         let cap = var_data_len.saturating_sub(1);
-        for row in 0..chunk_len {
+        for (row, &actual) in cartesian
+            .iter()
+            .enumerate()
+            .take(chunk_len)
+        {
             let expected =
                 (legacy_compute_var_idx(
                     row,
@@ -1033,7 +1035,7 @@ mod tests {
                 ) as usize)
                     .min(cap);
             assert_eq!(
-                cartesian[row], expected,
+                actual, expected,
                 "cartesian mismatch row={row} primary={primary_chunk_shape:?} var={var_chunk_shape:?} offsets={var_offsets:?}"
             );
         }
@@ -1175,7 +1177,7 @@ mod tests {
         var_dims_s: &[&str],
         var_chunk_shape: &[u64],
         var_offsets: &[u64],
-        keep: KeepMask,
+        keep: &KeepMask,
     ) {
         let p_dims: Vec<IStr> = primary_dims_s
             .iter()
@@ -1208,7 +1210,7 @@ mod tests {
             &p_dims,
             primary_chunk_shape,
             &primary_strides,
-            &keep,
+            keep,
             None,
         );
         let expected = build_reference_var_column(
@@ -1219,7 +1221,7 @@ mod tests {
             &p_dims,
             primary_chunk_shape,
             &primary_strides,
-            &keep,
+            keep,
         );
         let series =
             col.as_series().unwrap().clone();
@@ -1242,7 +1244,7 @@ mod tests {
             &["x", "y"],
             &[20, 20],
             &[5, 3],
-            KeepMask::All(1000),
+            &KeepMask::All(1000),
         );
     }
 
@@ -1257,7 +1259,7 @@ mod tests {
             &["x", "y"],
             &[20, 20],
             &[5, 3],
-            KeepMask::Sparse(idx),
+            &KeepMask::Sparse(idx),
         );
     }
 
@@ -1270,7 +1272,7 @@ mod tests {
             &["a", "b", "c"],
             &[5, 5, 5],
             &[0, 0, 0],
-            KeepMask::All(512),
+            &KeepMask::All(512),
         );
     }
 }
