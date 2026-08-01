@@ -97,13 +97,9 @@ fn build_group_chunks(
                         (&i, &inner_sz),
                         &outer_sz,
                     )| {
-                        if outer_sz == 0 {
-                            0
-                        } else {
-                            i.saturating_mul(
-                                inner_sz,
-                            ) / outer_sz
-                        }
+                        i.saturating_mul(inner_sz)
+                            .checked_div(outer_sz)
+                            .unwrap_or(0)
                     },
                 )
                 .collect();

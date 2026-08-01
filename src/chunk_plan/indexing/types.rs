@@ -88,7 +88,7 @@ impl ChunkShardShape {
                     inner: Some(inner.to_vec()),
                     outer: Some(outer.to_vec()),
                 }
-            )?;
+            );
         }
         for (o, i) in
             outer.iter().zip(inner.iter())
@@ -101,7 +101,7 @@ impl ChunkShardShape {
                         inner: Some(inner.to_vec()),
                         outer: Some(outer.to_vec()),
                     }
-                )?;
+                );
             }
         }
         Ok(())
@@ -116,7 +116,7 @@ impl ChunkShardShape {
                     inner: None,
                     outer: None,
                 }
-            )?;
+            );
         }
         for s in shape.iter() {
             if *s == 0 {
@@ -126,7 +126,7 @@ impl ChunkShardShape {
                         inner: None,
                         outer: None,
                     }
-                )?;
+                );
             }
         }
         Ok(())
