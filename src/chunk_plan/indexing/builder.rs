@@ -907,13 +907,8 @@ fn compute_chunk_subset(
     // Bounding box of the union of subset∩chunk intervals, per dim.
     // Initialize with inverse bounds so first intersection updates them.
     let mut bbox_start: Vec<u64> =
-        std::iter::repeat(u64::MAX)
-            .take(ndim)
-            .collect();
-    let mut bbox_end: Vec<u64> =
-        std::iter::repeat(0u64)
-            .take(ndim)
-            .collect();
+        vec![u64::MAX; ndim];
+    let mut bbox_end: Vec<u64> = vec![0u64; ndim];
 
     for subset in subsets {
         let ranges = subset.to_ranges();

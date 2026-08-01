@@ -140,6 +140,7 @@ impl DimensionAnalysis {
 
 impl ZarrMeta {
     /// True if there are any child groups
+    #[allow(dead_code)] // reserved for the DataTree surface
     pub fn is_hierarchical(&self) -> bool {
         !self.root.children.is_empty()
     }

@@ -52,6 +52,7 @@ impl ChunkSubset {
         }
     }
 
+    #[allow(dead_code)] // no caller since the planner moved to `GridJoinTreeBuilder`
     pub(crate) fn is_full_chunk(
         &self,
         chunk_shape: &[u64],

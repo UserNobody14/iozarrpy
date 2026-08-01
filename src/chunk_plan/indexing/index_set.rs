@@ -295,6 +295,7 @@ impl RectangleSet {
     }
 
     /// Symmetric difference: `(self \ other) ∪ (other \ self)`.
+    #[allow(dead_code)] // completes the set-op surface; no caller reaches it yet
     pub(crate) fn exclusive_or(
         &self,
         other: &Self,
@@ -780,10 +781,8 @@ mod tests {
             std::collections::BTreeSet::new();
         for x in 0..6 {
             for y in 0..6 {
-                if !(x >= 1
-                    && x < 5
-                    && y >= 1
-                    && y < 5)
+                if !((1..5).contains(&x)
+                    && (1..5).contains(&y))
                 {
                     expected.insert(vec![x, y]);
                 }

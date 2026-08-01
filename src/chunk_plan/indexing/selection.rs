@@ -8,6 +8,7 @@
 //! [`crate::chunk_plan::indexing::lazy_selection::LazyArraySelection`] still
 //! express boolean combinators in terms of them.
 
+#[allow(dead_code)] // callers use the inherent `empty`/`is_empty` on each impl, not the trait
 pub trait Emptyable {
     fn empty() -> Self;
     fn is_empty(&self) -> bool;
