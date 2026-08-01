@@ -225,7 +225,7 @@ impl PyIcechunkBackend {
             extract_session_bytes(session)?;
 
         // Deserialize to Rust Session
-        let inner_session = Session::from_bytes(session_bytes).map_err(|e| {
+        let inner_session = Session::from_bytes(&session_bytes).map_err(|e| {
             PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
                 "Failed to deserialize session: {}",
                 e

@@ -126,8 +126,11 @@ zarrs_object_store = { version = "0.6.2", features = [
     "http",
     "fs",
 ] }
-zarrs_icechunk = "0.4"
-icechunk = "0.3.22"
+zarrs_icechunk = "0.5.1"
+# Must stay on the same major as the `icechunk` Python package pinned in pyproject.toml:
+# `IcechunkBackend.from_session` deserializes a `Session` serialized by icechunk-python's
+# own Rust core, and the msgpack layout of `Session` changes across majors.
+icechunk = "2.1.2"
 serde_json = "1.0.145"
 chrono = { version = "0.4.42", features = ["clock", "std", "serde"] }
 futures = "0.3.31"
