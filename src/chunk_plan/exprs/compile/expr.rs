@@ -28,6 +28,7 @@ use crate::errors::BackendError;
 use crate::shared::{
     IStr, IntoIStr, IntoManyIstrs,
 };
+use polars_lazy::dsl::AggExpr;
 
 type LazyResult = Result<ExprPlan, BackendError>;
 
@@ -427,8 +428,7 @@ pub fn compile_expr(
         }
 
         Expr::Agg(agg) => {
-            let inner: &Expr = agg.as_ref();
-            compile_expr(inner, ctx)
+            compile_agg_expr(agg, ctx)
         }
 
         Expr::AnonymousFunction {
@@ -494,4 +494,60 @@ pub(super) fn compile_expr_list(
         .into_iter()
         .reduce(|a, b| a.intersect(&b))
         .unwrap_or(ExprPlan::NoConstraint))
+}
+
+pub(super) fn compile_agg_expr(
+    agg: &AggExpr,
+    ctx: &mut LazyCompileCtx<'_>,
+) -> LazyResult {
+    match agg {
+        AggExpr::Min { input, .. } => {
+            compile_expr(input.as_ref(), ctx)
+        }
+        AggExpr::Max { input, .. } => {
+            compile_expr(input.as_ref(), ctx)
+        }
+        AggExpr::Median(expr) => {
+            compile_expr(expr.as_ref(), ctx)
+        }
+        AggExpr::NUnique(expr) => {
+            compile_expr(expr.as_ref(), ctx)
+        }
+        AggExpr::First(expr) => {
+            compile_expr(expr.as_ref(), ctx)
+        }
+        AggExpr::FirstNonNull(expr) => {
+            compile_expr(expr.as_ref(), ctx)
+        }
+        AggExpr::Last(expr) => {
+            compile_expr(expr.as_ref(), ctx)
+        }
+        AggExpr::LastNonNull(expr) => {
+            compile_expr(expr.as_ref(), ctx)
+        }
+        AggExpr::Item { input, .. } => {
+            compile_expr(input.as_ref(), ctx)
+        }
+        AggExpr::Mean(expr) => {
+            compile_expr(expr.as_ref(), ctx)
+        }
+        AggExpr::Implode { input, .. } => {
+            compile_expr(input.as_ref(), ctx)
+        }
+        AggExpr::Count { input, .. } => {
+            compile_expr(input.as_ref(), ctx)
+        }
+        AggExpr::Sum(expr) => {
+            compile_expr(expr.as_ref(), ctx)
+        }
+        AggExpr::AggGroups(expr) => {
+            compile_expr(expr.as_ref(), ctx)
+        }
+        AggExpr::Std(expr, _) => {
+            compile_expr(expr.as_ref(), ctx)
+        }
+        AggExpr::Var(expr, _) => {
+            compile_expr(expr.as_ref(), ctx)
+        }
+    }
 }

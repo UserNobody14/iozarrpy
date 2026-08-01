@@ -4,6 +4,8 @@
 //! different passes can apply mutable updates (e.g. collect column refs,
 //! visit every node) without duplicating the recursion structure.
 
+use polars_lazy::dsl::AggExpr;
+
 use super::literals::strip_wrappers;
 use crate::chunk_plan::prelude::*;
 
@@ -88,8 +90,7 @@ pub fn walk_expr(
             }
         }
         Expr::Agg(agg) => {
-            let inner: &Expr = agg.as_ref();
-            walk_expr(inner, visitor);
+            walk_agg_expr(agg, visitor);
         }
         Expr::Gather { expr, idx, .. } => {
             walk_expr(expr.as_ref(), visitor);
@@ -127,5 +128,61 @@ pub fn walk_selector(
             walk_selector(b.as_ref(), visitor);
         }
         _ => {}
+    }
+}
+
+pub fn walk_agg_expr(
+    agg: &AggExpr,
+    visitor: &mut impl FnMut(&Expr),
+) {
+    match agg {
+        AggExpr::Min { input, .. } => {
+            visitor(input);
+        }
+        AggExpr::Max { input, .. } => {
+            visitor(input);
+        }
+        AggExpr::Median(input) => {
+            visitor(input);
+        }
+        AggExpr::NUnique(input) => {
+            visitor(input);
+        }
+        AggExpr::Count { input, .. } => {
+            visitor(input);
+        }
+        AggExpr::Sum(input) => {
+            visitor(input);
+        }
+        AggExpr::Mean(input) => {
+            visitor(input);
+        }
+        AggExpr::Std(input, ..) => {
+            visitor(input);
+        }
+        AggExpr::Var(input, _) => {
+            visitor(input);
+        }
+        AggExpr::First(input) => {
+            visitor(input);
+        }
+        AggExpr::Last(input) => {
+            visitor(input);
+        }
+        AggExpr::FirstNonNull(expr) => {
+            visitor(expr);
+        }
+        AggExpr::LastNonNull(expr) => {
+            visitor(expr);
+        }
+        AggExpr::Item { input, .. } => {
+            visitor(input);
+        }
+        AggExpr::Implode { input, .. } => {
+            visitor(input);
+        }
+        AggExpr::AggGroups(expr) => {
+            visitor(expr);
+        }
     }
 }

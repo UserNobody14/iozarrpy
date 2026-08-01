@@ -62,25 +62,25 @@ pub(super) fn series_values_scalar_lazy(
     match s.dtype() {
         DataType::Int64 => {
             let ca = s.i64().ok()?;
-            for v in ca.into_iter().flatten() {
+            for v in ca.iter().flatten() {
                 out.push(CoordScalar::I64(v));
             }
         }
         DataType::UInt64 => {
             let ca = s.u64().ok()?;
-            for v in ca.into_iter().flatten() {
+            for v in ca.iter().flatten() {
                 out.push(CoordScalar::U64(v));
             }
         }
         DataType::Float64 => {
             let ca = s.f64().ok()?;
-            for v in ca.into_iter().flatten() {
+            for v in ca.iter().flatten() {
                 out.push(CoordScalar::F64(v));
             }
         }
         DataType::Float32 => {
             let ca = s.f32().ok()?;
-            for v in ca.into_iter().flatten() {
+            for v in ca.iter().flatten() {
                 out.push(CoordScalar::F64(
                     v as f64,
                 ));
@@ -88,7 +88,7 @@ pub(super) fn series_values_scalar_lazy(
         }
         DataType::Int32 => {
             let ca = s.i32().ok()?;
-            for v in ca.into_iter().flatten() {
+            for v in ca.iter().flatten() {
                 out.push(CoordScalar::I64(
                     v as i64,
                 ));
@@ -96,7 +96,7 @@ pub(super) fn series_values_scalar_lazy(
         }
         DataType::Int16 => {
             let ca = s.i16().ok()?;
-            for v in ca.into_iter().flatten() {
+            for v in ca.iter().flatten() {
                 out.push(CoordScalar::I64(
                     v as i64,
                 ));
@@ -104,7 +104,7 @@ pub(super) fn series_values_scalar_lazy(
         }
         DataType::Int8 => {
             let ca = s.i8().ok()?;
-            for v in ca.into_iter().flatten() {
+            for v in ca.iter().flatten() {
                 out.push(CoordScalar::I64(
                     v as i64,
                 ));
@@ -112,7 +112,7 @@ pub(super) fn series_values_scalar_lazy(
         }
         DataType::UInt32 => {
             let ca = s.u32().ok()?;
-            for v in ca.into_iter().flatten() {
+            for v in ca.iter().flatten() {
                 out.push(CoordScalar::U64(
                     v as u64,
                 ));
@@ -120,7 +120,7 @@ pub(super) fn series_values_scalar_lazy(
         }
         DataType::UInt16 => {
             let ca = s.u16().ok()?;
-            for v in ca.into_iter().flatten() {
+            for v in ca.iter().flatten() {
                 out.push(CoordScalar::U64(
                     v as u64,
                 ));
@@ -128,7 +128,7 @@ pub(super) fn series_values_scalar_lazy(
         }
         DataType::UInt8 => {
             let ca = s.u8().ok()?;
-            for v in ca.into_iter().flatten() {
+            for v in ca.iter().flatten() {
                 out.push(CoordScalar::U64(
                     v as u64,
                 ));
@@ -138,7 +138,7 @@ pub(super) fn series_values_scalar_lazy(
             // Use physical representation for Datetime
             let phys = s.to_physical_repr();
             let ca = phys.i64().ok()?;
-            for v in ca.into_iter().flatten() {
+            for v in ca.iter().flatten() {
                 let ns = match tu {
                     TimeUnit::Nanoseconds => v,
                     TimeUnit::Microseconds => {
@@ -158,7 +158,7 @@ pub(super) fn series_values_scalar_lazy(
             // Use physical representation for Date (i32 days since epoch)
             let phys = s.to_physical_repr();
             let ca = phys.i32().ok()?;
-            for v in ca.into_iter().flatten() {
+            for v in ca.iter().flatten() {
                 let ns = (v as i64)
                     .saturating_mul(
                         86_400_000_000_000,
@@ -172,7 +172,7 @@ pub(super) fn series_values_scalar_lazy(
             // Use physical representation for Duration
             let phys = s.to_physical_repr();
             let ca = phys.i64().ok()?;
-            for v in ca.into_iter().flatten() {
+            for v in ca.iter().flatten() {
                 let ns = match tu {
                     TimeUnit::Nanoseconds => v,
                     TimeUnit::Microseconds => {
@@ -192,7 +192,7 @@ pub(super) fn series_values_scalar_lazy(
             // Use physical representation for Time (i64 nanoseconds since midnight)
             let phys = s.to_physical_repr();
             let ca = phys.i64().ok()?;
-            for v in ca.into_iter().flatten() {
+            for v in ca.iter().flatten() {
                 out.push(
                     CoordScalar::DurationNs(v),
                 );

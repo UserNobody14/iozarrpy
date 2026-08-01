@@ -148,6 +148,14 @@ pub(super) fn compile_boolean_function_lazy(
             rel_tol: _,
             nans_equal: _,
         } => todo!(),
+        BooleanFunction::IsEmpty {
+            ignore_nulls,
+        } => todo!(),
+        BooleanFunction::HasNulls => todo!(),
+        BooleanFunction::IsSorted {
+            descending,
+            nulls_last,
+        } => todo!(),
     }
 }
 

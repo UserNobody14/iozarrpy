@@ -137,8 +137,10 @@ regex-syntax = "0.8.5"
 smallvec = "1.13"
 async-trait = "0.1"
 internment = { version = "0.8", features = ["arc"] }
-# 0.10.x pins object_store 0.12; zarrs_object_store needs 0.13 — stay on 0.9 until pyo3-object_store aligns.
-pyo3-object_store = "0.12.0"
+# 0.11 is the only release on pyo3 0.29 + object_store 0.13, which is what polars and
+# zarrs_object_store need. 0.12 moves to object_store 0.14 and splits the graph in two,
+# making stores from this crate unusable as zarrs stores.
+pyo3-object_store = "0.11.0"
 ambassador = "0.5.0"
 parking_lot = "0.12.5"
 moka = { version = "0.12.13", features = ["future", "sync"] }
@@ -184,6 +186,10 @@ codegen-units = 256
 
 # Patch zarrs to use the fork with consolidated metadata support
 [patch.crates-io]
+# Polars patches object_store to this fork (custom DNS resolver, arrow-rs-object-store#728).
+# A git dependency's own [patch.crates-io] is ignored, so polars-io fails to build against
+# stock object_store unless we mirror the patch here. Keep the rev in sync with the polars tag.
+object_store = { git = "https://github.com/kdn36/arrow-rs-object-store", rev = "f50a6e5c564b2b5933eca15cd20ff9b5614374a1" }
 zarrs = { git = "https://github.com/UserNobody14/zarrs.git", branch = "main" }
 zarrs_storage = { git = "https://github.com/UserNobody14/zarrs.git", branch = "main" }
 zarrs_metadata = { git = "https://github.com/UserNobody14/zarrs.git", branch = "main" }
