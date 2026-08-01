@@ -17,7 +17,6 @@ use snafu::ResultExt;
 use snafu::ensure;
 use tokio::sync::Semaphore;
 
-use crate::chunk_plan::GridJoinTree;
 use crate::chunk_plan::indexing::grid_join_reader::{
     assemble_batch_dataframe, flatten_reads,
 };
@@ -119,16 +118,13 @@ impl IcechunkIterator {
                 );
                 let expanded_with_columns = policy.physical_superset().cloned();
 
-                let (grouped_plan, _stats) =
-                    backend.compile_expression_async(&expr).await?;
+                let (tree, _stats) = backend
+                    .compile_expression_to_tree_async(&expr)
+                    .await?;
 
                 let literal_false =
                     expr_top_literal_bool(&expr) == Some(false);
 
-                let groups = grouped_plan
-                    .owned_grid_groups_for_io(literal_false, meta.as_ref())?;
-
-                let tree = GridJoinTree::build(groups);
                 let batches = match &tree {
                     Some(t) => build_batches(t, batch_size),
                     None => Vec::new(),
