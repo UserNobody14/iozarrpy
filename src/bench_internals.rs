@@ -25,7 +25,8 @@ pub use crate::shared::{
 };
 
 pub use crate::chunk_plan::{
-    ChunkGridSignature, ChunkSubset, compile_expr,
+    ChunkGridSignature, ChunkSubset,
+    compile_expr,
     compute_dims_and_lengths_unified,
 };
 

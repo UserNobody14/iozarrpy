@@ -525,9 +525,13 @@ fn combine_for(
     leaves: &[&LeafGroup],
 ) -> Arc<CombineNode> {
     Arc::new(match tree {
-        GridJoinTree::Leaf(g) => CombineNode::Leaf {
-            leaf_idx: leaf_index_of(leaves, g),
-        },
+        GridJoinTree::Leaf(g) => {
+            CombineNode::Leaf {
+                leaf_idx: leaf_index_of(
+                    leaves, g,
+                ),
+            }
+        }
         GridJoinTree::Join {
             join_dims,
             subtrees,
@@ -542,7 +546,9 @@ fn combine_for(
             CombineNode::Concat {
                 children: subtrees
                     .iter()
-                    .map(|s| combine_for(s, leaves))
+                    .map(|s| {
+                        combine_for(s, leaves)
+                    })
                     .collect(),
             }
         }
@@ -791,10 +797,13 @@ fn wrap_columns_into_group_struct(
         height,
         Some(group_name.as_ref()),
     )?;
-    DataFrame::new(height, out).context(PolarsSnafu {
-        message: "Error building Group DataFrame"
-            .to_string(),
-    })
+    DataFrame::new(height, out).context(
+        PolarsSnafu {
+            message:
+                "Error building Group DataFrame"
+                    .to_string(),
+        },
+    )
 }
 
 /// Partition `cols` by their first `'/'`-separated component, recursively
@@ -809,8 +818,10 @@ fn nest_columns_by_slash(
 ) -> BackendResult<Vec<Column>> {
     use std::collections::BTreeMap;
     let mut out: Vec<Column> = Vec::new();
-    let mut groups: BTreeMap<String, Vec<Column>> =
-        BTreeMap::new();
+    let mut groups: BTreeMap<
+        String,
+        Vec<Column>,
+    > = BTreeMap::new();
     for col in cols {
         let full_name = col.name().to_string();
         let Some((head, tail)) =
@@ -832,8 +843,9 @@ fn nest_columns_by_slash(
             .push(renamed);
     }
     for (head, gcols) in groups {
-        let nested =
-            nest_columns_by_slash(gcols, height, None)?;
+        let nested = nest_columns_by_slash(
+            gcols, height, None,
+        )?;
         let struct_col =
             StructChunked::from_columns(
                 head.as_str().into(),

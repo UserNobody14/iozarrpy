@@ -116,7 +116,8 @@ impl<'a> LazyCompileCtx<'a> {
             .dim_len(&dim)
             .ok_or_else(|| unknown_dim(dim))?;
         self.resolver.resolve(
-            dim, self.meta, dim_len, vr, expansion,
+            dim, self.meta, dim_len, vr,
+            expansion,
         )
     }
 }

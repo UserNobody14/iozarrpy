@@ -15,7 +15,9 @@
 //!    each top-level child of [`ZarrMeta::root`], and returns the
 //!    [`GridJoinTree`] consumed by the reader.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{
+    BTreeMap, BTreeSet, HashMap,
+};
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -75,7 +77,10 @@ pub enum VarSet {
 enum BuilderState {
     NoConstraint,
     Empty,
-    Active { rects: Box<RectangleSet>, vars: VarSet },
+    Active {
+        rects: Box<RectangleSet>,
+        vars: VarSet,
+    },
 }
 
 // ============================================================================
@@ -118,14 +123,17 @@ impl<'a> GridJoinTreeBuilder<'a> {
                 s.insert(name);
                 self.state =
                     BuilderState::Active {
-                        rects: Box::new(self.full_set()),
+                        rects: Box::new(
+                            self.full_set(),
+                        ),
                         vars: VarSet::Specific(s),
                     };
             }
             BuilderState::Active {
                 vars, ..
             } => {
-                if let VarSet::Specific(s) = vars {
+                if let VarSet::Specific(s) = vars
+                {
                     s.insert(name);
                 }
             }
@@ -138,7 +146,9 @@ impl<'a> GridJoinTreeBuilder<'a> {
             BuilderState::NoConstraint => {
                 self.state =
                     BuilderState::Active {
-                        rects: Box::new(self.full_set()),
+                        rects: Box::new(
+                            self.full_set(),
+                        ),
                         vars: VarSet::All,
                     };
             }
@@ -168,10 +178,14 @@ impl<'a> GridJoinTreeBuilder<'a> {
             BuilderState::Empty,
         );
         self.state = match me {
-            BuilderState::Empty => BuilderState::Empty,
+            BuilderState::Empty => {
+                BuilderState::Empty
+            }
             BuilderState::NoConstraint => {
                 BuilderState::Active {
-                    rects: Box::new(other.clone()),
+                    rects: Box::new(
+                        other.clone(),
+                    ),
                     vars: VarSet::Specific(
                         BTreeSet::new(),
                     ),
@@ -195,7 +209,10 @@ impl<'a> GridJoinTreeBuilder<'a> {
     }
 
     /// Apply a fully-resolved [`ExprPlan`] to the builder.
-    pub fn apply_plan(&mut self, plan: &ExprPlan) {
+    pub fn apply_plan(
+        &mut self,
+        plan: &ExprPlan,
+    ) {
         match plan {
             ExprPlan::NoConstraint => {
                 self.add_all_vars();
@@ -206,7 +223,9 @@ impl<'a> GridJoinTreeBuilder<'a> {
             ExprPlan::Active(p) => {
                 apply_vars(self, &p.vars);
                 if !p.rects.dims.is_empty() {
-                    self.intersect_rects(&p.rects);
+                    self.intersect_rects(
+                        &p.rects,
+                    );
                 }
             }
         }
@@ -232,10 +251,12 @@ impl<'a> GridJoinTreeBuilder<'a> {
                     {
                         if !is_full_dim(
                             dim_ranges,
-                            self.universe.shape[i],
+                            self.universe.shape
+                                [i],
                         ) {
                             dim_set.insert(
-                                self.universe.dims[i],
+                                self.universe
+                                    .dims[i],
                             );
                         }
                     }
@@ -267,7 +288,9 @@ impl<'a> GridJoinTreeBuilder<'a> {
         } = self;
 
         let (rects, vars) = match state {
-            BuilderState::Empty => return Ok(None),
+            BuilderState::Empty => {
+                return Ok(None);
+            }
             BuilderState::NoConstraint => (
                 Box::new(RectangleSet::full(
                     universe.dims.clone(),
@@ -469,12 +492,17 @@ fn build_one_group(
         .inner_chunk_grid
         .as_ref()
         .map_or_else(
-            || Arc::clone(&arr_meta.outer_chunk_grid),
+            || {
+                Arc::clone(
+                    &arr_meta.outer_chunk_grid,
+                )
+            },
             Arc::clone,
         );
     let array_shape: std::sync::Arc<[u64]> =
         chunk_grid.array_shape().to_vec().into();
-    let chunk_shape: Vec<u64> = arr_meta.chunk_shape.to_vec();
+    let chunk_shape: Vec<u64> =
+        arr_meta.chunk_shape.to_vec();
 
     let mut seen: BTreeSet<Vec<u64>> =
         BTreeSet::new();
@@ -494,8 +522,12 @@ fn build_one_group(
             seen.insert(idx.to_vec());
         }
     }
-    let chunk_indices: Vec<std::sync::Arc<[u64]>> =
-        seen.into_iter().map(Into::into).collect();
+    let chunk_indices: Vec<
+        std::sync::Arc<[u64]>,
+    > = seen
+        .into_iter()
+        .map(Into::into)
+        .collect();
     let chunk_subsets: Vec<
         Option<std::sync::Arc<ChunkSubset>>,
     > = chunk_indices
@@ -562,14 +594,16 @@ fn compute_chunk_subset(
         .map(|((s, cs), a)| (s + cs).min(*a))
         .collect();
     let mut bbox_start: Vec<u64> =
-        std::iter::repeat_n(u64::MAX, ndim).collect();
+        std::iter::repeat_n(u64::MAX, ndim)
+            .collect();
     let mut bbox_end: Vec<u64> =
         std::iter::repeat_n(0u64, ndim).collect();
     for subset in subsets {
         let ranges = subset.to_ranges();
         for d in 0..ndim {
-            let inter_start =
-                ranges[d].start.max(chunk_start[d]);
+            let inter_start = ranges[d]
+                .start
+                .max(chunk_start[d]);
             let inter_end =
                 ranges[d].end.min(chunk_end[d]);
             if inter_start < inter_end {
@@ -580,12 +614,15 @@ fn compute_chunk_subset(
             }
         }
     }
-    let local_ranges: Vec<Range<u64>> = bbox_start
-        .iter()
-        .zip(bbox_end.iter())
-        .zip(chunk_start.iter())
-        .map(|((s, e), cs)| (s - cs)..(e - cs))
-        .collect();
+    let local_ranges: Vec<Range<u64>> =
+        bbox_start
+            .iter()
+            .zip(bbox_end.iter())
+            .zip(chunk_start.iter())
+            .map(|((s, e), cs)| {
+                (s - cs)..(e - cs)
+            })
+            .collect();
     let actual_chunk_shape: Vec<u64> = chunk_end
         .iter()
         .zip(chunk_start.iter())
@@ -655,10 +692,7 @@ pub fn compile_to_tree_sync<
     let resolver =
         MemoizingSyncResolver::new(backend);
     let plan = compile_expr_to_plan(
-        expr,
-        meta,
-        &universe,
-        &resolver,
+        expr, meta, &universe, &resolver,
     )?;
     let mut builder =
         GridJoinTreeBuilder::new(meta, &universe);
@@ -677,16 +711,14 @@ fn collect_resolution_keys(
 ) -> Vec<ResolveKey> {
     let collector = CollectingResolver::new();
     let _ = compile_expr_to_plan(
-        expr,
-        meta,
-        universe,
-        &collector,
+        expr, meta, universe, &collector,
     );
-    let unique: HashMap<ResolveKey, ()> = collector
-        .into_keys()
-        .into_iter()
-        .map(|k| (k, ()))
-        .collect();
+    let unique: HashMap<ResolveKey, ()> =
+        collector
+            .into_keys()
+            .into_iter()
+            .map(|k| (k, ()))
+            .collect();
     unique.into_keys().collect()
 }
 
@@ -712,12 +744,14 @@ pub async fn compile_to_tree_async<
         ResolveKey,
         Vec<Range<u64>>,
     )> = if keys.len() <= 1 {
-        let mut out = Vec::with_capacity(keys.len());
+        let mut out =
+            Vec::with_capacity(keys.len());
         for key in keys {
-            let dim_len = lookup_dim_len(
-                meta, &key.dim,
-            )
-            .ok_or_else(|| unknown_dim(key.dim))?;
+            let dim_len =
+                lookup_dim_len(meta, &key.dim)
+                    .ok_or_else(|| {
+                        unknown_dim(key.dim)
+                    })?;
             let r = resolve_value_range_async(
                 backend,
                 &key.dim,
@@ -750,7 +784,9 @@ pub async fn compile_to_tree_async<
                             key.expansion,
                         )
                         .await?;
-                    Ok::<_, BackendError>((key, r))
+                    Ok::<_, BackendError>((
+                        key, r,
+                    ))
                 },
             ),
         )
@@ -760,13 +796,11 @@ pub async fn compile_to_tree_async<
         ResolveKey,
         Vec<Range<u64>>,
     > = resolved.into_iter().collect();
-    let resolver = CachedResolver::from_table(table);
+    let resolver =
+        CachedResolver::from_table(table);
 
     let plan = compile_expr_to_plan(
-        expr,
-        meta,
-        &universe,
-        &resolver,
+        expr, meta, &universe, &resolver,
     )?;
     let mut builder =
         GridJoinTreeBuilder::new(meta, &universe);

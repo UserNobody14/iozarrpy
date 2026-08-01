@@ -502,11 +502,12 @@ pub fn build_var_column(
 
     let gathered = match keep {
         KeepMask::All(n) => {
-            let var_indices = var_indices_cartesian(
-                primary_chunk_shape,
-                &tbls,
-                var_data_len,
-            );
+            let var_indices =
+                var_indices_cartesian(
+                    primary_chunk_shape,
+                    &tbls,
+                    var_data_len,
+                );
             debug_assert_eq!(
                 var_indices.len(),
                 *n
@@ -561,8 +562,9 @@ fn build_dim_contrib_tables(
             tbls.push(Vec::new());
             continue;
         };
-        let chunk_size =
-            primary_chunk_shape[primary_d] as usize;
+        let chunk_size = primary_chunk_shape
+            [primary_d]
+            as usize;
         let stride = var_strides[var_d];
         let offset = var_offsets[var_d];
         // Preserve the previous semantics: clamp the local index to the var
@@ -635,7 +637,8 @@ fn var_indices_cartesian(
     let ndim = primary_chunk_shape.len();
     let total: usize = primary_chunk_shape
         .iter()
-        .product::<u64>() as usize;
+        .product::<u64>()
+        as usize;
     let cap = var_data_len.saturating_sub(1);
     let mut out: Vec<usize> =
         Vec::with_capacity(total);
@@ -693,11 +696,10 @@ fn var_indices_cartesian(
                 base -= tbl[local[d] as usize];
             }
             local[d] += 1;
-            if local[d]
-                < primary_chunk_shape[d]
-            {
+            if local[d] < primary_chunk_shape[d] {
                 if !tbl.is_empty() {
-                    base += tbl[local[d] as usize];
+                    base +=
+                        tbl[local[d] as usize];
                 }
                 break;
             }
@@ -962,7 +964,8 @@ mod tests {
             } else {
                 local
             };
-            var_idx += (var_local + var_offsets[var_d])
+            var_idx += (var_local
+                + var_offsets[var_d])
                 * var_strides[var_d];
         }
         var_idx
@@ -988,7 +991,8 @@ mod tests {
             compute_strides(primary_chunk_shape);
         let var_strides =
             compute_strides(var_chunk_shape);
-        let same_dims = p_dims.len() == v_dims.len()
+        let same_dims = p_dims.len()
+            == v_dims.len()
             && p_dims == v_dims;
 
         let tbls = build_dim_contrib_tables(
@@ -1003,7 +1007,8 @@ mod tests {
 
         let chunk_len: usize = primary_chunk_shape
             .iter()
-            .product::<u64>() as usize;
+            .product::<u64>()
+            as usize;
 
         // KeepMask::All path uses cartesian enumeration.
         let cartesian = var_indices_cartesian(
@@ -1014,18 +1019,19 @@ mod tests {
         assert_eq!(cartesian.len(), chunk_len);
         let cap = var_data_len.saturating_sub(1);
         for row in 0..chunk_len {
-            let expected = (legacy_compute_var_idx(
-                row,
-                &p_dims,
-                primary_chunk_shape,
-                &primary_strides,
-                &v_dims,
-                var_chunk_shape,
-                var_offsets,
-                &var_strides,
-                same_dims,
-            ) as usize)
-                .min(cap);
+            let expected =
+                (legacy_compute_var_idx(
+                    row,
+                    &p_dims,
+                    primary_chunk_shape,
+                    &primary_strides,
+                    &v_dims,
+                    var_chunk_shape,
+                    var_offsets,
+                    &var_strides,
+                    same_dims,
+                ) as usize)
+                    .min(cap);
             assert_eq!(
                 cartesian[row], expected,
                 "cartesian mismatch row={row} primary={primary_chunk_shape:?} var={var_chunk_shape:?} offsets={var_offsets:?}"
@@ -1033,7 +1039,8 @@ mod tests {
         }
 
         // Sparse path uses per-row decoding via tables.
-        let sparse_rows: Vec<usize> = (0..chunk_len)
+        let sparse_rows: Vec<usize> = (0
+            ..chunk_len)
             .filter(|i| i % 3 == 0)
             .collect();
         for &row in &sparse_rows {
@@ -1044,18 +1051,19 @@ mod tests {
                 &tbls,
             )
             .min(cap);
-            let expected = (legacy_compute_var_idx(
-                row,
-                &p_dims,
-                primary_chunk_shape,
-                &primary_strides,
-                &v_dims,
-                var_chunk_shape,
-                var_offsets,
-                &var_strides,
-                same_dims,
-            ) as usize)
-                .min(cap);
+            let expected =
+                (legacy_compute_var_idx(
+                    row,
+                    &p_dims,
+                    primary_chunk_shape,
+                    &primary_strides,
+                    &v_dims,
+                    var_chunk_shape,
+                    var_offsets,
+                    &var_strides,
+                    same_dims,
+                ) as usize)
+                    .min(cap);
             assert_eq!(
                 got, expected,
                 "sparse mismatch row={row}"
@@ -1181,15 +1189,15 @@ mod tests {
             compute_strides(primary_chunk_shape);
         let var_len: usize = var_chunk_shape
             .iter()
-            .product::<u64>() as usize;
+            .product::<u64>()
+            as usize;
         let raw: Vec<f64> = (0..var_len)
             .map(|i| i as f64 * 0.5 + 7.0)
             .collect();
-        let data: Arc<ColumnData> = Arc::new(
-            ColumnData::F64(PrimitiveArray::from_vec(
-                raw,
-            )),
-        );
+        let data: Arc<ColumnData> =
+            Arc::new(ColumnData::F64(
+                PrimitiveArray::from_vec(raw),
+            ));
         let name = "v".istr();
         let col = build_var_column(
             &name,
@@ -1213,13 +1221,17 @@ mod tests {
             &primary_strides,
             &keep,
         );
-        let series = col.as_series().unwrap().clone();
+        let series =
+            col.as_series().unwrap().clone();
         let chunked = series
             .f64()
             .expect("expected f64 series");
         let actual: Vec<f64> =
             chunked.into_no_null_iter().collect();
-        assert_eq!(actual, expected, "build_var_column mismatch for primary={primary_dims_s:?} var={var_dims_s:?}");
+        assert_eq!(
+            actual, expected,
+            "build_var_column mismatch for primary={primary_dims_s:?} var={var_dims_s:?}"
+        );
     }
 
     #[test]
@@ -1236,8 +1248,9 @@ mod tests {
 
     #[test]
     fn build_var_column_diff_dims_sparse() {
-        let idx: Vec<usize> =
-            (0..1000).filter(|i| i % 7 == 0).collect();
+        let idx: Vec<usize> = (0..1000)
+            .filter(|i| i % 7 == 0)
+            .collect();
         check_build_var_column_diff(
             &["x", "y", "time"],
             &[10, 10, 10],

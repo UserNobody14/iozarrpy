@@ -71,7 +71,9 @@ where
     }
 }
 
-impl<T: IntoIStr + Clone> IntoManyIstrs<T> for &[T] {
+impl<T: IntoIStr + Clone> IntoManyIstrs<T>
+    for &[T]
+{
     #[inline]
     fn into_istrs(self) -> Vec<IStr> {
         self.iter()
@@ -98,7 +100,9 @@ impl<T: FromIStr, I: Borrow<IStr>, const N: usize>
     }
 }
 
-impl<T: IntoIStr + Clone> IntoManyIstrs<T> for &Arc<[T]> {
+impl<T: IntoIStr + Clone> IntoManyIstrs<T>
+    for &Arc<[T]>
+{
     #[inline]
     fn into_istrs(self) -> Vec<IStr> {
         self.iter()

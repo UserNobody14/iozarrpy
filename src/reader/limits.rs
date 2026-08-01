@@ -24,11 +24,14 @@ pub fn checked_chunk_len(
                 max: usize::MAX,
             }
         )?;
-        acc = acc.checked_mul(d_usize).ok_or_else(
-            || BackendError::other(
-                "chunk size overflow".to_string(),
-            ),
-        )?;
+        acc = acc
+            .checked_mul(d_usize)
+            .ok_or_else(|| {
+                BackendError::other(
+                    "chunk size overflow"
+                        .to_string(),
+                )
+            })?;
         if acc > max_chunk_elems() {
             return Err(BackendError::other(
                 "refusing to allocate an extremely large chunk; set RAINBEAR_MAX_CHUNK_ELEMS to override".to_string(),

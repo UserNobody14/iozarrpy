@@ -127,7 +127,9 @@ impl ZarrIteratorInner {
 
         let batches = tree
             .as_ref()
-            .map_or_else(Vec::new, |t| build_batches(t, self.batch_size));
+            .map_or_else(Vec::new, |t| {
+                build_batches(t, self.batch_size)
+            });
         // Always emit a single empty-schema batch when there's no actual data
         // to scan (literal-false predicate or pushdown trimmed every grid).
         // Polars needs at least one batch with the correct columns to resolve
@@ -226,7 +228,8 @@ impl ZarrIteratorInner {
                 continue;
             }
 
-            let backend = Arc::clone(&self.backend);
+            let backend =
+                Arc::clone(&self.backend);
             let expanded_with_columns = state
                 .expanded_with_columns
                 .clone();

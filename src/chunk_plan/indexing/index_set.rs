@@ -54,7 +54,9 @@ impl RectangleSet {
         Self {
             dims,
             shape,
-            rects: Arc::from([] as [HyperRectangle; 0]),
+            rects: Arc::from(
+                [] as [HyperRectangle; 0]
+            ),
         }
     }
 

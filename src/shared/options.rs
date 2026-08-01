@@ -58,7 +58,8 @@ impl Default for BackendOptions {
             // of 30 caused chunks to be re-decoded on every repeat call
             // even for modest variable counts.
             var_cache_max_entries: 4096,
-            assume_sorted: AssumeSortedDims::default(),
+            assume_sorted:
+                AssumeSortedDims::default(),
         }
     }
 }

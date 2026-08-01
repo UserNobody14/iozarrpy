@@ -51,9 +51,11 @@ fn parse_assume_sorted(
         return match s {
             "all" => Ok(AssumeSortedDims::All),
             "none" => Ok(AssumeSortedDims::None),
-            other => Err(PyTypeError::new_err(format!(
-                "assume_sorted: expected 'all', 'none', or a list of dim names, got {other:?}",
-            ))),
+            other => Err(PyTypeError::new_err(
+                format!(
+                    "assume_sorted: expected 'all', 'none', or a list of dim names, got {other:?}",
+                ),
+            )),
         };
     }
     let mut set = HashSet::new();
@@ -61,7 +63,8 @@ fn parse_assume_sorted(
         obj.cast::<PyList>()
     {
         list.iter().collect::<Vec<_>>()
-    } else if let Ok(tup) = obj.cast::<PyTuple>() {
+    } else if let Ok(tup) = obj.cast::<PyTuple>()
+    {
         tup.iter().collect::<Vec<_>>()
     } else {
         return Err(PyTypeError::new_err(
@@ -118,12 +121,14 @@ impl PyBackendOptions {
         py: Python<'py>,
     ) -> PyResult<Bound<'py, PyAny>> {
         match &self.inner.assume_sorted {
-            AssumeSortedDims::None => Ok(
-                PyString::new(py, "none").into_any()
-            ),
-            AssumeSortedDims::All => Ok(
-                PyString::new(py, "all").into_any()
-            ),
+            AssumeSortedDims::None => {
+                Ok(PyString::new(py, "none")
+                    .into_any())
+            }
+            AssumeSortedDims::All => {
+                Ok(PyString::new(py, "all")
+                    .into_any())
+            }
             AssumeSortedDims::Only(set) => {
                 let names: Vec<&str> = set
                     .iter()
@@ -138,22 +143,23 @@ impl PyBackendOptions {
     }
 
     fn __repr__(&self) -> String {
-        let assume = match &self.inner.assume_sorted {
-            AssumeSortedDims::None => {
-                "none".to_string()
-            }
-            AssumeSortedDims::All => {
-                "all".to_string()
-            }
-            AssumeSortedDims::Only(set) => {
-                let mut names: Vec<&str> = set
-                    .iter()
-                    .map(|s| s.as_ref())
-                    .collect();
-                names.sort_unstable();
-                format!("{names:?}")
-            }
-        };
+        let assume =
+            match &self.inner.assume_sorted {
+                AssumeSortedDims::None => {
+                    "none".to_string()
+                }
+                AssumeSortedDims::All => {
+                    "all".to_string()
+                }
+                AssumeSortedDims::Only(set) => {
+                    let mut names: Vec<&str> =
+                        set.iter()
+                            .map(|s| s.as_ref())
+                            .collect();
+                    names.sort_unstable();
+                    format!("{names:?}")
+                }
+            };
         format!(
             "BackendOptions(coord_cache_max_entries={}, var_cache_max_entries={}, assume_sorted={})",
             self.inner.coord_cache_max_entries,

@@ -129,7 +129,9 @@ pub fn compile_expr(
                 Ok(result)
             } else {
                 Ok(result.add_vars(
-                    &VarSet::from_vec(filter_refs),
+                    &VarSet::from_vec(
+                        filter_refs,
+                    ),
                 ))
             }
         }

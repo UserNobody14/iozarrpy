@@ -1,6 +1,7 @@
 use zarrs::array::{
     Array, AsyncArrayShardedReadableExt,
-    AsyncArrayShardedReadableExtCache, CodecOptions,
+    AsyncArrayShardedReadableExtCache,
+    CodecOptions,
 };
 
 use crate::errors::BackendResult;

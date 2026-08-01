@@ -130,9 +130,8 @@ fn buffer_kind(
         return BufferKind::I64;
     }
     match sample {
-        ColumnData::F32(_) | ColumnData::F64(_) => {
-            BufferKind::F64
-        }
+        ColumnData::F32(_)
+        | ColumnData::F64(_) => BufferKind::F64,
         _ => BufferKind::I64,
     }
 }
@@ -167,7 +166,8 @@ fn build_buffer(
                     chunk.as_f32_values()
                 {
                     out.extend(
-                        v.iter().map(|&x| x as f64),
+                        v.iter()
+                            .map(|&x| x as f64),
                     );
                 } else {
                     // Mixed-dtype chunks
@@ -210,7 +210,8 @@ fn decode_chunk_to_i64(
 ) {
     match te {
         Some(enc) => {
-            if let Some(v) = chunk.as_f64_values() {
+            if let Some(v) = chunk.as_f64_values()
+            {
                 // F64 raw + time encoding: decode each
                 // value to i64 ns; drop NaN/non-finite.
                 for &x in v {
@@ -222,7 +223,8 @@ fn decode_chunk_to_i64(
                 }
                 return;
             }
-            if let Some(v) = chunk.as_f32_values() {
+            if let Some(v) = chunk.as_f32_values()
+            {
                 for &x in v {
                     if let Some(ns) =
                         enc.decode_f64(x as f64)
@@ -232,15 +234,18 @@ fn decode_chunk_to_i64(
                 }
                 return;
             }
-            if let Some(v) = chunk.as_i64_values() {
+            if let Some(v) = chunk.as_i64_values()
+            {
                 out.extend(
-                    v.iter().map(|&x| enc.decode(x)),
+                    v.iter()
+                        .map(|&x| enc.decode(x)),
                 );
                 return;
             }
         }
         None => {
-            if let Some(v) = chunk.as_i64_values() {
+            if let Some(v) = chunk.as_i64_values()
+            {
                 out.extend_from_slice(v);
                 return;
             }
@@ -250,10 +255,9 @@ fn decode_chunk_to_i64(
     // I64 buffer): cast each element via get_i64 then optionally
     // apply time encoding.
     for i in 0..chunk.len() {
-        let raw =
-            chunk.get_i64(i).unwrap_or(0);
-        let val = te
-            .map_or(raw, |enc| enc.decode(raw));
+        let raw = chunk.get_i64(i).unwrap_or(0);
+        let val =
+            te.map_or(raw, |enc| enc.decode(raw));
         out.push(val);
     }
 }
@@ -359,10 +363,12 @@ fn detect_direction<T: PartialOrd>(
         return Some(dir);
     }
     let monotonic = match dir {
-        Dir::Ascending => coords
-            .is_sorted_by(|a, b| a <= b),
-        Dir::Descending => coords
-            .is_sorted_by(|a, b| a >= b),
+        Dir::Ascending => {
+            coords.is_sorted_by(|a, b| a <= b)
+        }
+        Dir::Descending => {
+            coords.is_sorted_by(|a, b| a >= b)
+        }
     };
     monotonic.then_some(dir)
 }
@@ -482,8 +488,12 @@ fn bound_map<T, F: Fn(&CoordScalar) -> T>(
     f: F,
 ) -> Bound<T> {
     match b {
-        Bound::Included(s) => Bound::Included(f(s)),
-        Bound::Excluded(s) => Bound::Excluded(f(s)),
+        Bound::Included(s) => {
+            Bound::Included(f(s))
+        }
+        Bound::Excluded(s) => {
+            Bound::Excluded(f(s))
+        }
         Bound::Unbounded => Bound::Unbounded,
     }
 }
@@ -598,14 +608,10 @@ fn resolve_via_buffer(
                     dim, dim_len, expansion,
                 );
             };
-            let start = bound_map(
-                &vr.0,
-                coord_to_f64,
-            );
-            let end = bound_map(
-                &vr.1,
-                coord_to_f64,
-            );
+            let start =
+                bound_map(&vr.0, coord_to_f64);
+            let end =
+                bound_map(&vr.1, coord_to_f64);
             resolve_against_sorted(
                 coords, &start, &end, dir,
             )
@@ -619,14 +625,10 @@ fn resolve_via_buffer(
                     dim, dim_len, expansion,
                 );
             };
-            let start = bound_map(
-                &vr.0,
-                coord_to_i64,
-            );
-            let end = bound_map(
-                &vr.1,
-                coord_to_i64,
-            );
+            let start =
+                bound_map(&vr.0, coord_to_i64);
+            let end =
+                bound_map(&vr.1, coord_to_i64);
             resolve_against_sorted(
                 coords, &start, &end, dir,
             )
@@ -747,13 +749,10 @@ pub(crate) async fn resolve_value_range_async<
 /// have hundreds of distinct keys) and the per-lookup `vr.clone()` is
 /// dominated by the hash itself.
 pub(crate) struct CachedResolver {
-    table:
-        HashMap<ResolveKey, Vec<Range<u64>>>,
+    table: HashMap<ResolveKey, Vec<Range<u64>>>,
 }
 
-#[derive(
-    Debug, Clone, PartialEq, Eq, Hash,
-)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct ResolveKey {
     pub(crate) dim: IStr,
     pub(crate) vr: ValueRangePresent,
@@ -762,7 +761,10 @@ pub(crate) struct ResolveKey {
 
 impl CachedResolver {
     pub(crate) fn from_table(
-        table: HashMap<ResolveKey, Vec<Range<u64>>>,
+        table: HashMap<
+            ResolveKey,
+            Vec<Range<u64>>,
+        >,
     ) -> Self {
         Self { table }
     }
@@ -909,12 +911,16 @@ mod tests {
         end: Bound<i64>,
     ) -> ValueRangePresent {
         let map = |b: Bound<i64>| match b {
-            Bound::Included(v) => Bound::Included(
-                CoordScalar::I64(v),
-            ),
-            Bound::Excluded(v) => Bound::Excluded(
-                CoordScalar::I64(v),
-            ),
+            Bound::Included(v) => {
+                Bound::Included(CoordScalar::I64(
+                    v,
+                ))
+            }
+            Bound::Excluded(v) => {
+                Bound::Excluded(CoordScalar::I64(
+                    v,
+                ))
+            }
             Bound::Unbounded => Bound::Unbounded,
         };
         ValueRangePresent(map(start), map(end))
@@ -925,8 +931,7 @@ mod tests {
         v: &ValueRangePresent,
         dir: Dir,
     ) -> Range<u64> {
-        let start =
-            bound_map(&v.0, coord_to_i64);
+        let start = bound_map(&v.0, coord_to_i64);
         let end = bound_map(&v.1, coord_to_i64);
         resolve_against_sorted(
             coords, &start, &end, dir,
@@ -995,12 +1000,15 @@ mod tests {
 
     #[test]
     fn ascending_target_off_grid_f64() {
-        let coords: Vec<f64> = (0..11)
-            .map(|i| i as f64)
-            .collect();
+        let coords: Vec<f64> =
+            (0..11).map(|i| i as f64).collect();
         let v = ValueRangePresent(
-            Bound::Included(CoordScalar::F64(3.5)),
-            Bound::Included(CoordScalar::F64(7.5)),
+            Bound::Included(CoordScalar::F64(
+                3.5,
+            )),
+            Bound::Included(CoordScalar::F64(
+                7.5,
+            )),
         );
         let start = bound_map(&v.0, coord_to_f64);
         let end = bound_map(&v.1, coord_to_f64);
@@ -1054,17 +1062,15 @@ mod tests {
 
     #[test]
     fn detect_direction_assumed_skips_check() {
-        let coords =
-            vec![0i64, 5, 2, 9, 10];
-        let dir =
-            detect_direction(&coords, true).unwrap();
+        let coords = vec![0i64, 5, 2, 9, 10];
+        let dir = detect_direction(&coords, true)
+            .unwrap();
         assert_eq!(dir, Dir::Ascending);
     }
 
     #[test]
     fn detect_direction_rejects_non_monotonic() {
-        let coords =
-            vec![0i64, 5, 2, 9, 10];
+        let coords = vec![0i64, 5, 2, 9, 10];
         assert!(
             detect_direction(&coords, false)
                 .is_none()
@@ -1108,7 +1114,8 @@ mod tests {
     }
 
     #[test]
-    fn ghost_ranges_small_dimension_both_ghosts() {
+    fn ghost_ranges_small_dimension_both_ghosts()
+    {
         let ranges =
             wrapping_ghost_ranges(2..4, 5);
         assert_eq!(

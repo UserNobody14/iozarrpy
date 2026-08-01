@@ -17,7 +17,9 @@ use crate::chunk_plan::indexing::types::{
 };
 use crate::chunk_plan::prelude::*;
 use crate::errors::BackendError;
-use crate::shared::{IStr, IntoIStr, IntoManyIstrs};
+use crate::shared::{
+    IStr, IntoIStr, IntoManyIstrs,
+};
 use crate::try_extract;
 
 type LazyResult = Result<ExprPlan, BackendError>;
@@ -25,18 +27,24 @@ type LazyResult = Result<ExprPlan, BackendError>;
 /// Resolve a per-row constraint map into a single rectangle set (the AND of
 /// per-dim resolved index ranges).
 fn resolve_row_constraints(
-    constraints: &[(IStr, ValueRangePresent, Expansion)],
+    constraints: &[(
+        IStr,
+        ValueRangePresent,
+        Expansion,
+    )],
     ctx: &LazyCompileCtx<'_>,
 ) -> Result<RectangleSet, BackendError> {
     let mut acc: Option<RectangleSet> = None;
     for (dim, vr, exp) in constraints {
-        let ranges = ctx.resolve(*dim, vr, *exp)?;
-        let one = RectangleSet::from_dim_constraint(
-            ctx.universe.dims.clone(),
-            ctx.universe.shape.clone(),
-            *dim,
-            &ranges,
-        );
+        let ranges =
+            ctx.resolve(*dim, vr, *exp)?;
+        let one =
+            RectangleSet::from_dim_constraint(
+                ctx.universe.dims.clone(),
+                ctx.universe.shape.clone(),
+                *dim,
+                &ranges,
+            );
         acc = Some(match acc {
             Some(prev) => prev.intersect(&one),
             None => one,
@@ -72,7 +80,8 @@ pub(super) fn interpolate_selection_nd_lazy(
 
     for s in target_fields.iter() {
         let name = s.name().as_str().istr();
-        if !ctx.dims().iter().any(|d| d == &name) {
+        if !ctx.dims().iter().any(|d| d == &name)
+        {
             continue;
         }
         try_extract!(let Some(values) = series_values_scalar_lazy(s));
@@ -98,7 +107,8 @@ pub(super) fn interpolate_selection_nd_lazy(
             ValueRangePresent,
             Expansion,
         )> = Vec::with_capacity(dim_values.len());
-        for (dim_name, values) in dim_values.iter()
+        for (dim_name, values) in
+            dim_values.iter()
         {
             let value = values[i].clone();
             let vr = ValueRangePresent::from_equal_case(value);
@@ -117,8 +127,7 @@ pub(super) fn interpolate_selection_nd_lazy(
         )?);
     }
 
-    let combined =
-        union_rows(row_rects, ctx);
+    let combined = union_rows(row_rects, ctx);
 
     let (retrieve_vars, filter_plan) =
         match source_values {
@@ -252,7 +261,9 @@ pub(super) fn interpolate_selection_geospatial_lazy(
     ctx: &mut LazyCompileCtx<'_>,
 ) -> LazyResult {
     let coord_names_ordered =
-        extract_coord_names_ordered(source_coords);
+        extract_coord_names_ordered(
+            source_coords,
+        );
 
     let coord_names: Vec<IStr> =
         match coord_names_ordered.as_deref() {
@@ -280,7 +291,8 @@ pub(super) fn interpolate_selection_geospatial_lazy(
 
     for s in target_fields.iter() {
         let name = s.name().as_str().istr();
-        if !ctx.dims().iter().any(|d| d == &name) {
+        if !ctx.dims().iter().any(|d| d == &name)
+        {
             continue;
         }
         try_extract!(let Some(values) = series_values_scalar_lazy(s));
@@ -306,7 +318,8 @@ pub(super) fn interpolate_selection_geospatial_lazy(
             ValueRangePresent,
             Expansion,
         )> = Vec::with_capacity(dim_values.len());
-        for (dim_name, values) in dim_values.iter()
+        for (dim_name, values) in
+            dim_values.iter()
         {
             let value = values[i].clone();
             let vr = ValueRangePresent::from_equal_case(value);

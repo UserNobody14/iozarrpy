@@ -37,11 +37,8 @@ pub(super) fn compile_value_range_to_plan(
 ) -> LazyResult {
     let dim = col.istr();
     ensure_some!(ctx.dim_index(dim));
-    let ranges = ctx.resolve(
-        dim,
-        vr,
-        Expansion::Exact,
-    )?;
+    let ranges =
+        ctx.resolve(dim, vr, Expansion::Exact)?;
     let rects = RectangleSet::from_dim_constraint(
         ctx.universe.dims.clone(),
         ctx.universe.shape.clone(),

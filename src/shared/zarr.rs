@@ -268,7 +268,9 @@ impl ChunkedDataBackendAsync
 
         let opened: Arc<OpenedArrayAsync> =
             match existing {
-                Some(opened) => Arc::clone(&opened),
+                Some(opened) => {
+                    Arc::clone(&opened)
+                }
                 None => {
                     // Get array metadata from cache if available
                     let array_metadata = {
@@ -306,7 +308,9 @@ impl ChunkedDataBackendAsync
                         .await
                         .insert(
                             *var,
-                            Arc::clone(&opened_inner),
+                            Arc::clone(
+                                &opened_inner,
+                            ),
                         );
                     opened_inner
                 }

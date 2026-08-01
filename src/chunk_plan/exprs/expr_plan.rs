@@ -112,7 +112,9 @@ impl VarSet {
                     b.iter().copied().collect();
                 let v: SmallVec<[IStr; 8]> = a
                     .iter()
-                    .filter(|v| !b_set.contains(v))
+                    .filter(|v| {
+                        !b_set.contains(v)
+                    })
                     .copied()
                     .collect();
                 Self::Specific(v)
@@ -177,7 +179,9 @@ impl ExprPlan {
         vars: VarSet,
         rects: RectangleSet,
     ) -> Self {
-        if rects.is_empty() && !rects.dims.is_empty() {
+        if rects.is_empty()
+            && !rects.dims.is_empty()
+        {
             Self::Empty
         } else {
             Self::boxed_active(vars, rects)
@@ -219,10 +223,12 @@ impl ExprPlan {
                 Self::NoConstraint
             }
             Self::Empty => Self::Empty,
-            Self::Active(p) => Self::boxed_active(
-                p.vars.union(extra),
-                p.rects.clone(),
-            ),
+            Self::Active(p) => {
+                Self::boxed_active(
+                    p.vars.union(extra),
+                    p.rects.clone(),
+                )
+            }
         }
     }
 
@@ -237,16 +243,17 @@ impl ExprPlan {
             }
             (Self::Empty, _)
             | (_, Self::Empty) => Self::Empty,
-            (Self::Active(a), Self::Active(b)) => {
-                Self::active(
-                    a.vars.intersect(&b.vars),
-                    combine_rects(
-                        &a.rects,
-                        &b.rects,
-                        |a, b| a.intersect(b),
-                    ),
-                )
-            }
+            (
+                Self::Active(a),
+                Self::Active(b),
+            ) => Self::active(
+                a.vars.intersect(&b.vars),
+                combine_rects(
+                    &a.rects,
+                    &b.rects,
+                    |a, b| a.intersect(b),
+                ),
+            ),
         }
     }
 
@@ -261,16 +268,17 @@ impl ExprPlan {
             }
             (Self::Empty, x)
             | (x, Self::Empty) => x.clone(),
-            (Self::Active(a), Self::Active(b)) => {
-                Self::boxed_active(
-                    a.vars.union(&b.vars),
-                    combine_rects(
-                        &a.rects,
-                        &b.rects,
-                        |a, b| a.union(b),
-                    ),
-                )
-            }
+            (
+                Self::Active(a),
+                Self::Active(b),
+            ) => Self::boxed_active(
+                a.vars.union(&b.vars),
+                combine_rects(
+                    &a.rects,
+                    &b.rects,
+                    |a, b| a.union(b),
+                ),
+            ),
         }
     }
 
@@ -281,11 +289,16 @@ impl ExprPlan {
         match (self, other) {
             (Self::Empty, _) => Self::Empty,
             (x, Self::Empty) => x.clone(),
-            (_, Self::NoConstraint) => Self::Empty,
+            (_, Self::NoConstraint) => {
+                Self::Empty
+            }
             (Self::NoConstraint, _) => {
                 Self::NoConstraint
             }
-            (Self::Active(a), Self::Active(b)) => {
+            (
+                Self::Active(a),
+                Self::Active(b),
+            ) => {
                 // Both vars-only: the difference is purely about variables.
                 if a.rects.dims.is_empty()
                     && b.rects.dims.is_empty()
@@ -367,8 +380,10 @@ impl PartialEq for ExprPlan {
     fn eq(&self, other: &Self) -> bool {
         matches!(
             (self, other),
-            (Self::NoConstraint, Self::NoConstraint)
-                | (Self::Empty, Self::Empty)
+            (
+                Self::NoConstraint,
+                Self::NoConstraint
+            ) | (Self::Empty, Self::Empty)
         )
     }
 }

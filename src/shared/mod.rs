@@ -6,8 +6,8 @@ mod structural;
 mod traits;
 mod zarr;
 
-pub use options::BackendOptions;
 pub(crate) use options::AssumeSortedDims;
+pub use options::BackendOptions;
 pub(crate) use parallel::MaybeParIter;
 
 #[cfg(feature = "bench")]
