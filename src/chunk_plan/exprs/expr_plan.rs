@@ -112,7 +112,9 @@ impl VarSet {
                     b.iter().copied().collect();
                 let v: SmallVec<[IStr; 8]> = a
                     .iter()
-                    .filter(|v| !b_set.contains(v))
+                    .filter(|v| {
+                        !b_set.contains(v)
+                    })
                     .copied()
                     .collect();
                 Self::Specific(v)

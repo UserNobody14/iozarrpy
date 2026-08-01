@@ -796,9 +796,9 @@ fn build_one_group(
     let chunk_grid: Arc<ChunkGrid> =
         match &arr_meta.inner_chunk_grid {
             Some(g) => Arc::clone(g),
-            None => {
-                Arc::clone(&arr_meta.outer_chunk_grid)
-            }
+            None => Arc::clone(
+                &arr_meta.outer_chunk_grid,
+            ),
         };
     let array_shape: std::sync::Arc<[u64]> =
         chunk_grid.array_shape().to_vec().into();
@@ -826,8 +826,12 @@ fn build_one_group(
             seen.insert(idx.to_vec());
         }
     }
-    let chunk_indices: Vec<std::sync::Arc<[u64]>> =
-        seen.into_iter().map(Into::into).collect();
+    let chunk_indices: Vec<
+        std::sync::Arc<[u64]>,
+    > = seen
+        .into_iter()
+        .map(Into::into)
+        .collect();
     let chunk_subsets: Vec<
         Option<std::sync::Arc<ChunkSubset>>,
     > = chunk_indices
@@ -903,9 +907,13 @@ fn compute_chunk_subset(
     // Bounding box of the union of subset∩chunk intervals, per dim.
     // Initialize with inverse bounds so first intersection updates them.
     let mut bbox_start: Vec<u64> =
-        std::iter::repeat(u64::MAX).take(ndim).collect();
+        std::iter::repeat(u64::MAX)
+            .take(ndim)
+            .collect();
     let mut bbox_end: Vec<u64> =
-        std::iter::repeat(0u64).take(ndim).collect();
+        std::iter::repeat(0u64)
+            .take(ndim)
+            .collect();
 
     for subset in subsets {
         let ranges = subset.to_ranges();

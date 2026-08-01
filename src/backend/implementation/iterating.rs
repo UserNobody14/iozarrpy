@@ -104,8 +104,13 @@ impl ZarrIteratorInner {
     ) -> Result<(), PyErr> {
         let meta = self.backend.metadata()?;
         let with_set: Option<BTreeSet<IStr>> =
-            if let Some(cols) = &self.with_columns {
-                Some(cols.iter().copied().collect())
+            if let Some(cols) = &self.with_columns
+            {
+                Some(
+                    cols.iter()
+                        .copied()
+                        .collect(),
+                )
             } else {
                 Some(
                     meta.tidy_column_order(None)
@@ -234,7 +239,8 @@ impl ZarrIteratorInner {
                 continue;
             }
 
-            let backend = Arc::clone(&self.backend);
+            let backend =
+                Arc::clone(&self.backend);
             let expanded_with_columns = state
                 .expanded_with_columns
                 .clone();

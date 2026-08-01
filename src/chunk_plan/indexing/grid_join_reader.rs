@@ -829,8 +829,7 @@ fn wrap_columns_into_group_struct(
     }
 
     let nested = nest_columns_recursively(
-        grouped,
-        height,
+        grouped, height,
     )?;
 
     let struct_col = StructChunked::from_columns(
@@ -872,7 +871,8 @@ fn nest_columns_recursively(
         if let Some((head, tail)) =
             full_name.split_once('/')
         {
-            let renamed = col.with_name(tail.into());
+            let renamed =
+                col.with_name(tail.into());
             groups
                 .entry(head.to_string())
                 .or_default()
@@ -950,9 +950,13 @@ pub fn flatten_reads(
             out.push(ChunkRead {
                 leaf_idx: slab.leaf_idx,
                 sig: Arc::clone(&g.sig),
-                array_shape: Arc::clone(&g.array_shape),
+                array_shape: Arc::clone(
+                    &g.array_shape,
+                ),
                 vars: Arc::clone(&g.vars),
-                idx: Arc::clone(&g.chunk_indices[slot]),
+                idx: Arc::clone(
+                    &g.chunk_indices[slot],
+                ),
                 subset: g.chunk_subsets[slot]
                     .as_ref()
                     .map(Arc::clone),

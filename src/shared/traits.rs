@@ -110,7 +110,10 @@ pub trait ChunkedDataBackendSync:
     /// Whether the caller has asserted that the coordinate array for `dim`
     /// is monotonic. Lets the planner skip the sample-based monotonicity
     /// probe and only sample the endpoints to recover sort direction.
-    fn assume_sorted_dim(&self, _dim: &IStr) -> bool {
+    fn assume_sorted_dim(
+        &self,
+        _dim: &IStr,
+    ) -> bool {
         false
     }
 }
@@ -139,7 +142,10 @@ pub trait ChunkedDataBackendAsync:
 
     /// Async counterpart of
     /// [`ChunkedDataBackendSync::assume_sorted_dim`].
-    fn assume_sorted_dim(&self, _dim: &IStr) -> bool {
+    fn assume_sorted_dim(
+        &self,
+        _dim: &IStr,
+    ) -> bool {
         false
     }
 }

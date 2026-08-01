@@ -230,7 +230,8 @@ impl IcechunkIterator {
                 continue;
             }
 
-            let backend = Arc::clone(&self.backend);
+            let backend =
+                Arc::clone(&self.backend);
             let expanded_with_columns = state
                 .expanded_with_columns
                 .clone();

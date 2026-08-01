@@ -210,7 +210,8 @@ pub fn chunk_to_df_from_grid_with_backend<
     let keep = Arc::new(keep);
     let strides = Arc::new(strides);
     let origin = Arc::new(origin);
-    let chunk_shape = Arc::new(chunk_shape.to_vec());
+    let chunk_shape =
+        Arc::new(chunk_shape.to_vec());
     let dims = Arc::new(dims.to_vec());
     let meta = Arc::new(meta);
 
@@ -299,7 +300,9 @@ pub fn chunk_to_df_from_grid_with_backend<
         })?;
 
     // Combine columns in order: dims first, then vars
-    let mut cols = Vec::with_capacity(coord_cols.len() + var_cols.len());
+    let mut cols = Vec::with_capacity(
+        coord_cols.len() + var_cols.len(),
+    );
     cols.extend(coord_cols);
     cols.extend(var_cols);
 
