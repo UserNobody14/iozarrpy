@@ -2092,7 +2092,7 @@ wheels = [
 
 [[package]]
 name = "rainbear"
-version = "2.8.2"
+version = "3.0.0"
 source = { editable = "." }
 dependencies = [
     { name = "interpolars" },
