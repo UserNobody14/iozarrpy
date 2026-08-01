@@ -1,9 +1,14 @@
 mod compile;
+mod intern;
+mod options;
+mod parallel;
 mod stats;
 mod structural;
 mod traits;
 mod zarr;
 
+pub use options::BackendOptions;
+pub(crate) use parallel::MaybeParIter;
 pub(crate) use stats::PlannerStats;
 
 // Re-export commonly used traits
@@ -12,10 +17,10 @@ pub use traits::{
     ChunkedDataBackendSync,
     ChunkedDataCacheAsync,
     EvictableChunkCacheAsync,
-    EvictableChunkCacheSync, HasAsyncStore,
+    EvictableChunkCacheSync,
     HasMetadataBackendAsync,
     HasMetadataBackendCacheAsync,
-    HasMetadataBackendSync, HasStore,
+    HasMetadataBackendSync,
 };
 
 // Re-export compile traits
@@ -34,7 +39,11 @@ pub(crate) use zarr::{
 
 // Re-export structural traits
 pub(crate) use structural::{
-    combine_chunk_dataframes,
+    diagonal_concat_batches,
     expand_projection_to_flat_paths,
     restructure_to_structs,
 };
+
+// `pub` (not `pub(crate)`) so `bench_internals` can re-export these; the `shared`
+// module itself is private, so they stay crate-internal otherwise.
+pub use intern::*;

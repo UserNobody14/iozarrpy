@@ -1,7 +1,7 @@
 use crate::chunk_plan::indexing::types::CoordScalar;
 use crate::chunk_plan::prelude::*;
 use crate::errors::BackendError;
-use crate::{IStr, IntoIStr};
+use crate::shared::{IStr, IntoIStr};
 
 pub(crate) fn apply_time_encoding(
     raw: i64,

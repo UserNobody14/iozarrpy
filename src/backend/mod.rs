@@ -9,6 +9,7 @@
 mod implementation;
 mod py;
 
+pub(crate) use py::PyBackendOptions;
 pub(crate) use py::PyIcechunkBackend;
 pub(crate) use py::PyZarrBackend;
 pub(crate) use py::PyZarrBackendSync;

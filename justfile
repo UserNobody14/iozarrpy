@@ -1,5 +1,9 @@
 set dotenv-load
 
+# Matches the workflow-level env in .github/workflows/ci.yaml. Without it, rustc
+# segfaults building polars-arrow at release opt-levels.
+export RUST_MIN_STACK := "33554432"
+
 default:
   @just --list
 

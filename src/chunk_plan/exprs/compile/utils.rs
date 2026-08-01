@@ -2,8 +2,8 @@
 
 use super::super::compile_node::collect_column_refs;
 use super::super::expr_plan::{ExprPlan, VarSet};
-use crate::IStr;
 use crate::chunk_plan::prelude::*;
+use crate::shared::IStr;
 
 /// Wrap `let pat = expr` with an else that returns `NoConstraint` on mismatch.
 /// Use any pattern (e.g. `Some(x)`, `Expr::Literal(lit)`) — no helper functions needed.

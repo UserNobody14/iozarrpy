@@ -8,7 +8,7 @@ use super::expr_walk::{
 };
 use crate::chunk_plan::prelude::*;
 use crate::meta::path::ZarrPath;
-use crate::{IStr, IntoIStr};
+use crate::shared::{IStr, IntoIStr};
 
 /// Collects all column names referenced in an expression using a simple recursive approach.
 /// This is used for variable inference - determining which columns/variables are explicitly

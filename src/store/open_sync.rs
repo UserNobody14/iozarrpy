@@ -13,9 +13,9 @@ use zarrs_object_store::AsyncObjectStore;
 use zarrs_object_store::object_store;
 use zarrs_object_store::object_store::ObjectStore;
 
-use crate::IStr;
 use crate::errors::BackendError;
 use crate::reader::ShardedCacheSync;
+use crate::shared::IStr;
 use crate::shared::normalize_path;
 
 use crate::errors::BackendResult;

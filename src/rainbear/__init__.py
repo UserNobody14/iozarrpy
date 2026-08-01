@@ -1,4 +1,3 @@
-
 import asyncio
 from typing import Any, Iterator
 
@@ -6,6 +5,7 @@ import polars as pl
 from polars.io.plugins import register_io_source
 
 from rainbear._core import (
+    BackendOptions,
     IcechunkBackend,
     ZarrBackend,
     ZarrBackendSync,
@@ -16,9 +16,12 @@ from rainbear._core import (
 )
 
 # Type alias for store input - can be a URL string or an ObjectStore instance
-StoreInput = str | Any  # Any here represents ObjectStore instances from store module or obstore
+StoreInput = (
+    str | Any
+)  # Any here represents ObjectStore instances from store module or obstore
 
 __all__ = [
+    "BackendOptions",
     "IcechunkBackend",
     "ZarrBackend",
     "ZarrBackendSync",
@@ -32,6 +35,7 @@ __all__ = [
 
 type AnyZarrBackend = ZarrBackendSync | ZarrBackend | IcechunkBackend
 
+
 def scan_zarr(
     store_url_or_backend: StoreInput | AnyZarrBackend,
     *,
@@ -39,10 +43,10 @@ def scan_zarr(
     prefix: str | None = None,
 ) -> pl.LazyFrame:
     """Scan a Zarr store and return a LazyFrame.
-    
+
     Filters applied to this LazyFrame will be pushed down to the Zarr reader
     when possible, enabling efficient reading of large remote datasets.
-    
+
     Args:
         store_url_or_backend: Either a URL string (e.g., "s3://bucket/path.zarr")
             or an ObjectStore instance from `rainbear.store` or `obstore`
@@ -50,15 +54,15 @@ def scan_zarr(
         max_chunks_to_read: Optional limit on the number of chunks to read (for debugging/safety).
         prefix: Optional path prefix within the store. Only used when passing an ObjectStore
             instance (not needed for URL strings which include the full path).
-    
+
     Examples:
         # Using a URL string (current behavior)
         lf = rainbear.scan_zarr("s3://bucket/path.zarr")
-        
+
         # Using rainbear's own store (full connection pooling)
         s3 = rainbear.store.S3Store(bucket="my-bucket", region="us-east-1")
         lf = rainbear.scan_zarr(s3, prefix="path.zarr")
-        
+
         # Using external obstore (works, but recreated - no shared pool)
         import obstore
         s3 = obstore.store.S3Store(bucket="my-bucket", region="us-east-1")
@@ -76,6 +80,7 @@ def scan_zarr(
         backend = store_url_or_backend
     else:
         backend = ZarrBackendSync.from_store(store_url_or_backend, prefix=prefix)
+
     def source_generator(
         with_columns: list[str] | None,
         predicate: pl.Expr | None,
@@ -101,16 +106,21 @@ def scan_zarr(
         else:
             # Build the new predicate:
             new_predicate = pl.col(with_columns) if with_columns else pl.all()
-            new_predicate = new_predicate.filter(predicate) if predicate is not None else new_predicate
+            new_predicate = (
+                new_predicate.filter(predicate)
+                if predicate is not None
+                else new_predicate
+            )
             # Run blocking async scan
-            df = asyncio.run(backend.scan_zarr_async(
-                predicate=new_predicate,
-                max_chunks_to_read=max_chunks_to_read,
-            ))
+            df = asyncio.run(
+                backend.scan_zarr_async(
+                    predicate=new_predicate,
+                    max_chunks_to_read=max_chunks_to_read,
+                )
+            )
             yield df
+
     return register_io_source(io_source=source_generator, schema=backend.schema())
-
-
 
 
 def scan_zarr_async(
@@ -121,7 +131,7 @@ def scan_zarr_async(
     prefix: str | None = None,
 ) -> Any:
     """Async scan a Zarr store and return a DataFrame.
-    
+
     Args:
         store_url_or_backend: Either a URL string or an ObjectStore instance
             or a caching ZarrBackendSync, ZarrBackend, or IcechunkBackend instance.
@@ -150,19 +160,5 @@ def scan_zarr_async(
         )
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
 def main() -> None:
     print(print_extension_info())
-

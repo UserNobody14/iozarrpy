@@ -21,7 +21,6 @@ pub(crate) use crate::reader::{
     compute_strides,
 };
 
-use crate::IStr;
 use crate::chunk_plan::{
     ChunkGridSignature, ChunkSubset,
 };
@@ -34,6 +33,7 @@ use crate::scan::shared::{
     compute_in_bounds_mask,
 };
 use crate::shared::ChunkedDataBackendAsync;
+use crate::shared::IStr;
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -179,7 +179,7 @@ pub async fn chunk_to_df_from_grid_with_backend<
     chunk_subset: Option<&ChunkSubset>,
     meta: &ZarrMeta,
 ) -> BackendResult<DataFrame> {
-    let chunk_shape = sig.chunk_shape();
+    let chunk_shape = sig.retrieval_shape();
     let dims = sig.dims();
 
     // Compute origin from chunk indices

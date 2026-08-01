@@ -6,9 +6,9 @@
 
 use smallvec::SmallVec;
 
-use crate::IStr;
 use crate::chunk_plan::indexing::lazy_selection::LazyArraySelection;
 use crate::chunk_plan::indexing::selection::SetOperations;
+use crate::shared::IStr;
 
 /// Which variables an expression references.
 #[derive(Debug, Clone, PartialEq, Eq)]

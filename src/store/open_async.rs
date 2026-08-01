@@ -11,10 +11,10 @@ use zarrs_object_store::AsyncObjectStore;
 use zarrs_object_store::object_store;
 use zarrs_object_store::object_store::ObjectStore;
 
-use crate::IStr;
 use crate::errors::BackendError;
 use crate::errors::BackendResult;
 use crate::reader::ShardedCacheAsync;
+use crate::shared::IStr;
 use crate::shared::normalize_path;
 use crate::store::adapters::TokioSpawnBlocking;
 use crate::store::array::OpenedArrayAsync;

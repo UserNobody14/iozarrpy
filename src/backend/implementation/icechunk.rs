@@ -17,7 +17,6 @@ use zarrs::storage::{
 };
 use zarrs_icechunk::AsyncIcechunkStore;
 
-use crate::IStr;
 use crate::errors::BackendError;
 use crate::meta::{
     ZarrMeta, load_zarr_meta_from_store_async,
@@ -26,9 +25,10 @@ use crate::reader::{
     ColumnData, ShardedCacheAsync,
     retrieve_chunk_async,
 };
+use crate::shared::IStr;
 use crate::shared::{
-    ChunkedDataBackendAsync,
-    ChunkedDataCacheAsync, HasAsyncStore,
+    BackendOptions, ChunkedDataBackendAsync,
+    ChunkedDataCacheAsync,
     HasMetadataBackendAsync,
     HasMetadataBackendCacheAsync,
 };
@@ -73,15 +73,6 @@ impl IcechunkBackendAsync {
                 BTreeMap::new(),
             ),
         }
-    }
-}
-
-impl HasAsyncStore for IcechunkBackendAsync {
-    fn async_store(
-        &self,
-    ) -> &AsyncReadableWritableListableStorage
-    {
-        &self.store
     }
 }
 
@@ -189,18 +180,18 @@ pub type FullyCachedIcechunkBackendAsync =
 
 /// Convert an `IcechunkBackendAsync` to a fully cached version.
 ///
-/// `max_entries == 0` uses an unbounded chunk cache (see [`ChunkedDataCacheAsync::new`]).
+/// See [`BackendOptions`] for the per-cache `max_entries` knobs
+/// (a value of `0` makes that sub-cache unbounded).
 pub fn to_fully_cached_icechunk_async(
     backend: IcechunkBackendAsync,
-    max_entries: u64,
+    options: BackendOptions,
 ) -> Result<
     FullyCachedIcechunkBackendAsync,
     BackendError,
 > {
     Ok(HasMetadataBackendCacheAsync::new(
         ChunkedDataCacheAsync::new(
-            backend,
-            max_entries,
+            backend, options,
         ),
     ))
 }

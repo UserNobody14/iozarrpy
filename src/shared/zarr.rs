@@ -1,23 +1,19 @@
-use crate::IStr;
+use crate::shared::IStr;
 use std::collections::BTreeMap;
 use tokio::sync::RwLock;
-use zarrs::storage::{
-    AsyncReadableWritableListableStorage,
-    ReadableWritableListableStorage,
-};
 
 /// Backend handler for (non-icechunk) zarr datasets
 ///
+use super::options::BackendOptions;
 use super::traits::{
     ChunkedDataBackendAsync,
     ChunkedDataBackendSync,
     ChunkedDataCacheAsync, ChunkedDataCacheSync,
-    HasAsyncStore, HasMetadataBackendAsync,
+    HasMetadataBackendAsync,
     HasMetadataBackendCacheAsync,
     HasMetadataBackendCacheSync,
-    HasMetadataBackendSync, HasStore,
+    HasMetadataBackendSync,
 };
-use crate::IntoIStr;
 use crate::errors::{
     BackendError, BackendResult,
 };
@@ -29,6 +25,7 @@ use crate::reader::{
     ColumnData, retrieve_chunk,
     retrieve_chunk_async,
 };
+use crate::shared::IntoIStr;
 use crate::store::{
     AsyncOpenedStore, OpenedStore, StoreInput,
 };
@@ -80,13 +77,13 @@ impl ZarrBackendSync {
     }
 }
 
-impl HasStore for ZarrBackendSync {
-    fn store(
-        &self,
-    ) -> &ReadableWritableListableStorage {
-        &self.store.as_ref().store
-    }
-}
+// impl HasStore for ZarrBackendSync {
+//     fn store(
+//         &self,
+//     ) -> &ReadableWritableListableStorage {
+//         &self.store.as_ref().store
+//     }
+// }
 
 impl HasMetadataBackendSync<ZarrMeta>
     for ZarrBackendSync
@@ -195,15 +192,6 @@ pub struct ZarrBackendAsync {
     >,
     /// Cached ZarrMeta (once loaded)
     cached_meta: RwLock<Option<Arc<ZarrMeta>>>,
-}
-
-impl HasAsyncStore for ZarrBackendAsync {
-    fn async_store(
-        &self,
-    ) -> &AsyncReadableWritableListableStorage
-    {
-        &self.store.as_ref().store
-    }
 }
 
 impl ZarrBackendAsync {
@@ -356,30 +344,28 @@ pub type FullyCachedZarrBackendAsync =
 
 pub fn to_fully_cached_sync(
     backend: ZarrBackendSync,
-    max_entries: u64,
+    options: BackendOptions,
 ) -> Result<
     FullyCachedZarrBackendSync,
     BackendError,
 > {
     Ok(HasMetadataBackendCacheSync::new(
         ChunkedDataCacheSync::new(
-            backend,
-            max_entries,
+            backend, options,
         ),
     ))
 }
 
 pub fn to_fully_cached_async(
     backend: ZarrBackendAsync,
-    max_entries: u64,
+    options: BackendOptions,
 ) -> Result<
     FullyCachedZarrBackendAsync,
     BackendError,
 > {
     Ok(HasMetadataBackendCacheAsync::new(
         ChunkedDataCacheAsync::new(
-            backend,
-            max_entries,
+            backend, options,
         ),
     ))
 }

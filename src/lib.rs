@@ -22,68 +22,6 @@ pub mod bench_internals;
 
 pub(crate) use shared::PlannerStats;
 
-use polars::prelude::*;
-
-/// Interned string type used throughout the codebase for dimension/variable names.
-pub type IStr = internment::Intern<str>;
-
-/// Helper trait to create IStr from various string types
-pub trait IntoIStr {
-    fn istr(self) -> IStr;
-}
-
-pub trait FromIStr {
-    fn from_istr(istr: IStr) -> Self;
-}
-
-// impl FromIStr for &str {
-//     fn from_istr(istr: IStr) -> Self {
-//         istr.to_string().as_str()
-//     }
-// }
-
-impl FromIStr for String {
-    fn from_istr(istr: IStr) -> Self {
-        istr.clone().to_string()
-    }
-}
-
-impl FromIStr for PlSmallStr {
-    fn from_istr(istr: IStr) -> Self {
-        PlSmallStr::from(istr.clone().to_string())
-    }
-}
-
-impl IntoIStr for IStr {
-    fn istr(self) -> IStr {
-        self
-    }
-}
-
-impl IntoIStr for &IStr {
-    fn istr(self) -> IStr {
-        *self
-    }
-}
-
-impl IntoIStr for &str {
-    fn istr(self) -> IStr {
-        IStr::from(self)
-    }
-}
-
-impl IntoIStr for String {
-    fn istr(self) -> IStr {
-        IStr::from(self.as_str())
-    }
-}
-
-impl IntoIStr for &String {
-    fn istr(self) -> IStr {
-        IStr::from(self.as_str())
-    }
-}
-
 #[pymodule]
 fn _core(
     py: Python<'_>,

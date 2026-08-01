@@ -7,19 +7,81 @@
 // Use the synchronous cache.
 use moka::future::Cache as MokaFutureCache;
 use moka::sync::Cache as MokaCache;
+use std::collections::HashSet;
 use std::fmt::Display;
 use std::sync::{Arc, RwLock as StdRwLock};
 
 use ambassador::{Delegate, delegatable_trait};
 use tokio::sync::RwLock;
-use zarrs::storage::{
-    AsyncReadableWritableListableStorage,
-    ReadableWritableListableStorage,
-};
 
-use crate::IStr;
 use crate::errors::BackendError;
+use crate::meta::ZarrMeta;
 use crate::reader::ColumnData;
+use crate::shared::options::BackendOptions;
+use crate::shared::{IStr, IntoIStr};
+
+/// Build a moka sync cache with `max_entries` capacity (`0` = unbounded).
+fn build_sync_cache<K, V>(
+    max_entries: u64,
+) -> MokaCache<K, V>
+where
+    K: std::hash::Hash
+        + Eq
+        + Send
+        + Sync
+        + 'static,
+    V: Clone + Send + Sync + 'static,
+{
+    if max_entries == 0 {
+        MokaCache::builder().build()
+    } else {
+        MokaCache::new(max_entries)
+    }
+}
+
+/// Build a moka future cache with `max_entries` capacity (`0` = unbounded).
+fn build_future_cache<K, V>(
+    max_entries: u64,
+) -> MokaFutureCache<K, V>
+where
+    K: std::hash::Hash
+        + Eq
+        + Send
+        + Sync
+        + 'static,
+    V: Clone + Send + Sync + 'static,
+{
+    if max_entries == 0 {
+        MokaFutureCache::builder().build()
+    } else {
+        MokaFutureCache::new(max_entries)
+    }
+}
+
+/// Normalize a path-like `IStr` to the canonical (no-slash) form used by
+/// [`ZarrMeta::all_coord_paths`]. Cheap thanks to string interning.
+fn canonical_path_istr(s: &IStr) -> IStr {
+    let raw: &str = s.as_ref();
+    let trimmed = raw
+        .trim_start_matches('/')
+        .trim_end_matches('/');
+    if trimmed == raw {
+        *s
+    } else {
+        trimmed.istr()
+    }
+}
+
+/// Build a `HashSet` of canonical coordinate paths from `meta`.
+fn coord_set_from_meta(
+    meta: &ZarrMeta,
+) -> Arc<HashSet<IStr>> {
+    Arc::new(
+        meta.all_coord_paths()
+            .into_iter()
+            .collect(),
+    )
+}
 
 /// Synchronous chunked data backend trait.
 ///
@@ -89,19 +151,6 @@ pub trait HasMetadataBackendAsync<
     ) -> Result<Arc<METADATA>, BackendError>;
 }
 
-#[delegatable_trait]
-pub trait HasStore {
-    fn store(
-        &self,
-    ) -> &ReadableWritableListableStorage;
-}
-
-pub trait HasAsyncStore {
-    fn async_store(
-        &self,
-    ) -> &AsyncReadableWritableListableStorage;
-}
-
 // =============================================================================
 // Cache wrappers with ambassador delegation for sync traits
 // =============================================================================
@@ -111,20 +160,28 @@ pub trait HasAsyncStore {
 #[allow(clippy::duplicated_attributes)]
 // ambassador: separate `#[delegate]` per trait, same target field
 #[delegate(HasMetadataBackendSync<METADATA>, target = "backend", generics = "METADATA", where = "METADATA: Send + Sync, BACKEND: HasMetadataBackendSync<METADATA>")]
-#[delegate(
-    HasStore,
-    target = "backend",
-    where = "BACKEND: HasStore"
-)]
 /// Sync in-memory chunk cache with the same **in-flight coalescing** behavior as
 /// [`ChunkedDataCacheAsync`] (via [`moka::sync::Cache::try_get_with`]).
+///
+/// Coordinate chunks (latitude, longitude, time, lead_time, ...) and
+/// data-variable chunks live in **separate** moka caches so that a long
+/// scan over many large variables cannot evict the small set of coordinate
+/// chunks that the next call will almost certainly request again.
 pub struct ChunkedDataCacheSync<
     BACKEND: ChunkedDataBackendSync,
 > {
     backend: BACKEND,
-    chunk_cache: MokaCache<
+    coord_cache: MokaCache<
         (IStr, Vec<u64>),
         Arc<ColumnData>,
+    >,
+    var_cache: MokaCache<
+        (IStr, Vec<u64>),
+        Arc<ColumnData>,
+    >,
+    /// Memoized canonical coord paths, populated lazily on first read.
+    coord_paths: parking_lot::RwLock<
+        Option<Arc<HashSet<IStr>>>,
     >,
 }
 
@@ -134,14 +191,24 @@ pub struct ChunkedDataCacheSync<
 /// concurrent requests for the same `(zarr path, chunk index)`: only one underlying
 /// read runs; other waiters await the same result. This avoids duplicate I/O when many
 /// tasks request the same coordinate chunk or variable chunk before the first load finishes.
+///
+/// Coordinate chunks and data-variable chunks live in **separate** moka caches
+/// (see [`ChunkedDataCacheSync`] for rationale).
 pub struct ChunkedDataCacheAsync<
     BACKEND: ChunkedDataBackendAsync,
 > {
     backend: BACKEND,
-    chunk_cache: MokaFutureCache<
+    coord_cache: MokaFutureCache<
         (IStr, Vec<u64>),
         Arc<ColumnData>,
     >,
+    var_cache: MokaFutureCache<
+        (IStr, Vec<u64>),
+        Arc<ColumnData>,
+    >,
+    /// Memoized canonical coord paths, populated lazily on first read.
+    coord_paths:
+        RwLock<Option<Arc<HashSet<IStr>>>>,
 }
 
 /// Sync cache for metadata - delegates chunked data and store traits to backend
@@ -152,11 +219,6 @@ pub struct ChunkedDataCacheAsync<
     ChunkedDataBackendSync,
     target = "backend",
     where = "BACKEND: ChunkedDataBackendSync"
-)]
-#[delegate(
-    HasStore,
-    target = "backend",
-    where = "BACKEND: HasStore"
 )]
 pub struct HasMetadataBackendCacheSync<
     METADATA: Send + Sync,
@@ -182,21 +244,26 @@ pub struct HasMetadataBackendCacheAsync<
 impl<BACKEND: ChunkedDataBackendSync>
     ChunkedDataCacheSync<BACKEND>
 {
-    /// `max_entries == 0` builds an **unbounded** cache (no entry-count eviction).
-    /// Non-zero values bound the number of cached `(zarr path, chunk index)` entries
-    /// for both coordinate and variable chunk reads.
+    /// Build the cache from [`BackendOptions`].
+    ///
+    /// Each of `coord_cache_max_entries` / `var_cache_max_entries` is the
+    /// upper bound on cached `(zarr path, chunk index)` entries in the
+    /// respective sub-cache; `0` means **unbounded**.
     pub fn new(
         backend: BACKEND,
-        max_entries: u64,
+        options: BackendOptions,
     ) -> Self {
-        let chunk_cache = if max_entries == 0 {
-            MokaCache::builder().build()
-        } else {
-            MokaCache::new(max_entries)
-        };
         Self {
             backend,
-            chunk_cache,
+            coord_cache: build_sync_cache(
+                options.coord_cache_max_entries,
+            ),
+            var_cache: build_sync_cache(
+                options.var_cache_max_entries,
+            ),
+            coord_paths: parking_lot::RwLock::new(
+                None,
+            ),
         }
     }
 }
@@ -204,21 +271,24 @@ impl<BACKEND: ChunkedDataBackendSync>
 impl<BACKEND: ChunkedDataBackendAsync>
     ChunkedDataCacheAsync<BACKEND>
 {
-    /// `max_entries == 0` builds an **unbounded** cache (no entry-count eviction).
-    /// Non-zero values bound the number of cached `(zarr path, chunk index)` entries
-    /// for both coordinate and variable chunk reads.
+    /// Build the cache from [`BackendOptions`].
+    ///
+    /// Each of `coord_cache_max_entries` / `var_cache_max_entries` is the
+    /// upper bound on cached `(zarr path, chunk index)` entries in the
+    /// respective sub-cache; `0` means **unbounded**.
     pub fn new(
         backend: BACKEND,
-        max_entries: u64,
+        options: BackendOptions,
     ) -> Self {
-        let chunk_cache = if max_entries == 0 {
-            MokaFutureCache::builder().build()
-        } else {
-            MokaFutureCache::new(max_entries)
-        };
         Self {
             backend,
-            chunk_cache,
+            coord_cache: build_future_cache(
+                options.coord_cache_max_entries,
+            ),
+            var_cache: build_future_cache(
+                options.var_cache_max_entries,
+            ),
+            coord_paths: RwLock::new(None),
         }
     }
 }
@@ -292,8 +362,69 @@ impl<
 // Caching implementations (these add logic, not just delegation)
 // =============================================================================
 
-impl<BACKEND: ChunkedDataBackendSync>
-    ChunkedDataBackendSync
+impl<
+    BACKEND: ChunkedDataBackendSync
+        + HasMetadataBackendSync<ZarrMeta>,
+> ChunkedDataCacheSync<BACKEND>
+{
+    /// Returns `true` if `var` resolves to a coordinate array.
+    ///
+    /// Lazily populates the memoized coord-path set on first call;
+    /// falls back to `false` if metadata cannot be loaded (treating
+    /// the read as a data variable, which is the safer default since
+    /// the variable cache is the smaller one).
+    fn is_coord_path(&self, var: &IStr) -> bool {
+        let canon = canonical_path_istr(var);
+        if let Some(set) =
+            self.coord_paths.read().as_ref()
+        {
+            return set.contains(&canon);
+        }
+        let meta = match self.backend.metadata() {
+            Ok(m) => m,
+            Err(_) => return false,
+        };
+        let set = coord_set_from_meta(&meta);
+        let contains = set.contains(&canon);
+        *self.coord_paths.write() = Some(set);
+        contains
+    }
+}
+
+impl<
+    BACKEND: ChunkedDataBackendAsync
+        + HasMetadataBackendAsync<ZarrMeta>,
+> ChunkedDataCacheAsync<BACKEND>
+{
+    /// Async counterpart of [`ChunkedDataCacheSync::is_coord_path`].
+    async fn is_coord_path(
+        &self,
+        var: &IStr,
+    ) -> bool {
+        let canon = canonical_path_istr(var);
+        {
+            let g = self.coord_paths.read().await;
+            if let Some(set) = g.as_ref() {
+                return set.contains(&canon);
+            }
+        }
+        let meta =
+            match self.backend.metadata().await {
+                Ok(m) => m,
+                Err(_) => return false,
+            };
+        let set = coord_set_from_meta(&meta);
+        let contains = set.contains(&canon);
+        *self.coord_paths.write().await =
+            Some(set);
+        contains
+    }
+}
+
+impl<
+    BACKEND: ChunkedDataBackendSync
+        + HasMetadataBackendSync<ZarrMeta>,
+> ChunkedDataBackendSync
     for ChunkedDataCacheSync<BACKEND>
 {
     fn read_chunk_sync(
@@ -303,7 +434,12 @@ impl<BACKEND: ChunkedDataBackendSync>
     ) -> Result<Arc<ColumnData>, BackendError>
     {
         let key = (*var, chunk_idx.to_vec());
-        self.chunk_cache
+        let cache = if self.is_coord_path(var) {
+            &self.coord_cache
+        } else {
+            &self.var_cache
+        };
+        cache
             .try_get_with(key, || {
                 self.backend.read_chunk_sync(
                     var, chunk_idx,
@@ -318,8 +454,10 @@ impl<BACKEND: ChunkedDataBackendSync>
 }
 
 #[async_trait::async_trait]
-impl<BACKEND: ChunkedDataBackendAsync>
-    ChunkedDataBackendAsync
+impl<
+    BACKEND: ChunkedDataBackendAsync
+        + HasMetadataBackendAsync<ZarrMeta>,
+> ChunkedDataBackendAsync
     for ChunkedDataCacheAsync<BACKEND>
 {
     async fn read_chunk_async(
@@ -329,7 +467,13 @@ impl<BACKEND: ChunkedDataBackendAsync>
     ) -> Result<Arc<ColumnData>, BackendError>
     {
         let key = (*var, chunk_idx.to_vec());
-        self.chunk_cache
+        let cache =
+            if self.is_coord_path(var).await {
+                &self.coord_cache
+            } else {
+                &self.var_cache
+            };
+        cache
             .try_get_with(key, async {
                 self.backend
                     .read_chunk_async(
@@ -440,37 +584,6 @@ impl<
     }
 }
 
-impl<
-    BACKEND: ChunkedDataBackendAsync + HasAsyncStore,
-> HasAsyncStore
-    for ChunkedDataCacheAsync<BACKEND>
-{
-    fn async_store(
-        &self,
-    ) -> &AsyncReadableWritableListableStorage
-    {
-        self.backend.async_store()
-    }
-}
-
-impl<
-    METADATA: Send + Sync,
-    BACKEND: HasMetadataBackendAsync<METADATA>
-        + HasAsyncStore,
-> HasAsyncStore
-    for HasMetadataBackendCacheAsync<
-        METADATA,
-        BACKEND,
-    >
-{
-    fn async_store(
-        &self,
-    ) -> &AsyncReadableWritableListableStorage
-    {
-        self.backend.async_store()
-    }
-}
-
 // =============================================================================
 // Display implementations (ambassador doesn't delegate std traits)
 // =============================================================================
@@ -551,23 +664,6 @@ impl<
 // Blanket impls for Arc<T>
 // =============================================================================
 
-impl<T: HasStore> HasStore for Arc<T> {
-    fn store(
-        &self,
-    ) -> &ReadableWritableListableStorage {
-        (**self).store()
-    }
-}
-
-impl<T: HasAsyncStore> HasAsyncStore for Arc<T> {
-    fn async_store(
-        &self,
-    ) -> &AsyncReadableWritableListableStorage
-    {
-        (**self).async_store()
-    }
-}
-
 impl<T: ChunkedDataBackendSync>
     ChunkedDataBackendSync for Arc<T>
 {
@@ -622,8 +718,21 @@ impl<
     }
 }
 
+/// Per-cache entry counts for a chunk cache.
+///
+/// `coord_entries` and `var_entries` are tracked independently because
+/// the two sub-caches have independent capacities.
 pub struct CacheStats {
-    pub chunk_entries: usize,
+    pub coord_entries: usize,
+    pub var_entries: usize,
+}
+
+impl CacheStats {
+    /// Total entries across both sub-caches.
+    #[allow(dead_code)]
+    pub fn total_entries(&self) -> usize {
+        self.coord_entries + self.var_entries
+    }
 }
 
 pub trait EvictableChunkCacheSync {
@@ -642,15 +751,24 @@ impl<BACKEND: ChunkedDataBackendSync>
     for ChunkedDataCacheSync<BACKEND>
 {
     fn cache_stats(&self) -> CacheStats {
+        // moka batches inserts into a write buffer; flush before reading
+        // entry counts so callers see the current state.
+        self.coord_cache.run_pending_tasks();
+        self.var_cache.run_pending_tasks();
         CacheStats {
-            chunk_entries: self
-                .chunk_cache
+            coord_entries: self
+                .coord_cache
+                .entry_count()
+                as usize,
+            var_entries: self
+                .var_cache
                 .entry_count()
                 as usize,
         }
     }
     fn clear(&self) {
-        self.chunk_cache.invalidate_all();
+        self.coord_cache.invalidate_all();
+        self.var_cache.invalidate_all();
     }
 }
 
@@ -660,15 +778,26 @@ impl<BACKEND: ChunkedDataBackendAsync>
     for ChunkedDataCacheAsync<BACKEND>
 {
     async fn cache_stats(&self) -> CacheStats {
+        // moka batches inserts into a write buffer; flush before reading
+        // entry counts so callers see the current state.
+        self.coord_cache
+            .run_pending_tasks()
+            .await;
+        self.var_cache.run_pending_tasks().await;
         CacheStats {
-            chunk_entries: self
-                .chunk_cache
+            coord_entries: self
+                .coord_cache
+                .entry_count()
+                as usize,
+            var_entries: self
+                .var_cache
                 .entry_count()
                 as usize,
         }
     }
     async fn clear(&self) {
-        self.chunk_cache.invalidate_all();
+        self.coord_cache.invalidate_all();
+        self.var_cache.invalidate_all();
     }
 }
 
