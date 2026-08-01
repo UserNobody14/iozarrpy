@@ -2,11 +2,14 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use zarrs::array::{
-    Array, ArrayMetadata, ArrayShardedExt, ChunkGrid,
+    Array, ArrayMetadata, ArrayShardedExt,
+    ChunkGrid,
 };
 use zarrs::hierarchy::NodeMetadata;
 
-use crate::errors::{BackendError, BackendResult};
+use crate::errors::{
+    BackendError, BackendResult,
+};
 use crate::meta::dims::{
     default_dims, dims_for_array, leaf_name,
 };
@@ -17,7 +20,9 @@ use crate::meta::time_encoding::extract_var_encoding;
 use crate::meta::types::{
     DimensionAnalysis, ZarrArrayMeta, ZarrMeta,
 };
-use crate::shared::{IStr, IntoIStr, MaybeParIter};
+use crate::shared::{
+    IStr, IntoIStr, MaybeParIter,
+};
 
 use crate::meta::ZarrNode;
 
@@ -39,7 +44,9 @@ struct ProcessedArrayMetaJob {
     aux_coord_names: Vec<IStr>,
 }
 
-fn process_array_meta_job<TStorage: ?Sized + Send + Sync>(
+fn process_array_meta_job<
+    TStorage: ?Sized + Send + Sync,
+>(
     store: Arc<TStorage>,
     root_path_str: &str,
     job: &ArrayMetaLoadJob,
@@ -48,7 +55,8 @@ fn process_array_meta_job<TStorage: ?Sized + Send + Sync>(
     let rel_path = if root_path_str != "/"
         && path_str.starts_with(root_path_str)
     {
-        let stripped = &path_str[root_path_str.len()..];
+        let stripped =
+            &path_str[root_path_str.len()..];
         if stripped.is_empty() {
             "/"
         } else {
@@ -68,9 +76,12 @@ fn process_array_meta_job<TStorage: ?Sized + Send + Sync>(
         job.array_md.clone(),
     )?;
 
-    let shape: std::sync::Arc<[u64]> = array.shape().into();
+    let shape: std::sync::Arc<[u64]> =
+        array.shape().into();
     let dims = dims_for_array(&array)
-        .unwrap_or_else(|| default_dims(shape.len()));
+        .unwrap_or_else(|| {
+            default_dims(shape.len())
+        });
     let encoding = extract_var_encoding(&array);
     let polars_dtype = zarr_dtype_to_polars(
         array.data_type(),
@@ -80,20 +91,24 @@ fn process_array_meta_job<TStorage: ?Sized + Send + Sync>(
     let zero_idx: Vec<u64> =
         vec![0u64; array.dimensionality()];
     let inner_grid = array.subchunk_grid();
-    let chunk_shape: std::sync::Arc<[u64]> = inner_grid
-        .chunk_shape_u64(&zero_idx)
-        .ok()
-        .flatten()
-        .map(|cs| cs.into())
-        .unwrap_or_else(|| shape.clone());
+    let chunk_shape: std::sync::Arc<[u64]> =
+        inner_grid
+            .chunk_shape_u64(&zero_idx)
+            .ok()
+            .flatten()
+            .map(|cs| cs.into())
+            .unwrap_or_else(|| shape.clone());
 
     let mut aux_coord_names = Vec::new();
     if let Some(attrs) =
         array.attributes().get("coordinates")
         && let Some(coord_str) = attrs.as_str()
     {
-        for coord_name in coord_str.split_whitespace() {
-            aux_coord_names.push(coord_name.istr());
+        for coord_name in
+            coord_str.split_whitespace()
+        {
+            aux_coord_names
+                .push(coord_name.istr());
         }
     }
 
@@ -116,7 +131,9 @@ fn process_array_meta_job<TStorage: ?Sized + Send + Sync>(
         dims,
         polars_dtype,
         encoding,
-        array_metadata: Some(Arc::new(job.array_md.clone())),
+        array_metadata: Some(Arc::new(
+            job.array_md.clone(),
+        )),
     };
 
     Ok(ProcessedArrayMetaJob {
@@ -220,21 +237,31 @@ pub(crate) fn load_zarr_meta_inner<
     let jobs: Vec<ArrayMetaLoadJob> = nodes
         .iter()
         .enumerate()
-        .filter_map(|(traverse_idx, (path, md))| {
-            if let NodeMetadata::Array(array_md) = md {
-                Some(ArrayMetaLoadJob {
-                    traverse_idx,
-                    path_str: path.as_str().to_string(),
-                    array_md: array_md.clone(),
-                })
-            } else {
-                None
-            }
-        })
+        .filter_map(
+            |(traverse_idx, (path, md))| {
+                if let NodeMetadata::Array(
+                    array_md,
+                ) = md
+                {
+                    Some(ArrayMetaLoadJob {
+                        traverse_idx,
+                        path_str: path
+                            .as_str()
+                            .to_string(),
+                        array_md: array_md
+                            .clone(),
+                    })
+                } else {
+                    None
+                }
+            },
+        )
         .collect();
 
     let store_arc = store.clone();
-    let mut processed: Vec<ProcessedArrayMetaJob> = jobs
+    let mut processed: Vec<
+        ProcessedArrayMetaJob,
+    > = jobs
         .maybe_par_iter(PARALLEL_ZARR_META_ARRAYS)
         .map_collect(|job| {
             process_array_meta_job(
@@ -245,9 +272,9 @@ pub(crate) fn load_zarr_meta_inner<
         })?;
 
     processed.sort_by(|a, b| {
-        a.parent_zp
-            .cmp(&b.parent_zp)
-            .then(a.traverse_idx.cmp(&b.traverse_idx))
+        a.parent_zp.cmp(&b.parent_zp).then(
+            a.traverse_idx.cmp(&b.traverse_idx),
+        )
     });
 
     let mut group_arrays: BTreeMap<

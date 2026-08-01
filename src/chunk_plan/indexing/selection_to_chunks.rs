@@ -12,7 +12,9 @@ use crate::chunk_plan::indexing::selection::ArraySubsetList;
 use crate::errors::BackendError;
 
 use crate::meta::ZarrMeta;
-use crate::shared::{IntoIStr, IStr, MaybeParIter};
+use crate::shared::{
+    IStr, IntoIStr, MaybeParIter,
+};
 
 /// Create an ArraySubsetList that covers the entire array shape.
 fn all_chunks_subset(
@@ -45,11 +47,13 @@ fn var_plan_part_from_meta(
 ) -> Result<VarPlanPart, BackendError> {
     let Some(var_meta) = meta.array_by_path(var)
     else {
-        return Err(BackendError::UnknownZarrArray {
-            name: var.istr(),
-            available_zarr_arrays: meta
-                .all_zarr_array_paths(),
-        });
+        return Err(
+            BackendError::UnknownZarrArray {
+                name: var.istr(),
+                available_zarr_arrays: meta
+                    .all_zarr_array_paths(),
+            },
+        );
     };
 
     let all_zeroes_dimensionality =
@@ -68,7 +72,9 @@ fn var_plan_part_from_meta(
                 },
             )?;
         raw_shape.map(|v| {
-            v.into_iter().map(|n| n.get()).collect()
+            v.into_iter()
+                .map(|n| n.get())
+                .collect()
         })
     };
 
@@ -86,35 +92,36 @@ fn var_plan_part_from_meta(
                     },
                 )?;
             raw_shape.map(|v| {
-                v.into_iter().map(|n| n.get()).collect()
+                v.into_iter()
+                    .map(|n| n.get())
+                    .collect()
             })
         }
         None => None,
     };
 
-    let sig = super::types::ChunkGridSignature::new(
-        var_meta.dims.clone(),
-        outer_chunk_shape,
-        inner_chunk_shape,
-    )?;
+    let sig =
+        super::types::ChunkGridSignature::new(
+            var_meta.dims.clone(),
+            outer_chunk_shape,
+            inner_chunk_shape,
+        )?;
 
-    let chunk_plan = if let Some(sel) = maybe_sel {
+    let chunk_plan = if let Some(sel) = maybe_sel
+    {
         sel.clone().into()
     } else {
         all_chunks_subset(&var_meta.shape)
     };
 
-    let chunk_grid = match &var_meta.inner_chunk_grid {
+    let chunk_grid = match &var_meta
+        .inner_chunk_grid
+    {
         Some(grid) => grid.clone(),
         None => var_meta.outer_chunk_grid.clone(),
     };
 
-    Ok((
-        var.istr(),
-        sig,
-        chunk_plan,
-        chunk_grid,
-    ))
+    Ok((var.istr(), sig, chunk_plan, chunk_grid))
 }
 
 /// Convert a DatasetSelection to a GroupedChunkPlan using metadata only.
@@ -173,17 +180,15 @@ pub fn selection_to_grouped_chunk_plan_unified_from_meta(
             )
         })?;
 
-    for (var, sig, chunk_plan, chunk_grid) in parts
+    for (var, sig, chunk_plan, chunk_grid) in
+        parts
     {
         let sig_arc = sig_cache
             .entry(sig.clone())
             .or_insert_with(|| Arc::new(sig))
             .clone();
         grouped_plan.insert(
-            var,
-            sig_arc,
-            chunk_plan,
-            chunk_grid,
+            var, sig_arc, chunk_plan, chunk_grid,
         );
     }
 

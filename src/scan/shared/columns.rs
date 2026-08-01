@@ -300,24 +300,26 @@ pub fn compute_in_bounds_mask(
     let mut full = true;
     for d in 0..ndim {
         let edge_end = chunk_shape[d].min(
-            array_shape[d].saturating_sub(origin[d]),
+            array_shape[d]
+                .saturating_sub(origin[d]),
         );
-        let (start, end) =
-            if let Some(sub) = chunk_subset {
-                let s = sub.ranges[d].start;
-                let e = sub.ranges[d].end.min(edge_end);
-                (s, e)
-            } else {
-                (0u64, edge_end)
-            };
+        let (start, end) = if let Some(sub) =
+            chunk_subset
+        {
+            let s = sub.ranges[d].start;
+            let e =
+                sub.ranges[d].end.min(edge_end);
+            (s, e)
+        } else {
+            (0u64, edge_end)
+        };
         if start >= end {
             return KeepMask::Sparse(Vec::new());
         }
         if start != 0 || end != chunk_shape[d] {
             full = false;
         }
-        total = total
-            .saturating_mul(end - start);
+        total = total.saturating_mul(end - start);
         ranges.push(start..end);
     }
 
@@ -333,10 +335,8 @@ pub fn compute_in_bounds_mask(
     // running flat index (sum of `local[d] * strides[d]`) so the
     // inner emit loop on the fastest-varying dim is just an
     // addition by `strides[ndim-1]`.
-    let mut local: SmallVec<[u64; 4]> = ranges
-        .iter()
-        .map(|r| r.start)
-        .collect();
+    let mut local: SmallVec<[u64; 4]> =
+        ranges.iter().map(|r| r.start).collect();
     let mut row: u64 = local
         .iter()
         .zip(strides.iter())
@@ -576,7 +576,8 @@ mod tests {
                     / strides[d])
                     % chunk_shape[d];
                 if !is_interior {
-                    let global = origin[d] + local;
+                    let global =
+                        origin[d] + local;
                     if global >= array_shape[d] {
                         ok = false;
                         break;
@@ -605,11 +606,11 @@ mod tests {
         array_shape: &[u64],
         chunk_subset: Option<&ChunkSubset>,
     ) {
-        let chunk_len: usize = chunk_shape
-            .iter()
-            .product::<u64>()
-            as usize;
-        let strides = compute_strides(chunk_shape);
+        let chunk_len: usize =
+            chunk_shape.iter().product::<u64>()
+                as usize;
+        let strides =
+            compute_strides(chunk_shape);
         let expected = legacy_mask(
             chunk_len,
             chunk_shape,
@@ -707,7 +708,10 @@ mod tests {
             &compute_strides(&[10, 10, 10]),
             Some(&subset),
         );
-        assert!(matches!(mask, KeepMask::All(1000)));
+        assert!(matches!(
+            mask,
+            KeepMask::All(1000)
+        ));
     }
 
     #[test]
