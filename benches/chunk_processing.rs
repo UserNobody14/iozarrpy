@@ -13,7 +13,6 @@ use zarrs::array::ChunkGrid;
 use zarrs::array::chunk_grid::regular::RegularChunkGrid;
 
 use _core::bench_internals::*;
-use _core::{IStr, IntoIStr, IntoManyIstrs};
 
 // =============================================================================
 // Mock backend
@@ -93,13 +92,14 @@ fn make_array_meta(
     dtype: DataType,
 ) -> (IStr, Arc<ZarrArrayMeta>) {
     let dim_sv: SmallVec<[IStr; 4]> =
-        dims.into_istrs();
+        dims.into_istrs().into();
     let cg = make_chunk_grid(shape, chunk_shape);
     let meta = ZarrArrayMeta {
         path: path.istr(),
         shape: shape.into(),
         chunk_shape: chunk_shape.into(),
-        chunk_grid: cg,
+        outer_chunk_grid: cg,
+        inner_chunk_grid: None,
         dims: dim_sv,
         polars_dtype: dtype,
         encoding: None,
@@ -538,8 +538,12 @@ fn bench_chunk_to_df(c: &mut Criterion) {
     .into();
     let cs_sv: SmallVec<[u64; 4]> =
         vec![10u64, 10, 10].into();
-    let sig =
-        ChunkGridSignature::new(dims_sv, cs_sv);
+    let sig = ChunkGridSignature::new(
+        dims_sv,
+        Some(cs_sv),
+        None::<SmallVec<[u64; 4]>>,
+    )
+    .unwrap();
     let array_shape = [100u64, 100, 50];
     let vars: Vec<IStr> =
         vec!["temperature".istr()];

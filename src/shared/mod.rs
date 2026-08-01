@@ -44,4 +44,6 @@ pub(crate) use structural::{
     restructure_to_structs,
 };
 
-pub(crate) use intern::*;
+// `pub` (not `pub(crate)`) so `bench_internals` can re-export these; the `shared`
+// module itself is private, so they stay crate-internal otherwise.
+pub use intern::*;

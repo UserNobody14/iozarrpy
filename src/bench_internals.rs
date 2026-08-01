@@ -20,7 +20,8 @@ pub use crate::scan::sync_scan::chunk_to_df_from_grid_with_backend;
 
 pub use crate::shared::{
     ChunkedDataBackendAsync,
-    ChunkedDataBackendSync,
+    ChunkedDataBackendSync, IStr, IntoIStr,
+    IntoManyIstrs,
 };
 
 pub use crate::chunk_plan::exprs::expr_plan::ExprPlan;
