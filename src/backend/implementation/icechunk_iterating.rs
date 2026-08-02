@@ -108,11 +108,10 @@ impl IcechunkIterator {
 
                 // Compute effective columns without cloning the outer Option
                 let effective_with_columns: Option<BTreeSet<IStr>> =
-                    if let Some(ref cols) = self.with_columns {
-                        Some(cols.iter().copied().collect())
-                    } else {
-                        Some(meta.tidy_column_order(None).into_iter().collect())
-                    };
+                    self.with_columns.as_ref().map_or_else(
+                        || Some(meta.tidy_column_order(None).into_iter().collect()),
+                        |cols| Some(cols.iter().copied().collect()),
+                    );
 
                 let policy = ResolvedColumnPolicy::new(
                     effective_with_columns.clone(),
@@ -132,10 +131,9 @@ impl IcechunkIterator {
                 let literal_false =
                     expr_top_literal_bool(&expr) == Some(false);
 
-                let batches = match &tree {
-                    Some(t) => build_batches(t, batch_size),
-                    None => Vec::new(),
-                };
+                let batches = tree
+                    .as_ref()
+                    .map_or_else(Vec::new, |t| build_batches(t, batch_size));
                 // Emit one empty-schema batch when we have nothing to read so
                 // Polars can still resolve downstream projection / filter expressions.
                 let emit_empty_schema_once = literal_false || batches.is_empty();
@@ -249,23 +247,23 @@ impl IcechunkIterator {
                         let backend = Arc::clone(&backend);
                         let expanded = expanded_with_columns.clone();
                         let meta = Arc::clone(&meta);
+                        // Move all data from ChunkRead into the async block
                         let leaf_idx = r.leaf_idx;
-                        let sig = Arc::clone(&r.sig);
-                        let array_shape =
-                            Arc::clone(&r.array_shape);
-                        let vars = Arc::clone(&r.vars);
-                        let idx = Arc::clone(&r.idx);
-                        let subset = r.subset.clone();
+                        let sig = r.sig;
+                        let array_shape = r.array_shape;
+                        let vars = r.vars;
+                        let idx = r.idx;
+                        let subset = r.subset;
 
                         futs.push(async move {
                             let _permit =
                                 sem.acquire().await.expect("semaphore closed");
                             let df = chunk_to_df_from_grid_with_backend(
                                 backend.as_ref(),
-                                idx.as_ref(),
+                                &idx,
                                 sig.as_ref(),
-                                array_shape.as_ref(),
-                                vars.as_ref(),
+                                &array_shape,
+                                &vars,
                                 expanded.as_ref(),
                                 subset.as_deref(),
                                 &meta,

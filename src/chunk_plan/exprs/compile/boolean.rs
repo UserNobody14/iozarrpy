@@ -148,13 +148,20 @@ pub(super) fn compile_boolean_function_lazy(
             rel_tol: _,
             nans_equal: _,
         } => todo!(),
+        BooleanFunction::IsEmpty { .. } => {
+            todo!()
+        }
+        BooleanFunction::HasNulls => todo!(),
+        BooleanFunction::IsSorted { .. } => {
+            todo!()
+        }
     }
 }
 
 /// Compile is_between to an ExprPlan.
 pub(super) fn compile_is_between_lazy(
     input: &[Expr],
-    ctx: &mut LazyCompileCtx<'_>,
+    ctx: &LazyCompileCtx<'_>,
 ) -> LazyResult {
     if input.len() < 3 {
         return Err(
@@ -194,7 +201,7 @@ pub(super) fn compile_is_between_lazy(
 /// Compile is_in to an ExprPlan.
 pub(super) fn compile_is_in_lazy(
     input: &[Expr],
-    ctx: &mut LazyCompileCtx<'_>,
+    ctx: &LazyCompileCtx<'_>,
 ) -> LazyResult {
     use polars::prelude::Scalar;
 

@@ -51,16 +51,6 @@ impl ChunkSubset {
             ranges: ranges.into_iter().collect(),
         }
     }
-
-    #[allow(dead_code)] // no caller since the planner moved to `GridJoinTreeBuilder`
-    pub(crate) fn is_full_chunk(
-        &self,
-        chunk_shape: &[u64],
-    ) -> bool {
-        self.ranges.iter().zip(chunk_shape).all(
-            |(r, &s)| r.start == 0 && r.end >= s,
-        )
-    }
 }
 
 // =============================================================================
@@ -438,7 +428,7 @@ mod tests {
             .collect();
         let sig = Arc::new(
             ChunkGridSignature::from_dims_only(
-                dim_istrs.clone(),
+                dim_istrs,
             ),
         );
         LeafGroup::new(

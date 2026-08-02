@@ -139,12 +139,6 @@ impl DimensionAnalysis {
 }
 
 impl ZarrMeta {
-    /// True if there are any child groups
-    #[allow(dead_code)] // reserved for the DataTree surface
-    pub fn is_hierarchical(&self) -> bool {
-        !self.root.children.is_empty()
-    }
-
     pub fn array_by_path<T: IntoIStr>(
         &self,
         path: T,
@@ -750,10 +744,10 @@ impl VarEncoding {
 #[derive(Debug)]
 pub struct ZarrArrayMeta {
     pub path: IStr,
-    /// Shape wrapped in Arc for cheap cloning.
-    pub shape: Arc<[u64]>,
+    /// Array shape (owned `Box` since it's a small slice typically < 10 elements).
+    pub shape: Box<[u64]>,
     /// Regular chunk shape (edge chunks may be smaller).
-    pub chunk_shape: Arc<[u64]>,
+    pub chunk_shape: Box<[u64]>,
     pub outer_chunk_grid: Arc<ChunkGrid>,
     pub inner_chunk_grid: Option<Arc<ChunkGrid>>,
     pub dims: SmallVec<[IStr; 4]>,

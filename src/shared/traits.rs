@@ -405,9 +405,9 @@ impl<
         {
             return set.contains(&canon);
         }
-        let meta = match self.backend.metadata() {
-            Ok(m) => m,
-            Err(_) => return false,
+        let Ok(meta) = self.backend.metadata()
+        else {
+            return false;
         };
         let set = coord_set_from_meta(&meta);
         let contains = set.contains(&canon);
@@ -433,11 +433,11 @@ impl<
                 return set.contains(&canon);
             }
         }
-        let meta =
-            match self.backend.metadata().await {
-                Ok(m) => m,
-                Err(_) => return false,
-            };
+        let Ok(meta) =
+            self.backend.metadata().await
+        else {
+            return false;
+        };
         let set = coord_set_from_meta(&meta);
         let contains = set.contains(&canon);
         *self.coord_paths.write().await =

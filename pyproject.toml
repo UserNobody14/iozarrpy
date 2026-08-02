@@ -1,6 +1,6 @@
 [project]
 name = "rainbear"
-version = "3.0.0"
+version = "3.1.1"
 description = "Build lazy Zarr scans with Polars"
 readme = "README.md"
 authors = [
@@ -64,7 +64,9 @@ test = [
     "numcodecs>=0.13.0",
     "gcsfs>=2026.1.0",
     "obstore>=0.8.2",
-    "icechunk>=1.1.18",
+    # Session objects cross into Rust as serialized bytes, so this must stay on the same
+    # major as the `icechunk` crate in Cargo.toml.
+    "icechunk>=2.0,<3",
     "pyrefly>=0.50.1",
 ]
 

@@ -1,0 +1,34 @@
+# Async / PyO3 / lock boundary: types that must not be held across `.await`.
+# See `clippy::await_holding_invalid_type` (enabled in `src/lib.rs`).
+await-holding-invalid-types = [
+    { path = "pyo3::Python", reason = "do not hold the GIL token across .await; extract owned Rust values or use Python::detach / pyo3_async_runtimes helpers before awaiting" },
+    { path = "pyo3::Bound", reason = "Python-bound references should not be held across .await; convert to owned Py<T> or Rust values first" },
+    { path = "pyo3::PyRef", reason = "holding a Python borrow across .await can extend interpreter-visible borrows unpredictably" },
+    { path = "pyo3::PyRefMut", reason = "holding a mutable Python borrow across .await can extend interpreter-visible borrows unpredictably" },
+    { path = "std::sync::RwLockReadGuard", reason = "std RwLock read guard across .await can block other writers and stall the runtime" },
+    { path = "std::sync::RwLockWriteGuard", reason = "std RwLock write guard across .await extends critical sections unpredictably" },
+    { path = "parking_lot::MutexGuard", reason = "parking_lot mutex guard across .await is not async-aware; use tokio::sync::Mutex or scoped sync sections" },
+    { path = "parking_lot::RwLockReadGuard", reason = "parking_lot read guard across .await can block writers; prefer tokio::sync::RwLock or drop before await" },
+    { path = "parking_lot::RwLockWriteGuard", reason = "parking_lot write guard across .await extends critical sections unpredictably" },
+    # Optional `tracing` (tokio-console feature): ignore if the path is absent in the current build.
+    { path = "tracing::span::Entered", reason = "use Span::in_scope / Instrument::instrument instead of holding Entered across await", allow-invalid = true },
+    { path = "tracing::span::EnteredSpan", reason = "use Span::in_scope / Instrument::instrument instead of holding EnteredSpan across await", allow-invalid = true },
+]
+
+# Used by `clippy::large_futures` (default 16384). Slightly higher to reduce noise from large but intentional async state machines.
+future-size-threshold = 32768
+
+# `clippy::large_types_passed_by_value`: warn when moving types larger than this (bytes) into `fn(T)` instead of `fn(&T)`.
+pass-by-value-size-limit = 192
+
+# `clippy::large_enum_variant`: suggest boxing variants larger than this (bytes).
+enum-variant-size-threshold = 160
+
+# API footguns in an async + Tokio codebase (see `clippy::disallowed_methods` in `src/lib.rs`).
+[[disallowed-methods]]
+path = "futures::executor::block_on"
+reason = "Use the Tokio runtime (e.g. Runtime::block_on / pyo3-async-runtimes); the futures thread-pool executor does not compose with Tokio I/O."
+
+[[disallowed-methods]]
+path = "futures::executor::block_on_stream"
+reason = "Same as futures::executor::block_on — prefer Tokio-driven execution."

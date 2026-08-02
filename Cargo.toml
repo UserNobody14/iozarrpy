@@ -22,7 +22,7 @@ crate-type = ["cdylib", "rlib"]
 # matching `requires-python` in pyproject.toml. Without it, maturin cannot cross-compile wheels
 # (aarch64/i686) without being told a concrete interpreter via `-i`.
 # "extension-module" is enabled via feature flag (only for cdylib builds, not tests)
-pyo3 = { version = "0.28", features = ["abi3-py312"] }
+pyo3 = { version = "0.29", features = ["abi3-py312"] }
 
 # Get polars from git.
 #
@@ -30,7 +30,7 @@ pyo3 = { version = "0.28", features = ["abi3-py312"] }
 # deserialization can decode to the wrong FunctionExpr variants (feature-gated enum variant index drift).
 #
 # This list is mirrored from Polars' `polars-python` crate for the `py-1.37.1` tag.
-polars = { git = "https://github.com/pola-rs/polars.git", tag = "py-1.40.1", features = [
+polars = { git = "https://github.com/pola-rs/polars.git", tag = "py-1.43.2", features = [
     "abs",
     "approx_unique",
     "arg_where",
@@ -99,17 +99,18 @@ polars = { git = "https://github.com/pola-rs/polars.git", tag = "py-1.40.1", fea
 # `FfiPlugin` lives behind `polars-lazy/ffi_plugin` (which enables the correct downstream
 # `polars-expr`/`polars-plan` feature chain). Add it directly so the Expr pickle/bincode
 # layout matches Python Polars when FFI plugins are present.
-polars-lazy = { git = "https://github.com/pola-rs/polars.git", tag = "py-1.40.1", features = ["ffi_plugin"] }
-pyo3-polars = { git = "https://github.com/pola-rs/polars.git", tag = "py-1.40.1", features = [
+polars-lazy = { git = "https://github.com/pola-rs/polars.git", tag = "py-1.43.2", features = ["ffi_plugin"] }
+pyo3-polars = { git = "https://github.com/pola-rs/polars.git", tag = "py-1.43.2", features = [
     "object",
     "dtype-extension",
     "derive",
     "lazy",
     "dtype-full",
 ] }
+polars-arrow = { git = "https://github.com/pola-rs/polars.git", tag = "py-1.43.2" }
 tokio = { version = "1.45.1", features = ["rt-multi-thread", "macros", "sync", "parking_lot"] }
 url = "2.5.4"
-zarrs = { version = "0.23.10", features = [
+zarrs = { version = "0.23.13", features = [
     "async",
     "sharding",
     "zlib",
@@ -126,19 +127,24 @@ zarrs_object_store = { version = "0.6.2", features = [
     "http",
     "fs",
 ] }
-zarrs_icechunk = "0.4"
-icechunk = "0.3.22"
+zarrs_icechunk = "0.5.1"
+# Must stay on the same major as the `icechunk` Python package pinned in pyproject.toml:
+# `IcechunkBackend.from_session` deserializes a `Session` serialized by icechunk-python's
+# own Rust core, and the msgpack layout of `Session` changes across majors.
+icechunk = "2.1.2"
 serde_json = "1.0.145"
 chrono = { version = "0.4.42", features = ["clock", "std", "serde"] }
 futures = "0.3.31"
-pyo3-async-runtimes = { version = "0.28.0", features = ["tokio-runtime"] }
+pyo3-async-runtimes = { version = "0.29.0", features = ["tokio-runtime"] }
 regex = "1.9"
 regex-syntax = "0.8.5"
 smallvec = "1.13"
 async-trait = "0.1"
 internment = { version = "0.8", features = ["arc"] }
-# 0.10.x pins object_store 0.12; zarrs_object_store needs 0.13 — stay on 0.9 until pyo3-object_store aligns.
-pyo3-object_store = "0.9.0"
+# 0.11 is the only release on pyo3 0.29 + object_store 0.13, which is what polars and
+# zarrs_object_store need. 0.12 moves to object_store 0.14 and splits the graph in two,
+# making stores from this crate unusable as zarrs stores.
+pyo3-object_store = "0.11.0"
 ambassador = "0.5.0"
 parking_lot = "0.12.5"
 moka = { version = "0.12.13", features = ["future", "sync"] }
@@ -148,6 +154,7 @@ snafu = {version = "0.8.9", features = ["backtrace"] }
 # Profiling/tracing support (behind feature flag)
 console-subscriber = { version = "0.4", optional = true }
 tracing = { version = "0.1", optional = true }
+bytemuck = "1.25.0"
 
 [dev-dependencies]
 criterion = { version = "0.8", features = ["html_reports"] }
@@ -163,6 +170,24 @@ bench = []
 name = "chunk_processing"
 harness = false
 required-features = ["bench"]
+
+[[bench]]
+name = "var_column"
+harness = false
+required-features = ["bench"]
+
+# Bench profile: this toolchain SIGSEGVs in LLVM when compiling polars at
+# opt-level >= 1, so dependencies stay at opt-level=0 (the default for dev).
+# Our crate (rainbear) is built at opt-level=3 to get realistic numbers for
+# the code under test. Benchmark *ratios* are valid; absolute numbers are
+# pessimistic for the dependency surface (Series::new etc.).
+[profile.bench]
+inherits = "dev"
+codegen-units = 16
+debug = "line-tables-only"
+
+[profile.bench.package.rainbear]
+opt-level = 3
 
 [profile.release]
 lto = false
@@ -182,14 +207,14 @@ inherits = "dev"
 debug = "line-tables-only"
 codegen-units = 256
 
-# Patch zarrs to use the fork with consolidated metadata support
 [patch.crates-io]
-zarrs = { git = "https://github.com/UserNobody14/zarrs.git", branch = "main" }
-zarrs_storage = { git = "https://github.com/UserNobody14/zarrs.git", branch = "main" }
-zarrs_metadata = { git = "https://github.com/UserNobody14/zarrs.git", branch = "main" }
-zarrs_metadata_ext = { git = "https://github.com/UserNobody14/zarrs.git", branch = "main" }
-zarrs_data_type = { git = "https://github.com/UserNobody14/zarrs.git", branch = "main" }
-zarrs_chunk_grid = { git = "https://github.com/UserNobody14/zarrs.git", branch = "main" }
-zarrs_chunk_key_encoding = { git = "https://github.com/UserNobody14/zarrs.git", branch = "main" }
-zarrs_codec = { git = "https://github.com/UserNobody14/zarrs.git", branch = "main" }
-zarrs_plugin = { git = "https://github.com/UserNobody14/zarrs.git", branch = "main" }
+# Polars patches object_store to this fork (custom DNS resolver, arrow-rs-object-store#728).
+# A git dependency's own [patch.crates-io] is ignored, so polars-io fails to build against
+# stock object_store unless we mirror the patch here. Keep the rev in sync with the polars tag.
+object_store = { git = "https://github.com/kdn36/arrow-rs-object-store", rev = "f50a6e5c564b2b5933eca15cd20ff9b5614374a1" }
+
+
+# Temporary profile for profiling: full debug symbols, no opt cost beyond dev.
+[profile.profile]
+inherits = "maturin-dev"
+debug = 2

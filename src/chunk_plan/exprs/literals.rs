@@ -3,22 +3,6 @@ use crate::chunk_plan::prelude::*;
 use crate::errors::BackendError;
 use crate::shared::{IStr, IntoIStr};
 
-pub(crate) fn apply_time_encoding(
-    raw: i64,
-    te: Option<&TimeEncoding>,
-) -> CoordScalar {
-    if let Some(enc) = te {
-        let ns = enc.decode(raw);
-        if enc.is_duration {
-            CoordScalar::DurationNs(ns)
-        } else {
-            CoordScalar::DatetimeNs(ns)
-        }
-    } else {
-        CoordScalar::I64(raw)
-    }
-}
-
 pub(super) fn literal_anyvalue<'a>(
     lit: &'a LiteralValue,
 ) -> Option<AnyValue<'a>> {

@@ -3,6 +3,10 @@
 //! Gated behind `#[cfg(feature = "bench")]` in `lib.rs`.
 //! Not part of the public API — intended only for `benches/`.
 
+use std::ops::Range;
+
+pub use polars_arrow::array::PrimitiveArray;
+
 pub use crate::reader::{
     ColumnData, checked_chunk_len,
     compute_strides,
@@ -20,14 +24,19 @@ pub use crate::scan::sync_scan::chunk_to_df_from_grid_with_backend;
 
 pub use crate::shared::{
     ChunkedDataBackendAsync,
-    ChunkedDataBackendSync, IStr, IntoIStr,
-    IntoManyIstrs,
+    ChunkedDataBackendSync, FromManyIstrs, IStr,
+    IntoIStr, IntoManyIstrs,
 };
 
-pub use crate::chunk_plan::exprs::expr_plan::ExprPlan;
+use crate::chunk_plan::coord_resolve::Expansion;
+use crate::chunk_plan::exprs::compile_ctx::CoordResolver;
+pub use crate::chunk_plan::exprs::compile_ctx::{
+    LazyCompileCtx, Universe,
+};
+use crate::chunk_plan::indexing::types::ValueRangePresent;
 pub use crate::chunk_plan::{
     ChunkGridSignature, ChunkSubset,
-    LazyCompileCtx, compile_expr,
+    compile_expr,
     compute_dims_and_lengths_unified,
 };
 
@@ -37,3 +46,20 @@ pub use crate::meta::{
     DimensionAnalysis, VarEncoding,
     ZarrArrayMeta, ZarrMeta, ZarrNode,
 };
+
+pub struct BenchCoordResolver;
+
+impl CoordResolver for BenchCoordResolver {
+    #[allow(private_interfaces)]
+    fn resolve(
+        &self,
+        _dim: IStr,
+        _meta: &ZarrMeta,
+        dim_len: u64,
+        _vr: &ValueRangePresent,
+        _expansion: Expansion,
+    ) -> Result<Vec<Range<u64>>, BackendError>
+    {
+        Ok(std::iter::once(0..dim_len).collect())
+    }
+}

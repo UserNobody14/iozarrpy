@@ -28,16 +28,11 @@ pub(crate) fn normalize_fixedscaleoffset_dtype_str(
 }
 
 fn split_endian_prefix(s: &str) -> (&str, &str) {
-    if let Some(rest) = s.strip_prefix('<') {
-        ("<", rest)
-    } else if let Some(rest) = s.strip_prefix('>')
-    {
-        (">", rest)
-    } else if let Some(rest) = s.strip_prefix('|')
-    {
-        ("|", rest)
-    } else {
-        ("<", s)
+    match s.as_bytes().first() {
+        Some(b'<') => ("<", &s[1..]),
+        Some(b'>') => (">", &s[1..]),
+        Some(b'|') => ("|", &s[1..]),
+        _ => ("<", s),
     }
 }
 
