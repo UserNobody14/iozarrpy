@@ -9,8 +9,13 @@ use criterion::{
 };
 use polars::prelude::*;
 use smallvec::SmallVec;
-use zarrs::array::ChunkGrid;
 use zarrs::array::chunk_grid::regular::RegularChunkGrid;
+use zarrs::array::{
+    ArrayMetadata, ArrayMetadataV2, ChunkGrid,
+};
+use zarrs::metadata::v2::{
+    DataTypeMetadataV2, FillValueMetadataV2,
+};
 
 use _core::bench_internals::*;
 
@@ -88,26 +93,51 @@ fn make_chunk_grid(
     ))
 }
 
+fn make_array_metadata(
+    shape: &[u64],
+    chunk_shape: &[u64],
+    dims: &[&str],
+) -> Arc<ArrayMetadata> {
+    let mut metadata = ArrayMetadataV2::new(
+        shape.to_vec(),
+        chunk_shape
+            .iter()
+            .map(|&s| NonZeroU64::new(s).unwrap())
+            .collect(),
+        DataTypeMetadataV2::Simple(
+            "<f8".to_string(),
+        ),
+        FillValueMetadataV2::String(
+            "NaN".to_string(),
+        ),
+        None,
+        None,
+    );
+    metadata.attributes.insert(
+        "_ARRAY_DIMENSIONS".to_string(),
+        serde_json::json!(dims),
+    );
+    Arc::new(ArrayMetadata::V2(metadata))
+}
+
 fn make_array_meta(
     path: &str,
     dims: &[&str],
     shape: &[u64],
     chunk_shape: &[u64],
-    dtype: DataType,
 ) -> (IStr, Arc<ZarrArrayMeta>) {
-    let dim_sv: SmallVec<[IStr; 4]> =
-        dims.into_istrs().into();
     let cg = make_chunk_grid(shape, chunk_shape);
-    let meta = ZarrArrayMeta {
-        path: path.istr(),
-        chunk_shape: chunk_shape.into(),
-        outer_chunk_grid: cg,
-        inner_chunk_grid: None,
-        dims: dim_sv,
-        polars_dtype: dtype,
-        encoding: None,
-        array_metadata: None,
-    };
+    let meta = ZarrArrayMeta::new(
+        path.istr(),
+        chunk_shape.into(),
+        cg,
+        None,
+        make_array_metadata(
+            shape,
+            chunk_shape,
+            dims,
+        ),
+    );
     (path.istr(), Arc::new(meta))
 }
 
@@ -129,7 +159,6 @@ fn make_test_meta() -> ZarrMeta {
             &[name],
             &[*len],
             &[*cs],
-            DataType::Float64,
         );
         arrays.insert(key, meta);
     }
@@ -140,7 +169,6 @@ fn make_test_meta() -> ZarrMeta {
         &["x", "y", "time"],
         &[100, 100, 50],
         &[10, 10, 10],
-        DataType::Float64,
     );
     arrays.insert(key, meta);
 
@@ -150,7 +178,6 @@ fn make_test_meta() -> ZarrMeta {
         &["x", "y", "time"],
         &[100, 100, 50],
         &[20, 20, 5],
-        DataType::Float64,
     );
     arrays.insert(key, meta);
 

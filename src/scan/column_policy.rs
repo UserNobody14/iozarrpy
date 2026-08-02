@@ -41,7 +41,8 @@ fn projection_dims_used(
         }
         if let Some(am) = meta.array_by_path(*col)
         {
-            for d in am.dims.iter() {
+            let dims = am.dims();
+            for d in &dims {
                 out.insert(*d);
             }
         }
@@ -70,10 +71,11 @@ fn expand_1d_aux_on_projection_dims(
         else {
             continue;
         };
-        if am.dims.len() != 1 {
+        let dims = am.dims();
+        if dims.len() != 1 {
             continue;
         }
-        if dims_used.contains(&am.dims[0]) {
+        if dims_used.contains(&dims[0]) {
             expanded.insert(p);
         }
     }
@@ -169,7 +171,8 @@ pub(crate) fn group_supplies_array_or_1d_enrichable(
     else {
         return false;
     };
-    vm.is_1d() && sig_dims.contains(&vm.dims[0])
+    let dims = vm.dims();
+    vm.is_1d() && sig_dims.contains(&dims[0])
 }
 
 // =============================================================================
@@ -258,7 +261,7 @@ fn add_var_step(
         return Ok(());
     };
     let var_dims: Vec<IStr> =
-        var_meta.dims.iter().copied().collect();
+        var_meta.dims().to_vec();
     let (chunk_indices, offsets) =
         compute_var_chunk_indices(
             primary_idx,

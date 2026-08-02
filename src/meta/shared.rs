@@ -10,13 +10,9 @@ use zarrs::hierarchy::NodeMetadata;
 use crate::errors::{
     BackendError, BackendResult,
 };
-use crate::meta::dims::{
-    default_dims, dims_for_array, leaf_name,
-};
-use crate::meta::dtype::zarr_dtype_to_polars;
+use crate::meta::dims::leaf_name;
 use crate::meta::path::ZarrPath;
 
-use crate::meta::time_encoding::extract_var_encoding;
 use crate::meta::types::{
     ZarrArrayMeta, ZarrMeta,
 };
@@ -42,6 +38,62 @@ struct ProcessedArrayMetaJob {
     leaf: IStr,
     arr_meta: Arc<ZarrArrayMeta>,
     aux_coord_names: Vec<IStr>,
+}
+
+fn aux_coord_names_for_array<TStorage: ?Sized>(
+    array: &Array<TStorage>,
+) -> Vec<IStr> {
+    let mut out = Vec::new();
+    if let Some(attrs) =
+        array.attributes().get("coordinates")
+        && let Some(coord_str) = attrs.as_str()
+    {
+        for coord_name in
+            coord_str.split_whitespace()
+        {
+            out.push(coord_name.istr());
+        }
+    }
+    out
+}
+
+fn chunk_grids_for_array<TStorage: ?Sized>(
+    array: &Array<TStorage>,
+) -> (
+    Box<[u64]>,
+    Arc<ChunkGrid>,
+    Option<Arc<ChunkGrid>>,
+) {
+    let zero_idx: Vec<u64> =
+        vec![0u64; array.dimensionality()];
+    let inner_grid = array.subchunk_grid();
+    let chunk_shape: Box<[u64]> = inner_grid
+        .chunk_shape_u64(&zero_idx)
+        .ok()
+        .flatten()
+        .map(|cs| cs.to_vec().into_boxed_slice())
+        .unwrap_or_else(|| {
+            array
+                .shape()
+                .to_vec()
+                .into_boxed_slice()
+        });
+
+    let is_sharded = array.is_sharded();
+    let outer_chunk_grid: Arc<ChunkGrid> =
+        array.chunk_grid().clone().into();
+    let inner_chunk_grid: Option<Arc<ChunkGrid>> =
+        if is_sharded {
+            Some(array.subchunk_grid().into())
+        } else {
+            None
+        };
+
+    (
+        chunk_shape,
+        outer_chunk_grid,
+        inner_chunk_grid,
+    )
 }
 
 fn process_array_meta_job<
@@ -76,69 +128,26 @@ fn process_array_meta_job<
         job.array_md.clone(),
     )?;
 
-    let shape: Box<[u64]> =
-        array.shape().to_vec().into_boxed_slice();
-    let dims = dims_for_array(&array)
-        .unwrap_or_else(|| {
-            default_dims(shape.len())
-        });
-    let encoding = extract_var_encoding(&array);
-    let polars_dtype = zarr_dtype_to_polars(
-        array.data_type(),
-        encoding.as_ref(),
-    );
-
-    let zero_idx: Vec<u64> =
-        vec![0u64; array.dimensionality()];
-    let inner_grid = array.subchunk_grid();
-    let chunk_shape: Box<[u64]> = inner_grid
-        .chunk_shape_u64(&zero_idx)
-        .ok()
-        .flatten()
-        .map(|cs| cs.to_vec().into_boxed_slice())
-        .unwrap_or_else(|| shape.clone());
-
-    let mut aux_coord_names = Vec::new();
-    if let Some(attrs) =
-        array.attributes().get("coordinates")
-        && let Some(coord_str) = attrs.as_str()
-    {
-        for coord_name in
-            coord_str.split_whitespace()
-        {
-            aux_coord_names
-                .push(coord_name.istr());
-        }
-    }
-
-    let is_sharded = array.is_sharded();
-    let outer_chunk_grid: Arc<ChunkGrid> =
-        array.chunk_grid().clone().into();
-    let inner_chunk_grid: Option<Arc<ChunkGrid>> =
-        if is_sharded {
-            Some(array.subchunk_grid().into())
-        } else {
-            None
-        };
-
-    let arr_meta = ZarrArrayMeta {
-        path: path_str.istr(),
+    let (
         chunk_shape,
         outer_chunk_grid,
         inner_chunk_grid,
-        dims,
-        polars_dtype,
-        encoding,
-        array_metadata: Some(Arc::new(
-            job.array_md.clone(),
-        )),
-    };
+    ) = chunk_grids_for_array(&array);
+    let arr_meta = Arc::new(ZarrArrayMeta::new(
+        path_str.istr(),
+        chunk_shape,
+        outer_chunk_grid,
+        inner_chunk_grid,
+        Arc::new(job.array_md.clone()),
+    ));
+    let aux_coord_names =
+        aux_coord_names_for_array(&array);
 
     Ok(ProcessedArrayMetaJob {
         traverse_idx: job.traverse_idx,
         parent_zp,
         leaf,
-        arr_meta: Arc::new(arr_meta),
+        arr_meta,
         aux_coord_names,
     })
 }
@@ -171,13 +180,14 @@ pub(crate) fn build_node_tree(
             node.arrays
                 .insert(*leaf, Arc::clone(arr));
 
-            for dim in &arr.dims {
+            let arr_dims = arr.dims();
+            for dim in &arr_dims {
                 dims_set.insert(*dim);
             }
 
             if arr.is_1d()
-                && arr.dims.len() == 1
-                && *leaf == arr.dims[0]
+                && arr_dims.len() == 1
+                && *leaf == arr_dims[0]
             {
                 coord_arrays.insert(*leaf);
             }

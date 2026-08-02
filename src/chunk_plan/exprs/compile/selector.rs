@@ -106,7 +106,7 @@ pub(super) fn compile_selector_lazy(
                         .is_none_or(|array_meta| {
                             dtype_selector.matches(
                                 &array_meta
-                                    .polars_dtype,
+                                    .polars_dtype(),
                             )
                         })
                 })

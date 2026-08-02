@@ -409,22 +409,22 @@ fn group_vars_by_signature(
             vec![0u64; arr_meta.ndim()];
         let outer_chunk_shape =
             chunk_shape_at_zero(
-                &arr_meta.outer_chunk_grid,
+                arr_meta.outer_chunk_grid(),
                 &zeros,
                 "outer",
                 var,
             )?;
-        let inner_chunk_shape = match arr_meta
-            .inner_chunk_grid
-            .as_ref()
-        {
-            Some(g) => chunk_shape_at_zero(
-                g, &zeros, "inner", var,
-            )?,
-            None => None,
-        };
+        let inner_chunk_shape =
+            match arr_meta.inner_chunk_grid() {
+                Some(g) => chunk_shape_at_zero(
+                    g, &zeros, "inner", var,
+                )?,
+                None => None,
+            };
+        let dims: SmallVec<[IStr; 4]> =
+            arr_meta.dims();
         let sig = ChunkGridSignature::new(
-            arr_meta.dims.clone(),
+            dims,
             outer_chunk_shape,
             inner_chunk_shape,
         )?;

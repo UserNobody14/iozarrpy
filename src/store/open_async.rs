@@ -31,7 +31,7 @@ impl AsyncOpenedStore {
     pub async fn open_array_and_cache(
         &self,
         var: &IStr,
-        array_metadata: Option<
+        metadata: Option<
             &zarrs::array::ArrayMetadata,
         >,
     ) -> Result<OpenedArrayAsync, BackendError>
@@ -40,7 +40,7 @@ impl AsyncOpenedStore {
         let norm = normalize_path(var);
 
         let array = if let Some(metadata) =
-            array_metadata
+            metadata
         {
             Array::new_with_metadata(
                 strtraits,

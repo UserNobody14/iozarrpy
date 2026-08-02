@@ -278,7 +278,7 @@ pub async fn chunk_to_df_from_grid_with_backend<
 
                 let encoding = meta
                     .array_by_path(dim_step.dim_name)
-                    .and_then(|m| m.encoding.clone());
+                    .and_then(|m| m.encoding());
 
                 Ok(build_coord_column(
                     dim_step.dim_name.as_ref(),
@@ -319,7 +319,7 @@ pub async fn chunk_to_df_from_grid_with_backend<
 
                 let encoding = meta
                     .array_by_path(vs.name)
-                    .and_then(|m| m.encoding.clone());
+                    .and_then(|m| m.encoding());
 
                 Ok(build_var_column(
                     &vs.name,

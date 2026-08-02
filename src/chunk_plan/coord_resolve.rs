@@ -95,12 +95,9 @@ impl DimCtx {
                 .first()
                 .copied()
                 .unwrap_or(n),
-            time_enc: arr
-                .encoding
-                .as_ref()
-                .and_then(|e| {
-                    e.as_time_encoding().cloned()
-                }),
+            time_enc: arr.encoding().and_then(
+                |e| e.as_time_encoding().cloned(),
+            ),
             array_path: arr.path,
         })
     }

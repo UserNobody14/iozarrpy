@@ -78,27 +78,28 @@ pub(super) fn compile_struct_field_cmp(
         op, scalar,
     )?;
 
-    if let Some(arr_meta) = arr_meta_opt
-        && arr_meta.dims.len() == 1
-    {
-        let dim = arr_meta.dims[0];
-        if ctx.dims().contains(&dim) {
-            let ranges = ctx.resolve(
-                dim,
-                &vr,
-                Expansion::Exact,
-            )?;
-            let rects =
-                RectangleSet::from_dim_constraint(
-                    ctx.universe.dims.clone(),
-                    ctx.universe.shape.clone(),
+    if let Some(arr_meta) = arr_meta_opt {
+        let dims = arr_meta.dims();
+        if dims.len() == 1 {
+            let dim = dims[0];
+            if ctx.dims().contains(&dim) {
+                let ranges = ctx.resolve(
                     dim,
-                    &ranges,
-                );
-            return Ok(ExprPlan::active(
-                VarSet::All,
-                rects,
-            ));
+                    &vr,
+                    Expansion::Exact,
+                )?;
+                let rects =
+                    RectangleSet::from_dim_constraint(
+                        ctx.universe.dims.clone(),
+                        ctx.universe.shape.clone(),
+                        dim,
+                        &ranges,
+                    );
+                return Ok(ExprPlan::active(
+                    VarSet::All,
+                    rects,
+                ));
+            }
         }
     }
 

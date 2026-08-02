@@ -7,9 +7,14 @@ use polars::prelude::{
     Schema, TimeUnit,
 };
 use smallvec::SmallVec;
-use zarrs::array::ChunkGrid;
+use zarrs::array::{
+    ArrayMetadata, ChunkGrid,
+    DataType as ZarrDataType,
+};
 
+use crate::meta::dtype::zarr_dtype_to_polars;
 use crate::meta::path::ZarrPath;
+use crate::meta::time_encoding::extract_var_encoding_from_attributes;
 use crate::shared::{
     IStr, IntoIStr, IntoManyIstrs,
 };
@@ -127,7 +132,7 @@ impl ZarrNode {
         for dim in self.dim_order() {
             let dtype = self
                 .array_by_path(dim)
-                .map(|m| m.polars_dtype.clone())
+                .map(|m| m.polars_dtype())
                 .unwrap_or(PlDataType::Int64);
             let dim_str: &str = dim.as_ref();
             fields.push(Field::new(
@@ -153,7 +158,7 @@ impl ZarrNode {
             {
                 fields.push(Field::new(
                     var_str.into(),
-                    m.polars_dtype.clone(),
+                    m.polars_dtype(),
                 ));
                 field_names
                     .insert(var_str.into());
@@ -172,7 +177,7 @@ impl ZarrNode {
             }) {
                 fields.push(Field::new(
                     var_str.into(),
-                    meta.polars_dtype.clone(),
+                    meta.polars_dtype(),
                 ));
                 field_names
                     .insert(var_str.into());
@@ -345,7 +350,7 @@ impl ZarrNode {
     ) -> Option<u64> {
         for arr in self.arrays.values() {
             if let Some(i) = arr
-                .dims
+                .dims()
                 .iter()
                 .position(|d| d == dim)
                 && let Some(len) =
@@ -371,7 +376,7 @@ impl ZarrNode {
                 let var_str: &str = var.as_ref();
                 struct_fields.push(Field::new(
                     var_str.into(),
-                    arr_meta.polars_dtype.clone(),
+                    arr_meta.polars_dtype(),
                 ));
             }
         }
@@ -676,18 +681,76 @@ impl VarEncoding {
 pub struct ZarrArrayMeta {
     pub path: IStr,
     /// Regular chunk shape (edge chunks may be smaller).
-    pub chunk_shape: Box<[u64]>,
-    pub outer_chunk_grid: Arc<ChunkGrid>,
-    pub inner_chunk_grid: Option<Arc<ChunkGrid>>,
-    pub dims: SmallVec<[IStr; 4]>,
-    pub polars_dtype: PlDataType,
-    pub encoding: Option<VarEncoding>,
-    /// Raw zarrs ArrayMetadata from traverse (for unconsolidated stores)
-    pub array_metadata:
-        Option<Arc<zarrs::array::ArrayMetadata>>,
+    chunk_shape: Box<[u64]>,
+    outer_chunk_grid: Arc<ChunkGrid>,
+    inner_chunk_grid: Option<Arc<ChunkGrid>>,
+    /// Raw zarrs metadata from traversal.
+    metadata: Arc<ArrayMetadata>,
 }
 
 impl ZarrArrayMeta {
+    pub fn new(
+        path: IStr,
+        chunk_shape: Box<[u64]>,
+        outer_chunk_grid: Arc<ChunkGrid>,
+        inner_chunk_grid: Option<Arc<ChunkGrid>>,
+        metadata: Arc<ArrayMetadata>,
+    ) -> Self {
+        Self {
+            path,
+            chunk_shape,
+            outer_chunk_grid,
+            inner_chunk_grid,
+            metadata,
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn metadata(&self) -> &ArrayMetadata {
+        &self.metadata
+    }
+
+    pub fn metadata_arc(
+        &self,
+    ) -> Arc<ArrayMetadata> {
+        Arc::clone(&self.metadata)
+    }
+
+    #[allow(dead_code)]
+    pub fn zarr_format(&self) -> u8 {
+        match self.metadata() {
+            ArrayMetadata::V2(_) => 2,
+            ArrayMetadata::V3(_) => 3,
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn raw_shape(&self) -> &[u64] {
+        match self.metadata() {
+            ArrayMetadata::V2(metadata) => {
+                &metadata.shape
+            }
+            ArrayMetadata::V3(metadata) => {
+                &metadata.shape
+            }
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn attributes(
+        &self,
+    ) -> &serde_json::Map<String, serde_json::Value>
+    {
+        match self.metadata() {
+            ArrayMetadata::V2(metadata) => {
+                &metadata.attributes
+            }
+            ArrayMetadata::V3(metadata) => {
+                &metadata.attributes
+            }
+        }
+    }
+
     pub fn shape(&self) -> &[u64] {
         self.outer_chunk_grid.array_shape()
     }
@@ -702,6 +765,90 @@ impl ZarrArrayMeta {
 
     pub fn read_chunk_shape(&self) -> &[u64] {
         &self.chunk_shape
+    }
+
+    pub fn dims(&self) -> SmallVec<[IStr; 4]> {
+        if let Some(v) = self
+            .attributes()
+            .get("_ARRAY_DIMENSIONS")
+            && let Some(list) = v.as_array()
+        {
+            let out: SmallVec<[IStr; 4]> = list
+                .iter()
+                .filter_map(|x| {
+                    x.as_str().map(|s| s.istr())
+                })
+                .collect();
+            if !out.is_empty() {
+                return out;
+            }
+        }
+
+        if let ArrayMetadata::V3(metadata) =
+            self.metadata()
+            && let Some(names) =
+                &metadata.dimension_names
+        {
+            return names
+                .iter()
+                .enumerate()
+                .map(|(i, n)| {
+                    n.as_ref()
+                        .map(|s| {
+                            s.as_str().istr()
+                        })
+                        .unwrap_or_else(|| {
+                            format!("dim_{i}")
+                                .istr()
+                        })
+                })
+                .collect();
+        }
+
+        (0..self.raw_shape().len())
+            .map(|i| format!("dim_{i}").istr())
+            .collect()
+    }
+
+    pub fn zarr_dtype(&self) -> ZarrDataType {
+        match self.metadata() {
+            ArrayMetadata::V2(metadata) => {
+                ZarrDataType::from_metadata(
+                    &metadata.dtype,
+                )
+            }
+            ArrayMetadata::V3(metadata) => {
+                ZarrDataType::from_metadata(
+                    &metadata.data_type,
+                )
+            }
+        }
+        .expect("array metadata was validated by zarrs during traversal")
+    }
+
+    pub fn polars_dtype(&self) -> PlDataType {
+        zarr_dtype_to_polars(
+            &self.zarr_dtype(),
+            self.encoding().as_ref(),
+        )
+    }
+
+    pub fn encoding(
+        &self,
+    ) -> Option<VarEncoding> {
+        extract_var_encoding_from_attributes(
+            self.attributes(),
+        )
+    }
+
+    pub fn outer_chunk_grid(&self) -> &ChunkGrid {
+        &self.outer_chunk_grid
+    }
+
+    pub fn inner_chunk_grid(
+        &self,
+    ) -> Option<&ChunkGrid> {
+        self.inner_chunk_grid.as_deref()
     }
 
     pub fn read_chunk_grid(
@@ -725,7 +872,7 @@ impl ZarrArrayMeta {
         dim: &IStr,
     ) -> Option<u64> {
         let dim_idx = self
-            .dims
+            .dims()
             .iter()
             .position(|d| d == dim)?;
         let chunk_shape = self.read_chunk_shape();
