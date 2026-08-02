@@ -123,7 +123,6 @@ fn process_array_meta_job<
 
     let arr_meta = ZarrArrayMeta {
         path: path_str.istr(),
-        shape,
         chunk_shape,
         outer_chunk_grid,
         inner_chunk_grid,

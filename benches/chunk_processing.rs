@@ -100,7 +100,6 @@ fn make_array_meta(
     let cg = make_chunk_grid(shape, chunk_shape);
     let meta = ZarrArrayMeta {
         path: path.istr(),
-        shape: shape.into(),
         chunk_shape: chunk_shape.into(),
         outer_chunk_grid: cg,
         inner_chunk_grid: None,

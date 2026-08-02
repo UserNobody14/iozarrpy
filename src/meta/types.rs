@@ -675,8 +675,6 @@ impl VarEncoding {
 #[derive(Debug)]
 pub struct ZarrArrayMeta {
     pub path: IStr,
-    /// Array shape (owned `Box` since it's a small slice typically < 10 elements).
-    pub shape: Box<[u64]>,
     /// Regular chunk shape (edge chunks may be smaller).
     pub chunk_shape: Box<[u64]>,
     pub outer_chunk_grid: Arc<ChunkGrid>,
@@ -691,11 +689,11 @@ pub struct ZarrArrayMeta {
 
 impl ZarrArrayMeta {
     pub fn shape(&self) -> &[u64] {
-        &self.shape
+        self.outer_chunk_grid.array_shape()
     }
 
     pub fn ndim(&self) -> usize {
-        self.shape.len()
+        self.shape().len()
     }
 
     pub fn is_1d(&self) -> bool {
