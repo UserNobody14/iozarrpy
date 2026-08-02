@@ -33,15 +33,19 @@ impl MockBackendSync {
         Self {
             coord_chunk: Arc::new(
                 ColumnData::F64(
-                    (0..coord_chunk_len)
-                        .map(|i| i as f64)
-                        .collect(),
+                    PrimitiveArray::from_vec(
+                        (0..coord_chunk_len)
+                            .map(|i| i as f64)
+                            .collect(),
+                    ),
                 ),
             ),
             var_chunk: Arc::new(ColumnData::F64(
-                (0..var_chunk_len)
-                    .map(|i| i as f64 * 0.1)
-                    .collect(),
+                PrimitiveArray::from_vec(
+                    (0..var_chunk_len)
+                        .map(|i| i as f64 * 0.1)
+                        .collect(),
+                ),
             )),
             coord_names: coord_names.into_istrs(),
         }
@@ -297,9 +301,11 @@ fn bench_coord_column(c: &mut Criterion) {
 
     // Coord data available
     let coord_data = ColumnData::F64(
-        (0..10)
-            .map(|i| 20.0 + i as f64)
-            .collect(),
+        PrimitiveArray::from_vec(
+            (0..10)
+                .map(|i| 20.0 + i as f64)
+                .collect(),
+        ),
     );
 
     group.bench_function(
@@ -383,9 +389,11 @@ fn bench_var_column(c: &mut Criterion) {
 
     let var_data: Arc<ColumnData> =
         Arc::new(ColumnData::F64(
-            (0..chunk_len)
-                .map(|i| i as f64 * 0.1)
-                .collect(),
+            PrimitiveArray::from_vec(
+                (0..chunk_len)
+                    .map(|i| i as f64 * 0.1)
+                    .collect(),
+            ),
         ));
 
     let dims: Vec<IStr> = vec![
@@ -405,7 +413,7 @@ fn bench_var_column(c: &mut Criterion) {
                     black_box(
                         &"temperature".istr(),
                     ),
-                    black_box(var_data.clone()),
+                    black_box(&var_data),
                     black_box(&var_dims_same),
                     black_box(&chunk_shape),
                     black_box(&offsets_zero),
@@ -425,9 +433,11 @@ fn bench_var_column(c: &mut Criterion) {
     let var_chunk_shape_diff = [20u64, 20];
     let var_data_diff: Arc<ColumnData> =
         Arc::new(ColumnData::F64(
-            (0..400)
-                .map(|i| i as f64 * 0.01)
-                .collect(),
+            PrimitiveArray::from_vec(
+                (0..400)
+                    .map(|i| i as f64 * 0.01)
+                    .collect(),
+            ),
         ));
     let var_offsets_diff = vec![5u64, 3];
 
@@ -437,9 +447,7 @@ fn bench_var_column(c: &mut Criterion) {
             b.iter(|| {
                 build_var_column(
                     black_box(&"pressure".istr()),
-                    black_box(
-                        var_data_diff.clone(),
-                    ),
+                    black_box(&var_data_diff),
                     black_box(&var_dims_diff),
                     black_box(
                         &var_chunk_shape_diff,
@@ -594,15 +602,16 @@ fn bench_compile_expr(c: &mut Criterion) {
         c.benchmark_group("compile_expr");
 
     let meta = make_test_meta();
-    let (dims, _) =
-        compute_dims_and_lengths_unified(&meta);
+    let universe = Universe::from_meta(&meta);
+    let resolver = BenchCoordResolver;
 
     // Simple column reference
     let simple_expr = col("temperature");
     group.bench_function("column_ref", |b| {
         b.iter(|| {
-            let mut ctx =
-                LazyCompileCtx::new(&meta, &dims);
+            let mut ctx = LazyCompileCtx::new(
+                &meta, &universe, &resolver,
+            );
             compile_expr(
                 black_box(&simple_expr),
                 black_box(&mut ctx),
@@ -615,8 +624,9 @@ fn bench_compile_expr(c: &mut Criterion) {
     let range_expr = col("x").gt(lit(10i64));
     group.bench_function("range_cmp", |b| {
         b.iter(|| {
-            let mut ctx =
-                LazyCompileCtx::new(&meta, &dims);
+            let mut ctx = LazyCompileCtx::new(
+                &meta, &universe, &resolver,
+            );
             compile_expr(
                 black_box(&range_expr),
                 black_box(&mut ctx),
@@ -631,8 +641,9 @@ fn bench_compile_expr(c: &mut Criterion) {
         .and(col("y").lt(lit(50i64)));
     group.bench_function("compound_and", |b| {
         b.iter(|| {
-            let mut ctx =
-                LazyCompileCtx::new(&meta, &dims);
+            let mut ctx = LazyCompileCtx::new(
+                &meta, &universe, &resolver,
+            );
             compile_expr(
                 black_box(&compound_expr),
                 black_box(&mut ctx),
@@ -648,8 +659,9 @@ fn bench_compile_expr(c: &mut Criterion) {
         .or(col("time").gt_eq(lit(20i64)));
     group.bench_function("complex_or", |b| {
         b.iter(|| {
-            let mut ctx =
-                LazyCompileCtx::new(&meta, &dims);
+            let mut ctx = LazyCompileCtx::new(
+                &meta, &universe, &resolver,
+            );
             compile_expr(
                 black_box(&complex_expr),
                 black_box(&mut ctx),

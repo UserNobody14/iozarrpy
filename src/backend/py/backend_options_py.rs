@@ -26,13 +26,14 @@ pub struct PyBackendOptions {
 }
 
 impl PyBackendOptions {
-    /// Resolve an `Option<&PyBackendOptions>` to the inner Rust struct,
-    /// falling back to [`BackendOptions::default`].
+    /// Resolve an `Option<PyBackendOptions>` to the inner Rust struct,
+    /// falling back to [`BackendOptions::default`]. Consumes the wrapper
+    /// so callers' `Option<PyBackendOptions>` ABI args don't trip
+    /// `clippy::needless_pass_by_value`.
     pub fn resolve(
-        opt: Option<&PyBackendOptions>,
+        opt: Option<PyBackendOptions>,
     ) -> BackendOptions {
-        opt.map(|o| o.inner.clone())
-            .unwrap_or_default()
+        opt.map(|o| o.inner).unwrap_or_default()
     }
 }
 
@@ -155,7 +156,7 @@ impl PyBackendOptions {
                         set.iter()
                             .map(|s| s.as_ref())
                             .collect();
-                    names.sort();
+                    names.sort_unstable();
                     format!("{names:?}")
                 }
             };

@@ -8,7 +8,6 @@ use snafu::Backtrace;
 use snafu::prelude::*;
 
 use crate::chunk_plan::ChunkGridSignature;
-use crate::chunk_plan::coord_resolve::ResolutionError;
 use crate::shared::IStr;
 /// Error type for backend operations.
 #[derive(Debug, Snafu)]
@@ -181,9 +180,6 @@ pub enum BackendError {
         source: Box<zarrs::filesystem::FilesystemStoreCreateError>
     },
 
-
-    #[snafu(context(false))]
-    ResolutionError { source: ResolutionError },
 
     #[snafu(display(
         "invalid regex pattern '{}': {}",

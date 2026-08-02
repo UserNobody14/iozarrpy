@@ -49,10 +49,11 @@ where
     )
     .await?;
 
-    let batches = match &tree {
-        Some(t) => build_batches(t, usize::MAX),
-        None => Vec::new(),
-    };
+    let batches = tree
+        .as_ref()
+        .map_or_else(Vec::new, |t| {
+            build_batches(t, usize::MAX)
+        });
 
     if let Some(max_chunks) = max_chunks_to_read {
         let total_chunks =
@@ -109,13 +110,13 @@ where
                         Arc::clone(&semaphore);
                     let backend = Arc::clone(&backend);
                     let meta = Arc::clone(&meta);
+                    // Move all data from ChunkRead into the async block
                     let leaf_idx = r.leaf_idx;
-                    let sig = Arc::clone(&r.sig);
-                    let array_shape =
-                        Arc::clone(&r.array_shape);
-                    let vars = Arc::clone(&r.vars);
-                    let idx = Arc::clone(&r.idx);
-                    let subset = r.subset.clone();
+                    let sig = r.sig;
+                    let array_shape = r.array_shape;
+                    let vars = r.vars;
+                    let idx = r.idx;
+                    let subset = r.subset;
 
                     futs.push(async move {
                         let _permit = sem
@@ -127,10 +128,10 @@ where
                         let df =
                             chunk_to_df_from_grid_with_backend(
                                 backend.as_ref(),
-                                idx.as_ref(),
+                                &idx,
                                 sig.as_ref(),
-                                array_shape.as_ref(),
-                                vars.as_ref(),
+                                &array_shape,
+                                &vars,
                                 None,
                                 subset.as_deref(),
                                 &meta,

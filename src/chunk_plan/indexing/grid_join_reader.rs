@@ -25,9 +25,7 @@ use super::grid_join_tree::{
     ChunkSubset, GridJoinTree, LeafGroup,
 };
 use crate::chunk_plan::ChunkGridSignature;
-use crate::errors::{
-    BackendError, BackendResult, PolarsSnafu,
-};
+use crate::errors::{BackendResult, PolarsSnafu};
 use crate::shared::{FromManyIstrs, IStr};
 
 /// Chunks read in one slab of one leaf.
@@ -48,25 +46,29 @@ pub struct ReaderBatch {
 #[derive(Clone, Debug)]
 pub struct BatchPlan {
     pub batch: ReaderBatch,
-    pub combine: CombineNode,
+    pub combine: Arc<CombineNode>,
 }
 
 /// Recursive recipe for combining per-leaf DataFrames inside one batch.
-#[derive(Clone, Debug)]
+///
+/// Children are `Arc`-shared so the per-batch combine plan can be cheaply
+/// cloned out of the schedule's join template and propagated through
+/// iterators without deep tree copies.
+#[derive(Debug)]
 pub enum CombineNode {
     /// Take the DataFrame for `leaf_idx` as-is.
     Leaf { leaf_idx: usize },
     /// Full-outer-join children on the named columns (with key coalescing).
     Join {
         join_dims: Vec<IStr>,
-        children: Vec<CombineNode>,
+        children: Vec<Arc<CombineNode>>,
     },
     /// Diagonal-concatenate children (no shared keys).
-    Concat { children: Vec<CombineNode> },
+    Concat { children: Vec<Arc<CombineNode>> },
     /// Wrap the child's combined DataFrame's `"<name>/..."` columns into a
     /// single `Struct`-typed column called `name`. Mirrors
     /// [`GridJoinTree::Group`].
-    Group { name: IStr, child: Box<CombineNode> },
+    Group { name: IStr, child: Arc<CombineNode> },
 }
 
 /// Walk a [`GridJoinTree`] and emit a stream of [`BatchPlan`]s sized by
@@ -88,7 +90,7 @@ enum ScheduleNode {
     /// A join-closed subtree. Driven by `driver_leaf`; siblings project on
     /// `join_axes_per_participant` (parallel arrays with `participants`).
     JoinClosed {
-        combine: CombineNode,
+        combine: Arc<CombineNode>,
         driver_leaf: usize,
         driver_cursor: usize,
         participants: Vec<usize>,
@@ -140,7 +142,7 @@ fn advance_node(
     leaves: &[&LeafGroup],
     batch_size: usize,
     slabs: &mut Vec<LeafSlab>,
-) -> Option<CombineNode> {
+) -> Option<Arc<CombineNode>> {
     match node {
         ScheduleNode::Leaf {
             leaf_idx,
@@ -156,9 +158,9 @@ fn advance_node(
                 leaf_idx: *leaf_idx,
                 chunk_slots: slots,
             });
-            Some(CombineNode::Leaf {
+            Some(Arc::new(CombineNode::Leaf {
                 leaf_idx: *leaf_idx,
-            })
+            }))
         }
         ScheduleNode::JoinClosed {
             combine,
@@ -200,13 +202,13 @@ fn advance_node(
                     chunk_slots: slots,
                 });
             }
-            Some(combine.clone())
+            Some(Arc::clone(combine))
         }
         ScheduleNode::Independent {
             children,
         } => {
             let mut child_combines: Vec<
-                CombineNode,
+                Arc<CombineNode>,
             > = Vec::new();
             for child in children {
                 if let Some(c) = advance_node(
@@ -218,15 +220,12 @@ fn advance_node(
             }
             match child_combines.len() {
                 0 => None,
-                1 => Some(
-                    child_combines
-                        .into_iter()
-                        .next()
-                        .unwrap(),
-                ),
-                _ => Some(CombineNode::Concat {
-                    children: child_combines,
-                }),
+                1 => child_combines.pop(),
+                _ => Some(Arc::new(
+                    CombineNode::Concat {
+                        children: child_combines,
+                    },
+                )),
             }
         }
         ScheduleNode::Group { name, child } => {
@@ -234,10 +233,10 @@ fn advance_node(
                 child, leaves, batch_size, slabs,
             )
             .map(|combine| {
-                CombineNode::Group {
+                Arc::new(CombineNode::Group {
                     name: *name,
-                    child: Box::new(combine),
-                }
+                    child: combine,
+                })
             })
         }
     }
@@ -524,8 +523,8 @@ fn collect_join_participants(
 fn combine_for(
     tree: &GridJoinTree,
     leaves: &[&LeafGroup],
-) -> CombineNode {
-    match tree {
+) -> Arc<CombineNode> {
+    Arc::new(match tree {
         GridJoinTree::Leaf(g) => {
             CombineNode::Leaf {
                 leaf_idx: leaf_index_of(
@@ -537,10 +536,7 @@ fn combine_for(
             join_dims,
             subtrees,
         } => CombineNode::Join {
-            join_dims: join_dims
-                .iter()
-                .copied()
-                .collect(),
+            join_dims: join_dims.to_vec(),
             children: subtrees
                 .iter()
                 .map(|s| combine_for(s, leaves))
@@ -559,12 +555,10 @@ fn combine_for(
         GridJoinTree::Group { name, child } => {
             CombineNode::Group {
                 name: *name,
-                child: Box::new(combine_for(
-                    child, leaves,
-                )),
+                child: combine_for(child, leaves),
             }
         }
-    }
+    })
 }
 
 // =============================================================================
@@ -797,54 +791,13 @@ fn wrap_columns_into_group_struct(
     df: DataFrame,
     group_name: IStr,
 ) -> BackendResult<DataFrame> {
-    let group_str: &str = group_name.as_ref();
-    let prefix = format!("{group_str}/");
     let height = df.height();
-    let cols = df.into_columns();
-
-    let mut kept: Vec<Column> = Vec::new();
-    let mut grouped: Vec<Column> = Vec::new();
-    for col in cols {
-        let full_name = col.name().to_string();
-        if let Some(field_name) =
-            full_name.strip_prefix(&prefix)
-        {
-            let field_pl: PlSmallStr =
-                field_name.into();
-            let renamed = col.with_name(field_pl);
-            grouped.push(renamed);
-        } else {
-            kept.push(col);
-        }
-    }
-
-    if grouped.is_empty() {
-        return DataFrame::new(height, kept).context(
-            PolarsSnafu {
-                message:
-                    "Error rebuilding DataFrame after group wrap"
-                        .to_string(),
-            },
-        );
-    }
-
-    let nested = nest_columns_recursively(
-        grouped, height,
-    )?;
-
-    let struct_col = StructChunked::from_columns(
-        group_str.into(),
+    let out = nest_columns_by_slash(
+        df.into_columns(),
         height,
-        &nested,
-    )
-    .context(PolarsSnafu {
-        message:
-            "Error creating Group struct column"
-                .to_string(),
-    })?;
-    kept.push(struct_col.into_column());
-
-    DataFrame::new(height, kept).context(
+        Some(group_name.as_ref()),
+    )?;
+    DataFrame::new(height, out).context(
         PolarsSnafu {
             message:
                 "Error building Group DataFrame"
@@ -853,39 +806,45 @@ fn wrap_columns_into_group_struct(
     )
 }
 
-/// Recursively partition `cols` by their first `'/'`-separated component,
-/// emitting a nested [`StructChunked`] per non-leaf component.
-fn nest_columns_recursively(
+/// Partition `cols` by their first `'/'`-separated component, recursively
+/// emitting a nested [`StructChunked`] per non-leaf component. When
+/// `top_filter` is `Some(name)`, only the column whose first component equals
+/// `name` participates in struct-wrapping — every other column passes through
+/// untouched. When `None`, every `'/'`-bearing name is wrapped.
+fn nest_columns_by_slash(
     cols: Vec<Column>,
     height: usize,
+    top_filter: Option<&str>,
 ) -> BackendResult<Vec<Column>> {
     use std::collections::BTreeMap;
-
-    let mut leaves: Vec<Column> = Vec::new();
+    let mut out: Vec<Column> = Vec::new();
     let mut groups: BTreeMap<
         String,
         Vec<Column>,
     > = BTreeMap::new();
     for col in cols {
         let full_name = col.name().to_string();
-        if let Some((head, tail)) =
+        let Some((head, tail)) =
             full_name.split_once('/')
+        else {
+            out.push(col);
+            continue;
+        };
+        if let Some(filter) = top_filter
+            && head != filter
         {
-            let renamed =
-                col.with_name(tail.into());
-            groups
-                .entry(head.to_string())
-                .or_default()
-                .push(renamed);
-        } else {
-            leaves.push(col);
+            out.push(col);
+            continue;
         }
+        let renamed = col.with_name(tail.into());
+        groups
+            .entry(head.to_string())
+            .or_default()
+            .push(renamed);
     }
-
-    let mut out: Vec<Column> = leaves;
-    for (head, group_cols) in groups {
-        let nested = nest_columns_recursively(
-            group_cols, height,
+    for (head, gcols) in groups {
+        let nested = nest_columns_by_slash(
+            gcols, height, None,
         )?;
         let struct_col =
             StructChunked::from_columns(
@@ -895,7 +854,7 @@ fn nest_columns_recursively(
             )
             .context(PolarsSnafu {
                 message:
-                    "Error creating nested Group struct column"
+                    "Error creating Group struct column"
                         .to_string(),
             })?;
         out.push(struct_col.into_column());
@@ -929,6 +888,10 @@ pub fn vstack_leaf(
 }
 
 /// Per-leaf chunk read descriptors used by both sync and async drivers.
+///
+/// Every field is shared with the underlying [`LeafGroup`] via `Arc`, so
+/// constructing one is a handful of refcount bumps — no per-chunk slice or
+/// subset copies on the hot path.
 pub struct ChunkRead {
     pub leaf_idx: usize,
     pub sig: Arc<ChunkGridSignature>,
@@ -943,7 +906,13 @@ pub fn flatten_reads(
     plan: &BatchPlan,
     leaves: &[&LeafGroup],
 ) -> Vec<ChunkRead> {
-    let mut out = Vec::new();
+    let total: usize = plan
+        .batch
+        .slabs
+        .iter()
+        .map(|s| s.chunk_slots.len())
+        .sum();
+    let mut out = Vec::with_capacity(total);
     for slab in &plan.batch.slabs {
         let g = leaves[slab.leaf_idx];
         for &slot in &slab.chunk_slots {
@@ -992,12 +961,6 @@ pub fn assemble_batch_dataframe(
         }
     }
     combine_per_leaf(&plan.combine, &mut per_leaf)
-}
-
-// Suppress unused warnings; these helpers exist for max_chunks_to_read accounting.
-#[allow(dead_code)]
-fn _unused(e: BackendError) -> BackendError {
-    e
 }
 
 #[cfg(test)]

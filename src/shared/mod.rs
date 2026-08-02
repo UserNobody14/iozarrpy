@@ -10,6 +10,11 @@ pub(crate) use options::AssumeSortedDims;
 pub use options::BackendOptions;
 pub(crate) use parallel::MaybeParIter;
 
+#[cfg(feature = "bench")]
+pub use intern::{
+    FromManyIstrs, IStr, IntoIStr, IntoManyIstrs,
+};
+
 // Re-export commonly used traits
 pub use traits::{
     ChunkedDataBackendAsync,

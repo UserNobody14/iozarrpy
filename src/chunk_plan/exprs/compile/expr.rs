@@ -94,7 +94,7 @@ pub fn compile_expr(
                 Ok(func_plan)
             } else {
                 Ok(func_plan.add_vars(
-                    VarSet::from_vec(refs),
+                    &VarSet::from_vec(refs),
                 ))
             }
         }
@@ -130,7 +130,9 @@ pub fn compile_expr(
                 Ok(result)
             } else {
                 Ok(result.add_vars(
-                    VarSet::from_vec(filter_refs),
+                    &VarSet::from_vec(
+                        filter_refs,
+                    ),
                 ))
             }
         }

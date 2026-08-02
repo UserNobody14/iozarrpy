@@ -104,20 +104,10 @@ impl ZarrIteratorInner {
     ) -> Result<(), PyErr> {
         let meta = self.backend.metadata()?;
         let with_set: Option<BTreeSet<IStr>> =
-            if let Some(cols) = &self.with_columns
-            {
-                Some(
-                    cols.iter()
-                        .copied()
-                        .collect(),
-                )
-            } else {
-                Some(
-                    meta.tidy_column_order(None)
-                        .into_iter()
-                        .collect(),
-                )
-            };
+            self.with_columns.as_ref().map_or_else(
+                || Some(meta.tidy_column_order(None).into_iter().collect()),
+                |cols| Some(cols.iter().copied().collect()),
+            );
         let policy = ResolvedColumnPolicy::new(
             with_set, &self.expr, &meta,
         );
@@ -135,12 +125,11 @@ impl ZarrIteratorInner {
             expr_top_literal_bool(&self.expr)
                 == Some(false);
 
-        let batches = match &tree {
-            Some(t) => {
+        let batches = tree
+            .as_ref()
+            .map_or_else(Vec::new, |t| {
                 build_batches(t, self.batch_size)
-            }
-            None => Vec::new(),
-        };
+            });
         // Always emit a single empty-schema batch when there's no actual data
         // to scan (literal-false predicate or pushdown trimmed every grid).
         // Polars needs at least one batch with the correct columns to resolve
@@ -251,10 +240,10 @@ impl ZarrIteratorInner {
                 .map_collect(|r| {
                     let df = chunk_to_df_from_grid_with_backend_sync(
                         backend.as_ref(),
-                        r.idx.as_ref(),
+                        &r.idx,
                         r.sig.as_ref(),
-                        r.array_shape.as_ref(),
-                        r.vars.as_ref(),
+                        &r.array_shape,
+                        &r.vars,
                         expanded_with_columns.as_ref(),
                         r.subset.as_deref(),
                         &meta,

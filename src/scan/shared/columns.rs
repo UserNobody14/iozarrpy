@@ -249,7 +249,7 @@ pub fn build_coord_column(
                 .map(|j| j + origin_val)
                 .collect();
             let tile_count = *n / (cs * stride);
-            ColumnData::I64(small)
+            ColumnData::from_i64_vec(small)
                 .repeat_tile(stride, tile_count)
                 .into_series(dim_name)
                 .into()
@@ -304,16 +304,16 @@ pub fn compute_in_bounds_mask(
             array_shape[d]
                 .saturating_sub(origin[d]),
         );
-        let (start, end) = if let Some(sub) =
-            chunk_subset
-        {
-            let s = sub.ranges[d].start;
-            let e =
-                sub.ranges[d].end.min(edge_end);
-            (s, e)
-        } else {
-            (0u64, edge_end)
-        };
+        let (start, end) = chunk_subset.map_or(
+            (0u64, edge_end),
+            |sub| {
+                let s = sub.ranges[d].start;
+                let e = sub.ranges[d]
+                    .end
+                    .min(edge_end);
+                (s, e)
+            },
+        );
         if start >= end {
             return KeepMask::Sparse(Vec::new());
         }
@@ -422,12 +422,12 @@ pub(crate) fn apply_encoding(
 
 /// Build a variable column for the DataFrame.
 ///
-/// Takes `data` by value so the common fast path
-/// (`KeepMask::All` + same shape) can hand the
-/// buffer directly to Polars with zero copying.
+/// Takes `data` by reference; the fast path borrows
+/// the buffer into a Series without copying, and the
+/// encoded path clones once via `data.as_ref().clone()`.
 pub fn build_var_column(
     name: &IStr,
-    data: Arc<ColumnData>,
+    data: &Arc<ColumnData>,
     var_dims: &[IStr],
     var_chunk_shape: &[u64],
     var_offsets: &[u64],
@@ -468,7 +468,7 @@ pub fn build_var_column(
             KeepMask::All(_) => {
                 // Cannot zero-copy when encoding
                 // needs to transform data.
-                (*data).clone()
+                data.as_ref().clone()
             }
             KeepMask::Sparse(idx) => {
                 data.take_indices(idx)
@@ -481,69 +481,235 @@ pub fn build_var_column(
         );
     }
 
-    // Slow path: map indices through dimension
-    // differences. Uses gather_by to fuse index
-    // computation and data gathering into a single
-    // pass (avoids intermediate Vec<usize>).
-    let dim_mapping: Vec<Option<usize>> =
-        primary_dims
-            .iter()
-            .map(|pd| {
-                var_dims
-                    .iter()
-                    .position(|vd| vd == pd)
-            })
-            .collect();
+    // Slow path: map indices through dimension differences.
+    //
+    // Precomputes a per-primary-dim "contribution table" so the inner gather
+    // does table lookups instead of div+mod+mul per dim per row. For the dense
+    // `KeepMask::All` case we further iterate the chunk in C-order with a
+    // running `var_idx`, eliminating div+mod entirely from the hot loop.
     let var_strides =
         compute_strides(var_chunk_shape);
     let var_data_len = data.len();
-
-    let compute_var_idx = |row: usize| -> usize {
-        let mut var_idx: u64 = 0;
-        for (primary_d, maybe_var_d) in
-            dim_mapping.iter().enumerate()
-        {
-            if let Some(var_d) = *maybe_var_d {
-                let local = (row as u64
-                    / primary_strides[primary_d])
-                    % primary_chunk_shape
-                        [primary_d];
-                let var_local = if same_dims
-                    && var_chunk_shape.len()
-                        > var_d
-                {
-                    local.min(
-                        var_chunk_shape[var_d]
-                            .saturating_sub(1),
-                    )
-                } else {
-                    local
-                };
-                let local_with_offset = var_local
-                    + var_offsets[var_d];
-                var_idx += local_with_offset
-                    * var_strides[var_d];
-            }
-        }
-        (var_idx as usize)
-            .min(var_data_len.saturating_sub(1))
-    };
+    let tbls = build_dim_contrib_tables(
+        primary_dims,
+        primary_chunk_shape,
+        var_dims,
+        var_chunk_shape,
+        var_offsets,
+        &var_strides,
+        same_dims,
+    );
 
     let gathered = match keep {
-        KeepMask::All(n) => data
-            .gather_by(*n, |i| {
-                compute_var_idx(i)
-            }),
-        KeepMask::Sparse(idx) => data
-            .gather_by(idx.len(), |i| {
-                compute_var_idx(idx[i])
-            }),
+        KeepMask::All(n) => {
+            let var_indices =
+                var_indices_cartesian(
+                    primary_chunk_shape,
+                    &tbls,
+                    var_data_len,
+                );
+            debug_assert_eq!(
+                var_indices.len(),
+                *n
+            );
+            data.take_indices(&var_indices)
+        }
+        KeepMask::Sparse(idx) => {
+            let cap =
+                var_data_len.saturating_sub(1);
+            data.gather_by(idx.len(), |i| {
+                var_idx_for_row(
+                    idx[i],
+                    primary_strides,
+                    primary_chunk_shape,
+                    &tbls,
+                )
+                .min(cap)
+            })
+        }
     };
     apply_encoding(
         gathered,
         name.as_ref(),
         encoding,
     )
+}
+
+/// Per-primary-dim contribution table.
+///
+/// `tbls[d][l]` = the `var_idx` contribution of primary dim `d` when its local
+/// position is `l`. An empty inner `Vec` means primary dim `d` is not mapped
+/// to any var dim (no contribution).
+fn build_dim_contrib_tables(
+    primary_dims: &[IStr],
+    primary_chunk_shape: &[u64],
+    var_dims: &[IStr],
+    var_chunk_shape: &[u64],
+    var_offsets: &[u64],
+    var_strides: &[u64],
+    same_dims: bool,
+) -> SmallVec<[Vec<u64>; 4]> {
+    let ndim = primary_dims.len();
+    let mut tbls: SmallVec<[Vec<u64>; 4]> =
+        SmallVec::with_capacity(ndim);
+    for (primary_d, primary_dim) in
+        primary_dims.iter().enumerate()
+    {
+        let Some(var_d) = var_dims
+            .iter()
+            .position(|vd| vd == primary_dim)
+        else {
+            tbls.push(Vec::new());
+            continue;
+        };
+        let chunk_size = primary_chunk_shape
+            [primary_d]
+            as usize;
+        let stride = var_strides[var_d];
+        let offset = var_offsets[var_d];
+        // Preserve the previous semantics: clamp the local index to the var
+        // chunk's extent only when primary/var dim names align. The dim-name
+        // case with different shapes is the only one where clamping makes
+        // sense; for fully-disjoint dim sets we just use the raw local.
+        let clamp_to = if same_dims
+            && var_chunk_shape.len() > var_d
+        {
+            Some(
+                var_chunk_shape[var_d]
+                    .saturating_sub(1),
+            )
+        } else {
+            None
+        };
+        let mut tbl: Vec<u64> =
+            Vec::with_capacity(chunk_size);
+        for l in 0..(chunk_size as u64) {
+            let var_local = clamp_to
+                .map_or(l, |max| l.min(max));
+            tbl.push(
+                (var_local + offset) * stride,
+            );
+        }
+        tbls.push(tbl);
+    }
+    tbls
+}
+
+/// `var_idx` for a single primary row using table lookups instead of mul.
+///
+/// Still requires one div+mod per primary dim per row (to decode `local`),
+/// which is acceptable for the sparse case where the kept-row count is small.
+#[inline]
+fn var_idx_for_row(
+    row: usize,
+    primary_strides: &[u64],
+    primary_chunk_shape: &[u64],
+    tbls: &[Vec<u64>],
+) -> usize {
+    let mut var_idx: u64 = 0;
+    for (d, tbl) in tbls.iter().enumerate() {
+        if tbl.is_empty() {
+            continue;
+        }
+        let local = (row as u64
+            / primary_strides[d])
+            % primary_chunk_shape[d];
+        var_idx += tbl[local as usize];
+    }
+    var_idx as usize
+}
+
+/// Cartesian-enumerate the full primary chunk and emit one `var_idx` per
+/// primary row in C-order. Maintains a running `var_idx` via add/subtract on
+/// the per-dim contribution table — no div+mod, no mul in the hot loop.
+///
+/// The innermost dim is unrolled into a straight run over its contribution
+/// table; outer dims are stepped via a carry cascade. For a chunk with N
+/// primary rows this is O(N) additions plus O(ndim × chunk_shape[d]) table
+/// setup amortized across the whole chunk.
+fn var_indices_cartesian(
+    primary_chunk_shape: &[u64],
+    tbls: &[Vec<u64>],
+    var_data_len: usize,
+) -> Vec<usize> {
+    let ndim = primary_chunk_shape.len();
+    let total: usize = primary_chunk_shape
+        .iter()
+        .product::<u64>()
+        as usize;
+    let cap = var_data_len.saturating_sub(1);
+    let mut out: Vec<usize> =
+        Vec::with_capacity(total);
+
+    if ndim == 0 {
+        out.push(0);
+        return out;
+    }
+
+    let last_d = ndim - 1;
+    let last_size =
+        primary_chunk_shape[last_d] as usize;
+    let last_tbl: &[u64] = &tbls[last_d];
+
+    // Running base = sum of outer dims' contributions at the current cursor.
+    // `local[d]` tracks the current local index for outer dim `d`; the
+    // innermost dim is handled by the inner emit loop directly.
+    let mut local: SmallVec<[u64; 4]> =
+        smallvec::smallvec![0u64; ndim];
+    let mut base: u64 = 0;
+    for tbl in tbls.iter().take(last_d) {
+        if !tbl.is_empty() {
+            base += tbl[0];
+        }
+    }
+
+    'outer: loop {
+        // Emit the innermost run at the current outer cursor.
+        if last_tbl.is_empty() {
+            let base_idx =
+                (base as usize).min(cap);
+            for _ in 0..last_size {
+                out.push(base_idx);
+            }
+        } else {
+            for &c in last_tbl.iter() {
+                let v = base + c;
+                out.push((v as usize).min(cap));
+            }
+        }
+
+        if last_d == 0 {
+            break;
+        }
+
+        // Carry-cascade outer dims.
+        let mut d = last_d;
+        loop {
+            if d == 0 {
+                break 'outer;
+            }
+            d -= 1;
+            let tbl = &tbls[d];
+            if !tbl.is_empty() {
+                base -= tbl[local[d] as usize];
+            }
+            local[d] += 1;
+            if local[d] < primary_chunk_shape[d] {
+                if !tbl.is_empty() {
+                    base +=
+                        tbl[local[d] as usize];
+                }
+                break;
+            }
+            // Wrap and continue cascading.
+            local[d] = 0;
+            if !tbl.is_empty() {
+                base += tbl[0];
+            }
+        }
+    }
+
+    out
 }
 
 #[cfg(test)]
@@ -753,6 +919,360 @@ mod tests {
             &[5],
             &[20],
             Some(&subset),
+        );
+    }
+
+    // ---- Slow-path correctness: cartesian gather vs reference closure ----
+
+    use crate::shared::IntoIStr;
+    use polars_arrow::array::PrimitiveArray;
+    use std::sync::Arc;
+
+    fn legacy_compute_var_idx(
+        row: usize,
+        primary_dims: &[IStr],
+        primary_chunk_shape: &[u64],
+        primary_strides: &[u64],
+        var_dims: &[IStr],
+        var_chunk_shape: &[u64],
+        var_offsets: &[u64],
+        var_strides: &[u64],
+        same_dims: bool,
+    ) -> u64 {
+        let mut var_idx: u64 = 0;
+        for (primary_d, primary_dim) in
+            primary_dims.iter().enumerate()
+        {
+            let Some(var_d) = var_dims
+                .iter()
+                .position(|vd| vd == primary_dim)
+            else {
+                continue;
+            };
+            let local = (row as u64
+                / primary_strides[primary_d])
+                % primary_chunk_shape[primary_d];
+            let var_local = if same_dims
+                && var_chunk_shape.len() > var_d
+            {
+                local.min(
+                    var_chunk_shape[var_d]
+                        .saturating_sub(1),
+                )
+            } else {
+                local
+            };
+            var_idx += (var_local
+                + var_offsets[var_d])
+                * var_strides[var_d];
+        }
+        var_idx
+    }
+
+    fn check_slow_path_matches_legacy(
+        primary_dims: &[&str],
+        primary_chunk_shape: &[u64],
+        var_dims: &[&str],
+        var_chunk_shape: &[u64],
+        var_offsets: &[u64],
+        var_data_len: usize,
+    ) {
+        let p_dims: Vec<IStr> = primary_dims
+            .iter()
+            .map(|s| s.istr())
+            .collect();
+        let v_dims: Vec<IStr> = var_dims
+            .iter()
+            .map(|s| s.istr())
+            .collect();
+        let primary_strides =
+            compute_strides(primary_chunk_shape);
+        let var_strides =
+            compute_strides(var_chunk_shape);
+        let same_dims = p_dims.len()
+            == v_dims.len()
+            && p_dims == v_dims;
+
+        let tbls = build_dim_contrib_tables(
+            &p_dims,
+            primary_chunk_shape,
+            &v_dims,
+            var_chunk_shape,
+            var_offsets,
+            &var_strides,
+            same_dims,
+        );
+
+        let chunk_len: usize = primary_chunk_shape
+            .iter()
+            .product::<u64>()
+            as usize;
+
+        // KeepMask::All path uses cartesian enumeration.
+        let cartesian = var_indices_cartesian(
+            primary_chunk_shape,
+            &tbls,
+            var_data_len,
+        );
+        assert_eq!(cartesian.len(), chunk_len);
+        let cap = var_data_len.saturating_sub(1);
+        for (row, &actual) in cartesian
+            .iter()
+            .enumerate()
+            .take(chunk_len)
+        {
+            let expected =
+                (legacy_compute_var_idx(
+                    row,
+                    &p_dims,
+                    primary_chunk_shape,
+                    &primary_strides,
+                    &v_dims,
+                    var_chunk_shape,
+                    var_offsets,
+                    &var_strides,
+                    same_dims,
+                ) as usize)
+                    .min(cap);
+            assert_eq!(
+                actual, expected,
+                "cartesian mismatch row={row} primary={primary_chunk_shape:?} var={var_chunk_shape:?} offsets={var_offsets:?}"
+            );
+        }
+
+        // Sparse path uses per-row decoding via tables.
+        let sparse_rows: Vec<usize> = (0
+            ..chunk_len)
+            .filter(|i| i % 3 == 0)
+            .collect();
+        for &row in &sparse_rows {
+            let got = var_idx_for_row(
+                row,
+                &primary_strides,
+                primary_chunk_shape,
+                &tbls,
+            )
+            .min(cap);
+            let expected =
+                (legacy_compute_var_idx(
+                    row,
+                    &p_dims,
+                    primary_chunk_shape,
+                    &primary_strides,
+                    &v_dims,
+                    var_chunk_shape,
+                    var_offsets,
+                    &var_strides,
+                    same_dims,
+                ) as usize)
+                    .min(cap);
+            assert_eq!(
+                got, expected,
+                "sparse mismatch row={row}"
+            );
+        }
+    }
+
+    #[test]
+    fn slow_path_same_dims_diff_chunk_shape() {
+        // same dims, different chunk shape, zero offsets
+        check_slow_path_matches_legacy(
+            &["x", "y", "time"],
+            &[10, 10, 10],
+            &["x", "y", "time"],
+            &[5, 5, 5],
+            &[0, 0, 0],
+            125,
+        );
+    }
+
+    #[test]
+    fn slow_path_diff_dims_with_offsets() {
+        // Different dim subset (var lacks 'time'), with offsets
+        check_slow_path_matches_legacy(
+            &["x", "y", "time"],
+            &[10, 10, 10],
+            &["x", "y"],
+            &[20, 20],
+            &[5, 3],
+            400,
+        );
+    }
+
+    #[test]
+    fn slow_path_var_missing_primary_dim() {
+        // var dims is a strict subset of primary dims
+        check_slow_path_matches_legacy(
+            &["x", "y", "time"],
+            &[8, 8, 4],
+            &["x", "time"],
+            &[16, 8],
+            &[0, 0],
+            128,
+        );
+    }
+
+    #[test]
+    fn slow_path_1d() {
+        check_slow_path_matches_legacy(
+            &["t"],
+            &[7],
+            &["t"],
+            &[10],
+            &[0],
+            10,
+        );
+    }
+
+    // ---- Integration: build_var_column slow path matches the reference ----
+
+    fn build_reference_var_column(
+        data: &Arc<ColumnData>,
+        var_dims: &[IStr],
+        var_chunk_shape: &[u64],
+        var_offsets: &[u64],
+        primary_dims: &[IStr],
+        primary_chunk_shape: &[u64],
+        primary_strides: &[u64],
+        keep: &KeepMask,
+    ) -> Vec<f64> {
+        let same_dims = var_dims == primary_dims;
+        let var_strides =
+            compute_strides(var_chunk_shape);
+        let values = data
+            .as_f64_values()
+            .expect("test uses F64");
+        let var_data_len = values.len();
+        let cap = var_data_len.saturating_sub(1);
+
+        let row_var_idx = |row: usize| -> usize {
+            (legacy_compute_var_idx(
+                row,
+                primary_dims,
+                primary_chunk_shape,
+                primary_strides,
+                var_dims,
+                var_chunk_shape,
+                var_offsets,
+                &var_strides,
+                same_dims,
+            ) as usize)
+                .min(cap)
+        };
+
+        match keep {
+            KeepMask::All(n) => (0..*n)
+                .map(|i| values[row_var_idx(i)])
+                .collect(),
+            KeepMask::Sparse(idx) => idx
+                .iter()
+                .map(|&r| values[row_var_idx(r)])
+                .collect(),
+        }
+    }
+
+    fn check_build_var_column_diff(
+        primary_dims_s: &[&str],
+        primary_chunk_shape: &[u64],
+        var_dims_s: &[&str],
+        var_chunk_shape: &[u64],
+        var_offsets: &[u64],
+        keep: &KeepMask,
+    ) {
+        let p_dims: Vec<IStr> = primary_dims_s
+            .iter()
+            .map(|s| s.istr())
+            .collect();
+        let v_dims: Vec<IStr> = var_dims_s
+            .iter()
+            .map(|s| s.istr())
+            .collect();
+        let primary_strides =
+            compute_strides(primary_chunk_shape);
+        let var_len: usize = var_chunk_shape
+            .iter()
+            .product::<u64>()
+            as usize;
+        let raw: Vec<f64> = (0..var_len)
+            .map(|i| i as f64 * 0.5 + 7.0)
+            .collect();
+        let data: Arc<ColumnData> =
+            Arc::new(ColumnData::F64(
+                PrimitiveArray::from_vec(raw),
+            ));
+        let name = "v".istr();
+        let col = build_var_column(
+            &name,
+            &data,
+            &v_dims,
+            var_chunk_shape,
+            var_offsets,
+            &p_dims,
+            primary_chunk_shape,
+            &primary_strides,
+            keep,
+            None,
+        );
+        let expected = build_reference_var_column(
+            &data,
+            &v_dims,
+            var_chunk_shape,
+            var_offsets,
+            &p_dims,
+            primary_chunk_shape,
+            &primary_strides,
+            keep,
+        );
+        let series =
+            col.as_series().unwrap().clone();
+        let chunked = series
+            .f64()
+            .expect("expected f64 series");
+        let actual: Vec<f64> =
+            chunked.into_no_null_iter().collect();
+        assert_eq!(
+            actual, expected,
+            "build_var_column mismatch for primary={primary_dims_s:?} var={var_dims_s:?}"
+        );
+    }
+
+    #[test]
+    fn build_var_column_diff_dims_all() {
+        check_build_var_column_diff(
+            &["x", "y", "time"],
+            &[10, 10, 10],
+            &["x", "y"],
+            &[20, 20],
+            &[5, 3],
+            &KeepMask::All(1000),
+        );
+    }
+
+    #[test]
+    fn build_var_column_diff_dims_sparse() {
+        let idx: Vec<usize> = (0..1000)
+            .filter(|i| i % 7 == 0)
+            .collect();
+        check_build_var_column_diff(
+            &["x", "y", "time"],
+            &[10, 10, 10],
+            &["x", "y"],
+            &[20, 20],
+            &[5, 3],
+            &KeepMask::Sparse(idx),
+        );
+    }
+
+    #[test]
+    fn build_var_column_same_dims_diff_shape() {
+        // Same dims, different chunk shape — triggers clamping.
+        check_build_var_column_diff(
+            &["a", "b", "c"],
+            &[8, 8, 8],
+            &["a", "b", "c"],
+            &[5, 5, 5],
+            &[0, 0, 0],
+            &KeepMask::All(512),
         );
     }
 }

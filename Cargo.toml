@@ -107,6 +107,7 @@ pyo3-polars = { git = "https://github.com/pola-rs/polars.git", tag = "py-1.43.2"
     "lazy",
     "dtype-full",
 ] }
+polars-arrow = { git = "https://github.com/pola-rs/polars.git", tag = "py-1.43.2" }
 tokio = { version = "1.45.1", features = ["rt-multi-thread", "macros", "sync", "parking_lot"] }
 url = "2.5.4"
 zarrs = { version = "0.23.13", features = [
@@ -153,6 +154,7 @@ snafu = {version = "0.8.9", features = ["backtrace"] }
 # Profiling/tracing support (behind feature flag)
 console-subscriber = { version = "0.4", optional = true }
 tracing = { version = "0.1", optional = true }
+bytemuck = "1.25.0"
 
 [dev-dependencies]
 criterion = { version = "0.8", features = ["html_reports"] }
@@ -168,6 +170,24 @@ bench = []
 name = "chunk_processing"
 harness = false
 required-features = ["bench"]
+
+[[bench]]
+name = "var_column"
+harness = false
+required-features = ["bench"]
+
+# Bench profile: this toolchain SIGSEGVs in LLVM when compiling polars at
+# opt-level >= 1, so dependencies stay at opt-level=0 (the default for dev).
+# Our crate (rainbear) is built at opt-level=3 to get realistic numbers for
+# the code under test. Benchmark *ratios* are valid; absolute numbers are
+# pessimistic for the dependency surface (Series::new etc.).
+[profile.bench]
+inherits = "dev"
+codegen-units = 16
+debug = "line-tables-only"
+
+[profile.bench.package.rainbear]
+opt-level = 3
 
 [profile.release]
 lto = false
@@ -192,3 +212,9 @@ codegen-units = 256
 # A git dependency's own [patch.crates-io] is ignored, so polars-io fails to build against
 # stock object_store unless we mirror the patch here. Keep the rev in sync with the polars tag.
 object_store = { git = "https://github.com/kdn36/arrow-rs-object-store", rev = "f50a6e5c564b2b5933eca15cd20ff9b5614374a1" }
+
+
+# Temporary profile for profiling: full debug symbols, no opt cost beyond dev.
+[profile.profile]
+inherits = "maturin-dev"
+debug = 2

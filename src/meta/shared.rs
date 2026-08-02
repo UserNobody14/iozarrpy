@@ -47,7 +47,7 @@ struct ProcessedArrayMetaJob {
 fn process_array_meta_job<
     TStorage: ?Sized + Send + Sync,
 >(
-    store: Arc<TStorage>,
+    store: &Arc<TStorage>,
     root_path_str: &str,
     job: &ArrayMetaLoadJob,
 ) -> Result<ProcessedArrayMetaJob, BackendError> {
@@ -71,13 +71,13 @@ fn process_array_meta_job<
     let parent_zp = rel_zp.parent();
 
     let array = Array::new_with_metadata(
-        Arc::clone(&store),
+        Arc::clone(store),
         path_str,
         job.array_md.clone(),
     )?;
 
-    let shape: std::sync::Arc<[u64]> =
-        array.shape().into();
+    let shape: Box<[u64]> =
+        array.shape().to_vec().into_boxed_slice();
     let dims = dims_for_array(&array)
         .unwrap_or_else(|| {
             default_dims(shape.len())
@@ -91,15 +91,12 @@ fn process_array_meta_job<
     let zero_idx: Vec<u64> =
         vec![0u64; array.dimensionality()];
     let inner_grid = array.subchunk_grid();
-    let chunk_shape: std::sync::Arc<[u64]> =
-        inner_grid
-            .chunk_shape_u64(&zero_idx)
-            .ok()
-            .flatten()
-            .map(|cs| cs.into())
-            .unwrap_or_else(|| {
-                Arc::clone(&shape)
-            });
+    let chunk_shape: Box<[u64]> = inner_grid
+        .chunk_shape_u64(&zero_idx)
+        .ok()
+        .flatten()
+        .map(|cs| cs.to_vec().into_boxed_slice())
+        .unwrap_or_else(|| shape.clone());
 
     let mut aux_coord_names = Vec::new();
     if let Some(attrs) =
@@ -260,14 +257,13 @@ pub(crate) fn load_zarr_meta_inner<
         )
         .collect();
 
-    let store_arc = Arc::clone(store);
     let mut processed: Vec<
         ProcessedArrayMetaJob,
     > = jobs
         .maybe_par_iter(PARALLEL_ZARR_META_ARRAYS)
         .map_collect(|job| {
             process_array_meta_job(
-                Arc::clone(&store_arc),
+                store,
                 root_path_str,
                 job,
             )

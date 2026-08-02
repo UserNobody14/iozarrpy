@@ -106,7 +106,7 @@ impl RectangleSet {
         dims: SmallVec<[IStr; 4]>,
         shape: SmallVec<[u64; 4]>,
         dim: IStr,
-        ranges: Vec<Range<u64>>,
+        ranges: &[Range<u64>],
     ) -> Self {
         if ranges.is_empty() {
             return Self::empty(dims, shape);
@@ -122,7 +122,7 @@ impl RectangleSet {
             .enumerate()
             .map(|(i, _)| {
                 if i == dim_idx {
-                    ranges.clone()
+                    ranges.to_vec()
                 } else {
                     vec![0..shape[i]]
                 }
@@ -292,16 +292,6 @@ impl RectangleSet {
             self.shape.clone(),
         )
         .difference(self)
-    }
-
-    /// Symmetric difference: `(self \ other) ∪ (other \ self)`.
-    #[allow(dead_code)] // completes the set-op surface; no caller reaches it yet
-    pub(crate) fn exclusive_or(
-        &self,
-        other: &Self,
-    ) -> Self {
-        self.difference(other)
-            .union(&other.difference(self))
     }
 
     /// Yield one [`ArraySubset`] per cross-product cell of every rectangle.
@@ -835,34 +825,6 @@ mod tests {
         assert_eq!(cell_count(&neg_empty), 9);
         let neg_neg_empty = neg_empty.negate();
         assert!(neg_neg_empty.is_empty());
-    }
-
-    #[test]
-    fn exclusive_or_is_symmetric() {
-        let a = rect2d(
-            dims2(),
-            shape_of(&[10, 10]),
-            vec![0..4],
-            vec![0..4],
-        );
-        let b = rect2d(
-            dims2(),
-            shape_of(&[10, 10]),
-            vec![2..6],
-            vec![2..6],
-        );
-        let xor_ab = a.exclusive_or(&b);
-        let xor_ba = b.exclusive_or(&a);
-        assert_eq!(
-            collect_cells(&xor_ab),
-            collect_cells(&xor_ba),
-        );
-        // Symmetric difference of two 4x4s overlapping in a 2x2.
-        // |A| + |B| - 2|A∩B| = 16 + 16 - 2*4 = 24.
-        assert_eq!(
-            collect_cells(&xor_ab).len(),
-            24
-        );
     }
 
     #[test]
