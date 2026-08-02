@@ -18,7 +18,7 @@ use crate::meta::path::ZarrPath;
 
 use crate::meta::time_encoding::extract_var_encoding;
 use crate::meta::types::{
-    DimensionAnalysis, ZarrArrayMeta, ZarrMeta,
+    ZarrArrayMeta, ZarrMeta,
 };
 use crate::shared::{
     IStr, IntoIStr, MaybeParIter,
@@ -298,11 +298,5 @@ pub(crate) fn load_zarr_meta_inner<
         &aux_coords,
     );
 
-    let dim_analysis =
-        DimensionAnalysis::compute(&root_node);
-
-    Ok(ZarrMeta {
-        root: root_node,
-        dim_analysis,
-    })
+    Ok(root_node)
 }

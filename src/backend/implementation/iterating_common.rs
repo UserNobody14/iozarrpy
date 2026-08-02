@@ -84,12 +84,8 @@ pub(crate) fn output_columns_for_streaming_batch(
     polars_requested: Option<&BTreeSet<IStr>>,
     expanded: Option<&BTreeSet<IStr>>,
 ) -> Option<Vec<IStr>> {
-    let all_dims: BTreeSet<IStr> = meta
-        .dim_analysis
-        .all_dims
-        .iter()
-        .copied()
-        .collect();
+    let all_dims: BTreeSet<IStr> =
+        meta.dim_order().into_iter().collect();
 
     let append_from_expanded =
         |out: &mut Vec<IStr>,

@@ -51,19 +51,14 @@ pub fn expand_projection_to_flat_paths(
     let mut expanded = BTreeSet::new();
 
     for col in with_columns {
-        let col_str: &str = col.as_ref();
-
-        if meta.dim_analysis.all_dims.iter().any(
-            |d| {
-                let d_str: &str = d.as_ref();
-                d_str == col_str
-            },
-        ) {
+        if meta.is_dim(col) {
             expanded.insert(*col);
             continue;
         }
 
-        if meta.root.data_vars.iter().any(|v| {
+        let col_str: &str = col.as_ref();
+
+        if meta.data_vars.iter().any(|v| {
             let v_str: &str = v.as_ref();
             v_str == col_str
         }) {
@@ -79,7 +74,7 @@ pub fn expand_projection_to_flat_paths(
         // Use tree traversal to expand group names to all child paths
         let zp = ZarrPath::from(col);
         let child_paths =
-            meta.root.find_paths_under(&zp);
+            meta.find_paths_under(&zp);
         if !child_paths.is_empty() {
             for p in child_paths {
                 expanded.insert(p.istr());

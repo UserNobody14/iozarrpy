@@ -42,10 +42,8 @@ pub struct Universe {
 impl Universe {
     pub fn from_meta(meta: &ZarrMeta) -> Self {
         let dims: SmallVec<[IStr; 4]> = meta
-            .dim_analysis
-            .all_dims
-            .iter()
-            .copied()
+            .dim_order()
+            .into_iter()
             .collect();
         let shape: SmallVec<[u64; 4]> = dims
             .iter()
@@ -96,7 +94,7 @@ impl<'a> LazyCompileCtx<'a> {
             .position(|d| *d == dim)
     }
 
-    /// Length of `dim` according to dim_analysis or the dim's coord array.
+    /// Length of `dim` according to the metadata tree or the dim's coord array.
     pub(crate) fn dim_len(
         &self,
         dim: &IStr,
@@ -126,15 +124,11 @@ pub(crate) fn lookup_dim_len(
     meta: &ZarrMeta,
     dim: &IStr,
 ) -> Option<u64> {
-    meta.dim_analysis
-        .dim_lengths
-        .get(dim)
-        .copied()
-        .or_else(|| {
-            meta.array_by_path(*dim).and_then(
-                |a| a.shape.first().copied(),
-            )
+    meta.dim_len(dim).or_else(|| {
+        meta.array_by_path(*dim).and_then(|a| {
+            a.shape.first().copied()
         })
+    })
 }
 
 pub(crate) fn unknown_dim(

@@ -43,8 +43,8 @@ pub use crate::chunk_plan::{
 pub use crate::errors::BackendError;
 
 pub use crate::meta::{
-    DimensionAnalysis, VarEncoding,
-    ZarrArrayMeta, ZarrMeta, ZarrNode,
+    VarEncoding, ZarrArrayMeta, ZarrMeta,
+    ZarrNode,
 };
 
 pub struct BenchCoordResolver;

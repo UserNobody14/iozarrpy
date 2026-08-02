@@ -650,7 +650,7 @@ fn is_full_chunk(
 }
 
 // ============================================================================
-// meta.root.children -> GridJoinTree::Group wrapping
+// root children -> GridJoinTree::Group wrapping
 // ============================================================================
 
 fn wrap_root_groups(
@@ -658,7 +658,7 @@ fn wrap_root_groups(
     meta: &ZarrMeta,
 ) -> GridJoinTree {
     let mut out = tree;
-    for child_name in meta.root.children.keys() {
+    for child_name in meta.children.keys() {
         out = GridJoinTree::Group {
             name: *child_name,
             child: Box::new(out),

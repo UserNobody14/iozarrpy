@@ -18,16 +18,6 @@ use crate::shared::{
 // Unified Hierarchical Metadata Types
 // =============================================================================
 
-/// Unified metadata for any zarr store (flat or hierarchical).
-/// A flat dataset is simply a tree where `root.children` is empty.
-#[derive(Debug)]
-pub struct ZarrMeta {
-    /// Root node of the hierarchy
-    pub root: ZarrNode,
-    /// Dimension analysis across the entire tree
-    pub dim_analysis: DimensionAnalysis,
-}
-
 /// A node in the zarr hierarchy (group or root).
 #[derive(Debug)]
 pub struct ZarrNode {
@@ -44,107 +34,15 @@ pub struct ZarrNode {
     pub data_vars: Vec<IStr>,
 }
 
-/// Dimension analysis across a tree - tracks how dimensions relate across nodes.
-#[derive(Debug, Clone, Default)]
-pub struct DimensionAnalysis {
-    /// All unique dimensions across the tree, in output order (root dims first)
-    pub all_dims: Vec<IStr>,
-    /// Dimensions from the root node
-    #[allow(dead_code)]
-    pub root_dims: Vec<IStr>,
-    /// For each node path, its dimension set
-    #[allow(dead_code)]
-    pub node_dims: BTreeMap<IStr, Vec<IStr>>,
-    /// Dimension name -> length
-    pub dim_lengths: BTreeMap<IStr, u64>,
-}
-impl DimensionAnalysis {
-    /// Compute output dimension order: root dims first, then extras by first appearance.
-    /// Recursively collects dimensions from all nodes in the tree.
-    pub fn compute(root: &ZarrNode) -> Self {
-        let mut all_dims: Vec<IStr> = Vec::new();
-        let mut node_dims: BTreeMap<
-            IStr,
-            Vec<IStr>,
-        > = BTreeMap::new();
-        let mut dim_lengths: BTreeMap<IStr, u64> =
-            BTreeMap::new();
+pub type ZarrMeta = ZarrNode;
 
-        // Collect root dims first (they define primary order)
-        let root_dims = root.local_dims.clone();
-        for dim in &root_dims {
-            if !all_dims.contains(dim) {
-                all_dims.push(*dim);
-            }
-        }
-
-        // Recursively collect from all nodes
-        Self::collect_node(
-            root,
-            &mut all_dims,
-            &mut node_dims,
-            &mut dim_lengths,
-        );
-
-        Self {
-            all_dims,
-            root_dims,
-            node_dims,
-            dim_lengths,
-        }
-    }
-
-    fn collect_node(
-        node: &ZarrNode,
-        all_dims: &mut Vec<IStr>,
-        node_dims: &mut BTreeMap<IStr, Vec<IStr>>,
-        dim_lengths: &mut BTreeMap<IStr, u64>,
-    ) {
-        // Record this node's dimensions
-        node_dims.insert(
-            node.path,
-            node.local_dims.clone(),
-        );
-
-        // Add any new dimensions not yet seen
-        for dim in &node.local_dims {
-            if !all_dims.contains(dim) {
-                all_dims.push(*dim);
-            }
-        }
-
-        // Infer dim lengths from array shapes
-        for arr in node.arrays.values() {
-            for (i, dim) in
-                arr.dims.iter().enumerate()
-            {
-                if i < arr.shape.len() {
-                    dim_lengths
-                        .entry(*dim)
-                        .or_insert(arr.shape[i]);
-                }
-            }
-        }
-
-        // Recurse into children
-        for child in node.children.values() {
-            Self::collect_node(
-                child,
-                all_dims,
-                node_dims,
-                dim_lengths,
-            );
-        }
-    }
-}
-
-impl ZarrMeta {
+impl ZarrNode {
     pub fn array_by_path<T: IntoIStr>(
         &self,
         path: T,
     ) -> Option<&ZarrArrayMeta> {
         let zp = ZarrPath::from(path.istr());
-        self.root.get_array_recursive(&zp)
+        self.get_array_recursive(&zp)
     }
 
     pub fn array_by_path_contains<T: IntoIStr>(
@@ -159,11 +57,10 @@ impl ZarrMeta {
         &self,
     ) -> Vec<IStr> {
         let mut paths = Vec::new();
-        self.root
-            .collect_data_var_paths_recursive(
-                &ZarrPath::root(),
-                &mut paths,
-            );
+        self.collect_data_var_paths_recursive(
+            &ZarrPath::root(),
+            &mut paths,
+        );
         paths.into_istrs()
     }
 
@@ -174,7 +71,7 @@ impl ZarrMeta {
     /// for individual lookups; this is intended for building a hot-path set.
     pub fn all_coord_paths(&self) -> Vec<IStr> {
         let mut paths = Vec::new();
-        self.root.collect_coord_paths_recursive(
+        self.collect_coord_paths_recursive(
             &ZarrPath::root(),
             &mut paths,
         );
@@ -191,7 +88,7 @@ impl ZarrMeta {
         path: T,
     ) -> bool {
         let zp = ZarrPath::from(path.istr());
-        self.root.is_coord_at(&zp)
+        self.is_coord_at(&zp)
     }
 
     /// All array paths (data vars) using recursive tree traversal.
@@ -203,7 +100,7 @@ impl ZarrMeta {
         &self,
     ) -> Vec<IStr> {
         let mut paths = Vec::new();
-        self.root.collect_paths_recursive(
+        self.collect_paths_recursive(
             &ZarrPath::root(),
             &mut paths,
         );
@@ -227,7 +124,7 @@ impl ZarrMeta {
 
         let mut fields: Vec<Field> = Vec::new();
 
-        for dim in &self.dim_analysis.all_dims {
+        for dim in self.dim_order() {
             let dtype = self
                 .array_by_path(dim)
                 .map(|m| m.polars_dtype.clone())
@@ -247,12 +144,12 @@ impl ZarrMeta {
             .collect();
 
         // Add root data variable columns
-        for var in &self.root.data_vars {
+        for var in &self.data_vars {
             let var_str: &str = var.as_ref();
             if var_set.as_ref().is_none_or(|vs| {
                 vs.contains(var_str)
             }) && let Some(m) =
-                self.root.arrays.get(var)
+                self.arrays.get(var)
             {
                 fields.push(Field::new(
                     var_str.into(),
@@ -265,7 +162,7 @@ impl ZarrMeta {
 
         // CF-style auxiliary coordinates (lat/lon, …): stored in `arrays` but
         // omitted from `data_vars` when listed as `coordinates` on another var.
-        for (var, meta) in &self.root.arrays {
+        for (var, meta) in &self.arrays {
             let var_str: &str = var.as_ref();
             if field_names.contains(var_str) {
                 continue;
@@ -284,7 +181,7 @@ impl ZarrMeta {
 
         // Add child group struct columns
         for (child_name, child_node) in
-            &self.root.children
+            &self.children
         {
             let child_name_str: &str =
                 child_name.as_ref();
@@ -338,26 +235,23 @@ impl ZarrMeta {
         let mut seen: BTreeSet<IStr> =
             BTreeSet::new();
 
-        for dim in &self.dim_analysis.all_dims {
-            out.push(*dim);
-            seen.insert(*dim);
+        for dim in self.dim_order() {
+            out.push(dim);
+            seen.insert(dim);
         }
 
-        for var in &self.root.data_vars {
+        for var in &self.data_vars {
             let var_str: &str = var.as_ref();
             if var_set.as_ref().is_none_or(|vs| {
                 vs.contains(var_str)
-            }) && self
-                .root
-                .arrays
-                .contains_key(var)
+            }) && self.arrays.contains_key(var)
             {
                 out.push(*var);
                 seen.insert(*var);
             }
         }
 
-        for var in self.root.arrays.keys() {
+        for var in self.arrays.keys() {
             let var_str: &str = var.as_ref();
             if seen.contains(var) {
                 continue;
@@ -371,7 +265,7 @@ impl ZarrMeta {
         }
 
         for (child_name, child_node) in
-            &self.root.children
+            &self.children
         {
             let child_name_str: &str =
                 child_name.as_ref();
@@ -414,6 +308,55 @@ impl ZarrNode {
             local_dims: Vec::new(),
             data_vars: Vec::new(),
         }
+    }
+
+    /// Dimensions across this subtree in output order: this node's
+    /// `local_dims` first, then descendants in DFS pre-order.
+    pub fn dim_order(&self) -> Vec<IStr> {
+        let mut out = Vec::new();
+        self.collect_dims(&mut out);
+        out
+    }
+
+    fn collect_dims(&self, out: &mut Vec<IStr>) {
+        for d in &self.local_dims {
+            if !out.contains(d) {
+                out.push(*d);
+            }
+        }
+        for child in self.children.values() {
+            child.collect_dims(out);
+        }
+    }
+
+    /// True if `name` is a dimension anywhere in this subtree.
+    pub fn is_dim(&self, name: &IStr) -> bool {
+        self.local_dims.contains(name)
+            || self
+                .children
+                .values()
+                .any(|child| child.is_dim(name))
+    }
+
+    /// Length of `dim`, from the first array in DFS pre-order that declares it.
+    pub fn dim_len(
+        &self,
+        dim: &IStr,
+    ) -> Option<u64> {
+        for arr in self.arrays.values() {
+            if let Some(i) = arr
+                .dims
+                .iter()
+                .position(|d| d == dim)
+                && let Some(len) =
+                    arr.shape.get(i)
+            {
+                return Some(*len);
+            }
+        }
+        self.children
+            .values()
+            .find_map(|child| child.dim_len(dim))
     }
 
     fn to_struct_dtype(&self) -> PlDataType {
@@ -460,18 +403,6 @@ impl Display for ZarrNode {
             f,
             "ZarrNode(path='{}')",
             self.path
-        )
-    }
-}
-impl Display for ZarrMeta {
-    fn fmt(
-        &self,
-        f: &mut std::fmt::Formatter<'_>,
-    ) -> std::fmt::Result {
-        write!(
-            f,
-            "ZarrMeta(root='{}')",
-            self.root
         )
     }
 }
