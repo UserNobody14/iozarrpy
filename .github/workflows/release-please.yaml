@@ -1,0 +1,41 @@
+# Release automation driven by conventional commits.
+#
+# On every push to main, release-please maintains an open "chore(main): release x.y.z" PR
+# that bumps pyproject.toml and updates CHANGELOG.md. Merging that PR creates the
+# v*.*.* tag and the GitHub release, then dispatches the Publish workflow to build
+# and upload wheels.
+#
+# Publish is dispatched explicitly because tags pushed with GITHUB_TOKEN do not fire
+# `push` events; `workflow_dispatch` is exempt from that rule.
+name: Release Please
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write        # commit version bumps, push tags, create releases
+  pull-requests: write   # maintain the release PR
+  actions: write         # dispatch Publish
+
+jobs:
+  release-please:
+    name: Release Please
+    runs-on: ubuntu-latest
+    steps:
+      - uses: googleapis/release-please-action@v5
+        id: release
+
+      - name: Trigger Publish
+        if: ${{ steps.release.outputs.release_created == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ steps.release.outputs.tag_name }}
+        run: gh workflow run publish.yaml --ref "$TAG"
