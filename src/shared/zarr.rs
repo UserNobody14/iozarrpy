@@ -131,26 +131,28 @@ impl ChunkedDataBackendSync for ZarrBackendSync {
             Some(opened) => opened,
             None => {
                 // Get array metadata from cache if available
-                let array_metadata = {
+                let metadata = {
                     let cached =
                         self.cached_meta.read();
-                    cached.as_ref().and_then(|meta| {
-                        meta.array_by_path(*var).and_then(
-                            |arr_meta| {
+                    cached.as_ref().and_then(
+                        |meta| {
+                            meta.array_by_path(
+                                *var,
+                            )
+                            .map(|arr_meta| {
                                 arr_meta
-                                    .array_metadata
-                                    .as_ref()
-                                    .map(Arc::clone)
-                            },
-                        )
-                    })
+                                    .metadata_arc(
+                                    )
+                            })
+                        },
+                    )
                 };
 
                 let opened_inner = Arc::new(
                     self.store
                         .open_array_and_cache(
                             var,
-                            array_metadata
+                            metadata
                                 .as_ref()
                                 .map(|a| {
                                     a.as_ref()
@@ -273,7 +275,7 @@ impl ChunkedDataBackendAsync
                 }
                 None => {
                     // Get array metadata from cache if available
-                    let array_metadata = {
+                    let metadata = {
                         let cached = self
                             .cached_meta
                             .read()
@@ -281,11 +283,8 @@ impl ChunkedDataBackendAsync
                         cached.as_ref().and_then(
                             |meta| {
                                 meta.array_by_path(*var)
-                                    .and_then(|arr_meta| {
-                                        arr_meta
-                                            .array_metadata
-                                            .as_ref()
-                                            .map(Arc::clone)
+                                    .map(|arr_meta| {
+                                        arr_meta.metadata_arc()
                                     })
                             },
                         )
@@ -295,7 +294,7 @@ impl ChunkedDataBackendAsync
                         self.store
                             .open_array_and_cache(
                                 var,
-                                array_metadata
+                                metadata
                                     .as_ref()
                                     .map(|a| {
                                         a.as_ref()

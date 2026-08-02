@@ -1,19 +1,15 @@
 use chrono::{
     NaiveDate, NaiveDateTime, TimeZone, Utc,
 };
-use zarrs::array::Array;
+use serde_json::{Map, Value};
 
 use crate::meta::types::{
     TimeEncoding, VarEncoding,
 };
 
-fn extract_time_encoding_inner<
-    TStorage: ?Sized,
->(
-    array: &Array<TStorage>,
+fn extract_time_encoding_inner(
+    attrs: &Map<String, Value>,
 ) -> Option<TimeEncoding> {
-    let attrs = array.attributes();
-
     let units = attrs
         .get("units")
         .and_then(|v| v.as_str())
@@ -76,11 +72,9 @@ fn extract_time_encoding_inner<
     None
 }
 
-fn extract_scale_offset<TStorage: ?Sized>(
-    array: &Array<TStorage>,
+fn extract_scale_offset(
+    attrs: &Map<String, Value>,
 ) -> Option<VarEncoding> {
-    let attrs = array.attributes();
-
     let scale = attrs
         .get("scale_factor")
         .and_then(|v| v.as_f64());
@@ -110,17 +104,15 @@ fn extract_scale_offset<TStorage: ?Sized>(
 ///
 /// Priority: time encoding first (CF temporal conventions),
 /// then scale/offset packing (CF numeric conventions).
-pub(crate) fn extract_var_encoding<
-    TStorage: ?Sized,
->(
-    array: &Array<TStorage>,
+pub(crate) fn extract_var_encoding_from_attributes(
+    attrs: &Map<String, Value>,
 ) -> Option<VarEncoding> {
     if let Some(te) =
-        extract_time_encoding_inner(array)
+        extract_time_encoding_inner(attrs)
     {
         return Some(VarEncoding::Time(te));
     }
-    extract_scale_offset(array)
+    extract_scale_offset(attrs)
 }
 
 fn parse_duration_units(

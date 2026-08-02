@@ -126,7 +126,7 @@ pub(crate) fn lookup_dim_len(
 ) -> Option<u64> {
     meta.dim_len(dim).or_else(|| {
         meta.array_by_path(*dim).and_then(|a| {
-            a.shape.first().copied()
+            a.shape().first().copied()
         })
     })
 }

@@ -10,13 +10,8 @@ use zarrs::hierarchy::NodeMetadata;
 use crate::errors::{
     BackendError, BackendResult,
 };
-use crate::meta::dims::{
-    default_dims, dims_for_array, leaf_name,
-};
-use crate::meta::dtype::zarr_dtype_to_polars;
 use crate::meta::path::ZarrPath;
 
-use crate::meta::time_encoding::extract_var_encoding;
 use crate::meta::types::{
     ZarrArrayMeta, ZarrMeta,
 };
@@ -32,8 +27,11 @@ const PARALLEL_ZARR_META_ARRAYS: usize = 2;
 
 struct ArrayMetaLoadJob {
     traverse_idx: usize,
-    path_str: String,
-    array_md: ArrayMetadata,
+    /// Absolute path in the store, e.g. `/root/group/var`.
+    path: IStr,
+    parent_zp: ZarrPath,
+    leaf: IStr,
+    array_md: Arc<ArrayMetadata>,
 }
 
 struct ProcessedArrayMetaJob {
@@ -44,61 +42,10 @@ struct ProcessedArrayMetaJob {
     aux_coord_names: Vec<IStr>,
 }
 
-fn process_array_meta_job<
-    TStorage: ?Sized + Send + Sync,
->(
-    store: &Arc<TStorage>,
-    root_path_str: &str,
-    job: &ArrayMetaLoadJob,
-) -> Result<ProcessedArrayMetaJob, BackendError> {
-    let path_str = job.path_str.as_str();
-    let rel_path = if root_path_str != "/"
-        && path_str.starts_with(root_path_str)
-    {
-        let stripped =
-            &path_str[root_path_str.len()..];
-        if stripped.is_empty() {
-            "/"
-        } else {
-            stripped
-        }
-    } else {
-        path_str
-    };
-
-    let rel_zp = ZarrPath::parse(rel_path);
-    let leaf = leaf_name(rel_path);
-    let parent_zp = rel_zp.parent();
-
-    let array = Array::new_with_metadata(
-        Arc::clone(store),
-        path_str,
-        job.array_md.clone(),
-    )?;
-
-    let shape: Box<[u64]> =
-        array.shape().to_vec().into_boxed_slice();
-    let dims = dims_for_array(&array)
-        .unwrap_or_else(|| {
-            default_dims(shape.len())
-        });
-    let encoding = extract_var_encoding(&array);
-    let polars_dtype = zarr_dtype_to_polars(
-        array.data_type(),
-        encoding.as_ref(),
-    );
-
-    let zero_idx: Vec<u64> =
-        vec![0u64; array.dimensionality()];
-    let inner_grid = array.subchunk_grid();
-    let chunk_shape: Box<[u64]> = inner_grid
-        .chunk_shape_u64(&zero_idx)
-        .ok()
-        .flatten()
-        .map(|cs| cs.to_vec().into_boxed_slice())
-        .unwrap_or_else(|| shape.clone());
-
-    let mut aux_coord_names = Vec::new();
+fn aux_coord_names_for_array<TStorage: ?Sized>(
+    array: &Array<TStorage>,
+) -> Vec<IStr> {
+    let mut out = Vec::new();
     if let Some(attrs) =
         array.attributes().get("coordinates")
         && let Some(coord_str) = attrs.as_str()
@@ -106,11 +53,15 @@ fn process_array_meta_job<
         for coord_name in
             coord_str.split_whitespace()
         {
-            aux_coord_names
-                .push(coord_name.istr());
+            out.push(coord_name.istr());
         }
     }
+    out
+}
 
+fn chunk_grids_for_array<TStorage: ?Sized>(
+    array: &Array<TStorage>,
+) -> (Arc<ChunkGrid>, Option<Arc<ChunkGrid>>) {
     let is_sharded = array.is_sharded();
     let outer_chunk_grid: Arc<ChunkGrid> =
         array.chunk_grid().clone().into();
@@ -121,106 +72,147 @@ fn process_array_meta_job<
             None
         };
 
-    let arr_meta = ZarrArrayMeta {
-        path: path_str.istr(),
-        shape,
-        chunk_shape,
-        outer_chunk_grid,
-        inner_chunk_grid,
-        dims,
-        polars_dtype,
-        encoding,
-        array_metadata: Some(Arc::new(
-            job.array_md.clone(),
-        )),
+    (outer_chunk_grid, inner_chunk_grid)
+}
+
+/// Position of a node relative to the opened root, e.g. `/root/a/var` under
+/// root `/root` becomes `a/var`.
+fn path_relative_to_root(
+    root_path_str: &str,
+    path_str: &str,
+) -> ZarrPath {
+    let rel = if root_path_str == "/" {
+        path_str
+    } else {
+        path_str
+            .strip_prefix(root_path_str)
+            .unwrap_or(path_str)
     };
+    ZarrPath::parse(rel)
+}
+
+/// `ZarrNode::path` form of a hierarchy position: absolute, slash-prefixed.
+fn node_path_istr(path: &ZarrPath) -> IStr {
+    if path.is_root() {
+        "/".istr()
+    } else {
+        format!("/{}", path.to_flat_string())
+            .istr()
+    }
+}
+
+fn process_array_meta_job<
+    TStorage: ?Sized + Send + Sync,
+>(
+    store: &Arc<TStorage>,
+    job: &ArrayMetaLoadJob,
+) -> Result<ProcessedArrayMetaJob, BackendError> {
+    let array = Array::new_with_metadata(
+        Arc::clone(store),
+        job.path.as_ref(),
+        (*job.array_md).clone(),
+    )?;
+
+    let (outer_chunk_grid, inner_chunk_grid) =
+        chunk_grids_for_array(&array);
 
     Ok(ProcessedArrayMetaJob {
         traverse_idx: job.traverse_idx,
-        parent_zp,
-        leaf,
-        arr_meta: Arc::new(arr_meta),
-        aux_coord_names,
+        parent_zp: job.parent_zp.clone(),
+        leaf: job.leaf,
+        arr_meta: Arc::new(ZarrArrayMeta::new(
+            job.path,
+            outer_chunk_grid,
+            inner_chunk_grid,
+            Arc::clone(&job.array_md),
+        )),
+        aux_coord_names:
+            aux_coord_names_for_array(&array),
     })
 }
 
-/// Recursively build ZarrNode tree from grouped arrays.
-/// Keys in `group_arrays` are `ZarrPath` representing group positions.
-pub(crate) fn build_node_tree(
+/// Walk to the node at `path`, creating any missing node along the way so that
+/// groups holding no arrays of their own still link the root to descendants.
+fn node_at_path<'a>(
+    root: &'a mut ZarrNode,
     path: &ZarrPath,
-    group_arrays: &BTreeMap<
+) -> &'a mut ZarrNode {
+    let mut node = root;
+    let mut prefix = ZarrPath::root();
+    for component in path.components() {
+        prefix = prefix.push(*component);
+        node = node
+            .children
+            .entry(*component)
+            .or_insert_with(|| {
+                ZarrNode::new(node_path_istr(
+                    &prefix,
+                ))
+            });
+    }
+    node
+}
+
+/// Derive `local_dims` and `data_vars` from the arrays already on `node`.
+///
+/// An array is a coordinate when it is 1-D and named after its own dimension,
+/// or when another array lists it in its CF `coordinates` attribute.
+fn classify_node_arrays(
+    node: &mut ZarrNode,
+    aux_coords: &BTreeSet<IStr>,
+) {
+    let mut dims: BTreeSet<IStr> =
+        BTreeSet::new();
+    let mut coord_arrays: BTreeSet<IStr> =
+        BTreeSet::new();
+
+    for (leaf, arr) in &node.arrays {
+        let arr_dims = arr.dims();
+        dims.extend(arr_dims.iter().copied());
+
+        if arr.is_1d()
+            && arr_dims.len() == 1
+            && *leaf == arr_dims[0]
+        {
+            coord_arrays.insert(*leaf);
+        }
+    }
+
+    coord_arrays.extend(
+        aux_coords.iter().copied().filter(
+            |aux| node.arrays.contains_key(aux),
+        ),
+    );
+
+    node.local_dims = dims.into_iter().collect();
+    node.data_vars = node
+        .arrays
+        .keys()
+        .filter(|k| !coord_arrays.contains(*k))
+        .copied()
+        .collect();
+}
+
+/// Build the `ZarrNode` tree from arrays grouped by their parent group path.
+fn build_node_tree(
+    group_arrays: BTreeMap<
         ZarrPath,
         Vec<(IStr, Arc<ZarrArrayMeta>)>,
     >,
     aux_coords: &BTreeSet<IStr>,
 ) -> ZarrNode {
-    let path_istr = if path.is_root() {
-        "/".istr()
-    } else {
-        format!("/{}", path.to_flat_string())
-            .istr()
-    };
-    let mut node = ZarrNode::new(path_istr);
+    let mut root = ZarrNode::new(node_path_istr(
+        &ZarrPath::root(),
+    ));
 
-    if let Some(arrays) = group_arrays.get(path) {
-        let mut dims_set: BTreeSet<IStr> =
-            BTreeSet::new();
-        let mut coord_arrays: BTreeSet<IStr> =
-            BTreeSet::new();
-
-        for (leaf, arr) in arrays {
-            node.arrays
-                .insert(*leaf, Arc::clone(arr));
-
-            for dim in &arr.dims {
-                dims_set.insert(*dim);
-            }
-
-            if arr.shape.len() == 1
-                && arr.dims.len() == 1
-                && *leaf == arr.dims[0]
-            {
-                coord_arrays.insert(*leaf);
-            }
-        }
-
-        for aux in aux_coords {
-            if node.arrays.contains_key(aux) {
-                coord_arrays.insert(*aux);
-            }
-        }
-
-        node.local_dims =
-            dims_set.into_iter().collect();
-
-        node.data_vars = node
-            .arrays
-            .keys()
-            .filter(|k| {
-                !coord_arrays.contains(*k)
-            })
-            .cloned()
-            .collect();
+    for (group_path, arrays) in group_arrays {
+        let node =
+            node_at_path(&mut root, &group_path);
+        node.arrays.extend(arrays);
+        classify_node_arrays(node, aux_coords);
     }
 
-    // Find direct children: paths whose parent == current path
-    for child_path in group_arrays.keys() {
-        if child_path.parent() == *path
-            && child_path != path
-            && let Some(child_leaf) =
-                child_path.leaf()
-        {
-            let child_node = build_node_tree(
-                child_path,
-                group_arrays,
-                aux_coords,
-            );
-            node.children
-                .insert(*child_leaf, child_node);
-        }
-    }
-
-    node
+    root
 }
 
 pub(crate) fn load_zarr_meta_inner<
@@ -233,40 +225,43 @@ pub(crate) fn load_zarr_meta_inner<
     )],
     root_path_str: &str,
 ) -> BackendResult<ZarrMeta> {
-    let jobs: Vec<ArrayMetaLoadJob> = nodes
-        .iter()
-        .enumerate()
-        .filter_map(
-            |(traverse_idx, (path, md))| {
-                if let NodeMetadata::Array(
-                    array_md,
-                ) = md
-                {
+    let jobs: Vec<ArrayMetaLoadJob> =
+        nodes
+            .iter()
+            .enumerate()
+            .filter_map(
+                |(traverse_idx, (path, md))| {
+                    let NodeMetadata::Array(
+                        array_md,
+                    ) = md
+                    else {
+                        return None;
+                    };
+                    let path_str = path.as_str();
+                    let rel =
+                        path_relative_to_root(
+                            root_path_str,
+                            path_str,
+                        );
                     Some(ArrayMetaLoadJob {
                         traverse_idx,
-                        path_str: path
-                            .as_str()
-                            .to_string(),
-                        array_md: array_md
-                            .clone(),
+                        path: path_str.istr(),
+                        parent_zp: rel.parent(),
+                        leaf: *rel.leaf()?,
+                        array_md: Arc::new(
+                            array_md.clone(),
+                        ),
                     })
-                } else {
-                    None
-                }
-            },
-        )
-        .collect();
+                },
+            )
+            .collect();
 
     let mut processed: Vec<
         ProcessedArrayMetaJob,
     > = jobs
         .maybe_par_iter(PARALLEL_ZARR_META_ARRAYS)
         .map_collect(|job| {
-            process_array_meta_job(
-                store,
-                root_path_str,
-                job,
-            )
+            process_array_meta_job(store, job)
         })?;
 
     processed.sort_by(|a, b| {
@@ -283,20 +278,13 @@ pub(crate) fn load_zarr_meta_inner<
         BTreeSet::new();
 
     for job in processed {
-        for c in &job.aux_coord_names {
-            aux_coords.insert(*c);
-        }
+        aux_coords
+            .extend(job.aux_coord_names.iter());
         group_arrays
             .entry(job.parent_zp)
             .or_default()
             .push((job.leaf, job.arr_meta));
     }
 
-    let root_node = build_node_tree(
-        &ZarrPath::root(),
-        &group_arrays,
-        &aux_coords,
-    );
-
-    Ok(root_node)
+    Ok(build_node_tree(group_arrays, &aux_coords))
 }

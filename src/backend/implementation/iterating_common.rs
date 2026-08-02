@@ -113,7 +113,7 @@ pub(crate) fn output_columns_for_streaming_batch(
                 else {
                     continue;
                 };
-                if vm.shape.len() != 1 {
+                if !vm.is_1d() {
                     continue;
                 }
                 seen.insert(*name);

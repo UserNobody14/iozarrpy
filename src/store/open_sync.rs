@@ -33,7 +33,7 @@ impl OpenedStore {
     pub fn open_array_and_cache(
         &self,
         var: &IStr,
-        array_metadata: Option<
+        metadata: Option<
             &zarrs::array::ArrayMetadata,
         >,
     ) -> Result<OpenedArraySync, BackendError>
@@ -41,17 +41,16 @@ impl OpenedStore {
         let strtraits = Arc::clone(&self.store);
         let norm = normalize_path(var);
 
-        let array = if let Some(metadata) =
-            array_metadata
-        {
-            Array::new_with_metadata(
-                strtraits,
-                &norm,
-                metadata.clone(),
-            )
-        } else {
-            Array::open(strtraits, &norm)
-        }?;
+        let array =
+            if let Some(metadata) = metadata {
+                Array::new_with_metadata(
+                    strtraits,
+                    &norm,
+                    metadata.clone(),
+                )
+            } else {
+                Array::open(strtraits, &norm)
+            }?;
         let array_arc = Arc::new(array);
         let cache = ShardedCacheSync::new(
             array_arc.as_ref(),

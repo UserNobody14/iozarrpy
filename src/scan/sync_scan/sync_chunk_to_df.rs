@@ -252,7 +252,7 @@ pub fn chunk_to_df_from_grid_with_backend<
 
             let encoding = meta
                 .array_by_path(dim_step.dim_name)
-                .and_then(|m| m.encoding.as_ref());
+                .and_then(|m| m.encoding());
 
             Ok(build_coord_column(
                 dim_step.dim_name.as_ref(),
@@ -262,7 +262,7 @@ pub fn chunk_to_df_from_grid_with_backend<
                 &chunk_shape,
                 &origin,
                 coord_data.as_ref().map(|c| c.as_ref()),
-                encoding,
+                encoding.as_ref(),
             ))
         })?;
 
@@ -282,7 +282,7 @@ pub fn chunk_to_df_from_grid_with_backend<
 
             let encoding = meta
                 .array_by_path(vs.name)
-                .and_then(|m| m.encoding.as_ref());
+                .and_then(|m| m.encoding());
 
             Ok(build_var_column(
                 &vs.name,
@@ -294,7 +294,7 @@ pub fn chunk_to_df_from_grid_with_backend<
                 &chunk_shape,
                 &strides,
                 &keep,
-                encoding,
+                encoding.as_ref(),
             ))
         })?;
 
