@@ -262,13 +262,15 @@ fn add_var_step(
     };
     let var_dims: Vec<IStr> =
         var_meta.dims().to_vec();
+    let var_chunk_shape =
+        var_meta.read_chunk_shape();
     let (chunk_indices, offsets) =
         compute_var_chunk_indices(
             primary_idx,
             primary_chunk_shape,
             primary_dims,
             &var_dims,
-            var_meta.read_chunk_shape(),
+            &var_chunk_shape,
             var_meta.shape(),
         );
     register_read(
@@ -283,9 +285,7 @@ fn add_var_step(
         name,
         path: var_meta.path,
         var_dims,
-        var_chunk_shape: var_meta
-            .read_chunk_shape()
-            .to_vec(),
+        var_chunk_shape: var_chunk_shape.to_vec(),
         offsets,
     });
     Ok(())

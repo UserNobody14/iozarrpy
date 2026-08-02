@@ -129,7 +129,6 @@ fn make_array_meta(
     let cg = make_chunk_grid(shape, chunk_shape);
     let meta = ZarrArrayMeta::new(
         path.istr(),
-        chunk_shape.into(),
         cg,
         None,
         make_array_metadata(

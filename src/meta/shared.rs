@@ -59,26 +59,7 @@ fn aux_coord_names_for_array<TStorage: ?Sized>(
 
 fn chunk_grids_for_array<TStorage: ?Sized>(
     array: &Array<TStorage>,
-) -> (
-    Box<[u64]>,
-    Arc<ChunkGrid>,
-    Option<Arc<ChunkGrid>>,
-) {
-    let zero_idx: Vec<u64> =
-        vec![0u64; array.dimensionality()];
-    let inner_grid = array.subchunk_grid();
-    let chunk_shape: Box<[u64]> = inner_grid
-        .chunk_shape_u64(&zero_idx)
-        .ok()
-        .flatten()
-        .map(|cs| cs.to_vec().into_boxed_slice())
-        .unwrap_or_else(|| {
-            array
-                .shape()
-                .to_vec()
-                .into_boxed_slice()
-        });
-
+) -> (Arc<ChunkGrid>, Option<Arc<ChunkGrid>>) {
     let is_sharded = array.is_sharded();
     let outer_chunk_grid: Arc<ChunkGrid> =
         array.chunk_grid().clone().into();
@@ -89,11 +70,7 @@ fn chunk_grids_for_array<TStorage: ?Sized>(
             None
         };
 
-    (
-        chunk_shape,
-        outer_chunk_grid,
-        inner_chunk_grid,
-    )
+    (outer_chunk_grid, inner_chunk_grid)
 }
 
 fn process_array_meta_job<
@@ -128,14 +105,10 @@ fn process_array_meta_job<
         job.array_md.clone(),
     )?;
 
-    let (
-        chunk_shape,
-        outer_chunk_grid,
-        inner_chunk_grid,
-    ) = chunk_grids_for_array(&array);
+    let (outer_chunk_grid, inner_chunk_grid) =
+        chunk_grids_for_array(&array);
     let arr_meta = Arc::new(ZarrArrayMeta::new(
         path_str.istr(),
-        chunk_shape,
         outer_chunk_grid,
         inner_chunk_grid,
         Arc::new(job.array_md.clone()),

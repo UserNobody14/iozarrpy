@@ -680,8 +680,6 @@ impl VarEncoding {
 #[derive(Debug)]
 pub struct ZarrArrayMeta {
     pub path: IStr,
-    /// Regular chunk shape (edge chunks may be smaller).
-    chunk_shape: Box<[u64]>,
     outer_chunk_grid: Arc<ChunkGrid>,
     inner_chunk_grid: Option<Arc<ChunkGrid>>,
     /// Raw zarrs metadata from traversal.
@@ -691,14 +689,12 @@ pub struct ZarrArrayMeta {
 impl ZarrArrayMeta {
     pub fn new(
         path: IStr,
-        chunk_shape: Box<[u64]>,
         outer_chunk_grid: Arc<ChunkGrid>,
         inner_chunk_grid: Option<Arc<ChunkGrid>>,
         metadata: Arc<ArrayMetadata>,
     ) -> Self {
         Self {
             path,
-            chunk_shape,
             outer_chunk_grid,
             inner_chunk_grid,
             metadata,
@@ -763,8 +759,20 @@ impl ZarrArrayMeta {
         self.ndim() == 1
     }
 
-    pub fn read_chunk_shape(&self) -> &[u64] {
-        &self.chunk_shape
+    pub fn read_chunk_shape(&self) -> Box<[u64]> {
+        let zeros = vec![0u64; self.ndim()];
+        self.read_chunk_grid()
+            .chunk_shape_u64(&zeros)
+            .ok()
+            .flatten()
+            .map(|cs| {
+                cs.to_vec().into_boxed_slice()
+            })
+            .unwrap_or_else(|| {
+                self.raw_shape()
+                    .to_vec()
+                    .into_boxed_slice()
+            })
     }
 
     pub fn dims(&self) -> SmallVec<[IStr; 4]> {
