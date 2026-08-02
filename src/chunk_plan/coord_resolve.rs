@@ -84,14 +84,14 @@ impl DimCtx {
         meta: &ZarrMeta,
     ) -> Option<Self> {
         let arr = meta.array_by_path(*dim)?;
-        if arr.shape.len() != 1 {
+        if !arr.is_1d() {
             return None;
         }
-        let n = arr.shape[0];
+        let n = arr.shape()[0];
         Some(Self {
             n,
             chunk_size: arr
-                .chunk_shape
+                .read_chunk_shape()
                 .first()
                 .copied()
                 .unwrap_or(n),

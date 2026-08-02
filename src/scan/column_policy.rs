@@ -169,8 +169,7 @@ pub(crate) fn group_supplies_array_or_1d_enrichable(
     else {
         return false;
     };
-    vm.shape.len() == 1
-        && sig_dims.contains(&vm.dims[0])
+    vm.is_1d() && sig_dims.contains(&vm.dims[0])
 }
 
 // =============================================================================
@@ -266,8 +265,8 @@ fn add_var_step(
             primary_chunk_shape,
             primary_dims,
             &var_dims,
-            &var_meta.chunk_shape,
-            &var_meta.shape,
+            var_meta.read_chunk_shape(),
+            var_meta.shape(),
         );
     register_read(
         reads_acc,
@@ -282,7 +281,7 @@ fn add_var_step(
         path: var_meta.path,
         var_dims,
         var_chunk_shape: var_meta
-            .chunk_shape
+            .read_chunk_shape()
             .to_vec(),
         offsets,
     });
@@ -346,7 +345,7 @@ pub(crate) fn build_chunk_physical_plan(
         let mat = match meta
             .array_by_path(*dim_name)
         {
-            Some(am) if am.shape.len() == 1 => {
+            Some(am) if am.is_1d() => {
                 let start = origin[dim_idx];
                 let len =
                     primary_chunk_shape[dim_idx];
@@ -355,7 +354,8 @@ pub(crate) fn build_chunk_physical_plan(
                     am.path,
                     ReadSpec::Slice1d {
                         coord_chunk_shape: am
-                            .chunk_shape[0],
+                            .read_chunk_shape()
+                            [0],
                         start,
                         len,
                     },

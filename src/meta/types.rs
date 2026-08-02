@@ -349,7 +349,7 @@ impl ZarrNode {
                 .iter()
                 .position(|d| d == dim)
                 && let Some(len) =
-                    arr.shape.get(i)
+                    arr.shape().get(i)
             {
                 return Some(*len);
             }
@@ -690,6 +690,37 @@ pub struct ZarrArrayMeta {
 }
 
 impl ZarrArrayMeta {
+    pub fn shape(&self) -> &[u64] {
+        &self.shape
+    }
+
+    pub fn ndim(&self) -> usize {
+        self.shape.len()
+    }
+
+    pub fn is_1d(&self) -> bool {
+        self.ndim() == 1
+    }
+
+    pub fn read_chunk_shape(&self) -> &[u64] {
+        &self.chunk_shape
+    }
+
+    pub fn read_chunk_grid(
+        &self,
+    ) -> Arc<ChunkGrid> {
+        self.inner_chunk_grid
+            .as_ref()
+            .map_or_else(
+                || {
+                    Arc::clone(
+                        &self.outer_chunk_grid,
+                    )
+                },
+                Arc::clone,
+            )
+    }
+
     #[allow(dead_code)]
     pub fn chunking_at_dim(
         &self,
@@ -699,10 +730,11 @@ impl ZarrArrayMeta {
             .dims
             .iter()
             .position(|d| d == dim)?;
-        if dim_idx >= self.chunk_shape.len() {
+        let chunk_shape = self.read_chunk_shape();
+        if dim_idx >= chunk_shape.len() {
             None
         } else {
-            Some(self.chunk_shape[dim_idx])
+            Some(chunk_shape[dim_idx])
         }
     }
 }

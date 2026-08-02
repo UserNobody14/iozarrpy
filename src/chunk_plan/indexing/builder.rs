@@ -406,7 +406,7 @@ fn group_vars_by_signature(
             continue;
         };
         let zeros: Vec<u64> =
-            vec![0u64; arr_meta.shape.len()];
+            vec![0u64; arr_meta.ndim()];
         let outer_chunk_shape =
             chunk_shape_at_zero(
                 &arr_meta.outer_chunk_grid,
@@ -488,21 +488,12 @@ fn build_one_group(
                 ),
             ))
         })?;
-    let chunk_grid: Arc<ChunkGrid> = arr_meta
-        .inner_chunk_grid
-        .as_ref()
-        .map_or_else(
-            || {
-                Arc::clone(
-                    &arr_meta.outer_chunk_grid,
-                )
-            },
-            Arc::clone,
-        );
+    let chunk_grid: Arc<ChunkGrid> =
+        arr_meta.read_chunk_grid();
     let array_shape: std::sync::Arc<[u64]> =
-        chunk_grid.array_shape().to_vec().into();
+        arr_meta.shape().to_vec().into();
     let chunk_shape: Vec<u64> =
-        arr_meta.chunk_shape.to_vec();
+        arr_meta.read_chunk_shape().to_vec();
 
     let mut seen: BTreeSet<Vec<u64>> =
         BTreeSet::new();

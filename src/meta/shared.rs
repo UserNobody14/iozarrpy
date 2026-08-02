@@ -176,7 +176,7 @@ pub(crate) fn build_node_tree(
                 dims_set.insert(*dim);
             }
 
-            if arr.shape.len() == 1
+            if arr.is_1d()
                 && arr.dims.len() == 1
                 && *leaf == arr.dims[0]
             {
