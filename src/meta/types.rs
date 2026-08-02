@@ -41,13 +41,83 @@ pub struct ZarrNode {
 
 pub type ZarrMeta = ZarrNode;
 
+/// Which of a node's arrays a recursive path walk should emit.
+#[derive(Clone, Copy)]
+enum PathKind {
+    /// Every array.
+    All,
+    /// Arrays listed in `data_vars`.
+    DataVars,
+    /// Arrays absent from `data_vars`: self-coords and CF aux coords.
+    Coords,
+}
+
+/// An optional variable selection, matched against flat column names.
+struct VarFilter<'a>(Option<BTreeSet<&'a str>>);
+
+impl<'a> VarFilter<'a> {
+    fn new(
+        variables: Option<&'a [IStr]>,
+    ) -> Self {
+        Self(variables.map(|vars| {
+            vars.iter()
+                .map(|v| v.as_ref())
+                .collect()
+        }))
+    }
+
+    fn selects(&self, name: &str) -> bool {
+        self.0.as_ref().is_none_or(|vars| {
+            vars.contains(name)
+        })
+    }
+
+    /// A child group is selected by its own name, or by any of its data
+    /// variables named either bare or qualified as `group/var`.
+    fn selects_group(
+        &self,
+        name: &str,
+        node: &ZarrNode,
+    ) -> bool {
+        self.selects(name)
+            || self.0.as_ref().is_some_and(
+                |vars| {
+                    node.data_vars.iter().any(
+                        |v| {
+                            let v_str: &str =
+                                v.as_ref();
+                            vars.contains(v_str)
+                        || vars.contains(
+                            format!(
+                                "{name}/{v_str}"
+                            )
+                            .as_str(),
+                        )
+                        },
+                    )
+                },
+            )
+    }
+}
+
 impl ZarrNode {
+    /// Create a new empty node at the given path
+    pub fn new(path: IStr) -> Self {
+        Self {
+            path,
+            arrays: BTreeMap::new(),
+            children: BTreeMap::new(),
+            local_dims: Vec::new(),
+            data_vars: Vec::new(),
+        }
+    }
+
     pub fn array_by_path<T: IntoIStr>(
         &self,
         path: T,
     ) -> Option<&ZarrArrayMeta> {
         let zp = ZarrPath::from(path.istr());
-        self.get_array_recursive(&zp)
+        self.array_at(&zp)
     }
 
     pub fn array_by_path_contains<T: IntoIStr>(
@@ -57,83 +127,43 @@ impl ZarrNode {
         self.array_by_path(path).is_some()
     }
 
-    /// All data variable paths using recursive tree traversal.
+    /// All array paths, coordinates included.
+    pub fn all_array_paths(&self) -> Vec<IStr> {
+        self.paths_of_kind(PathKind::All)
+    }
+
+    /// All data variable paths.
     pub fn all_data_var_paths(
         &self,
     ) -> Vec<IStr> {
-        let mut paths = Vec::new();
-        self.collect_data_var_paths_recursive(
-            &ZarrPath::root(),
-            &mut paths,
-        );
-        paths.into_istrs()
+        self.paths_of_kind(PathKind::DataVars)
     }
 
     /// All coordinate array paths (self-coords and CF aux coords).
     ///
     /// Paths are returned in canonical (no leading slash) flat-string form,
-    /// matching `ZarrPath::to_flat_string`. Use [`Self::is_coordinate_path`]
-    /// for individual lookups; this is intended for building a hot-path set.
+    /// matching `ZarrPath::to_flat_string`; intended for building a hot-path set.
     pub fn all_coord_paths(&self) -> Vec<IStr> {
-        let mut paths = Vec::new();
-        self.collect_coord_paths_recursive(
-            &ZarrPath::root(),
-            &mut paths,
-        );
-        paths.into_istrs()
-    }
-
-    /// True if `path` resolves to a coordinate array (not a data variable).
-    ///
-    /// Returns `false` for unknown paths and for paths that resolve to a
-    /// data variable. Accepts paths with or without a leading slash.
-    #[allow(dead_code)]
-    pub fn is_coordinate_path<T: IntoIStr>(
-        &self,
-        path: T,
-    ) -> bool {
-        let zp = ZarrPath::from(path.istr());
-        self.is_coord_at(&zp)
-    }
-
-    /// All array paths (data vars) using recursive tree traversal.
-    pub fn all_array_paths(&self) -> Vec<IStr> {
-        self.all_zarr_array_paths()
-    }
-
-    pub fn all_zarr_array_paths(
-        &self,
-    ) -> Vec<IStr> {
-        let mut paths = Vec::new();
-        self.collect_paths_recursive(
-            &ZarrPath::root(),
-            &mut paths,
-        );
-        paths.into_istrs()
+        self.paths_of_kind(PathKind::Coords)
     }
 
     /// Generate a Polars schema for the tidy DataFrame output.
     ///
-    /// For flat datasets, this is the same as ZarrDatasetMeta::tidy_schema.
-    /// For hierarchical datasets, child groups become struct columns.
+    /// Dimensions come first, then this node's arrays, then one struct column
+    /// per child group.
     pub fn tidy_schema(
         &self,
         variables: Option<&[IStr]>,
     ) -> Schema {
-        let var_set: Option<BTreeSet<&str>> =
-            variables.map(|v| {
-                v.iter()
-                    .map(|s| s.as_ref())
-                    .collect()
-            });
-
+        let filter = VarFilter::new(variables);
         let mut fields: Vec<Field> = Vec::new();
 
         for dim in self.dim_order() {
             let dtype = self
                 .array_by_path(dim)
-                .map(|m| m.polars_dtype())
-                .unwrap_or(PlDataType::Int64);
+                .map_or(PlDataType::Int64, |m| {
+                    m.polars_dtype()
+                });
             let dim_str: &str = dim.as_ref();
             fields.push(Field::new(
                 dim_str.into(),
@@ -148,13 +178,11 @@ impl ZarrNode {
             .map(|f| f.name().clone())
             .collect();
 
-        // Add root data variable columns
         for var in &self.data_vars {
             let var_str: &str = var.as_ref();
-            if var_set.as_ref().is_none_or(|vs| {
-                vs.contains(var_str)
-            }) && let Some(m) =
-                self.arrays.get(var)
+            if filter.selects(var_str)
+                && let Some(m) =
+                    self.arrays.get(var)
             {
                 fields.push(Field::new(
                     var_str.into(),
@@ -169,12 +197,9 @@ impl ZarrNode {
         // omitted from `data_vars` when listed as `coordinates` on another var.
         for (var, meta) in &self.arrays {
             let var_str: &str = var.as_ref();
-            if field_names.contains(var_str) {
-                continue;
-            }
-            if var_set.as_ref().is_none_or(|vs| {
-                vs.contains(var_str)
-            }) {
+            if !field_names.contains(var_str)
+                && filter.selects(var_str)
+            {
                 fields.push(Field::new(
                     var_str.into(),
                     meta.polars_dtype(),
@@ -184,39 +209,17 @@ impl ZarrNode {
             }
         }
 
-        // Add child group struct columns
         for (child_name, child_node) in
             &self.children
         {
-            let child_name_str: &str =
+            let child_str: &str =
                 child_name.as_ref();
-            // Check if this group or any of its vars are in the selection
-            let should_include =
-                var_set.as_ref().is_none_or(|vs| {
-                    vs.contains(child_name_str)
-                        || child_node.data_vars.iter().any(
-                            |v| {
-                                let v_str: &str =
-                                    v.as_ref();
-                                vs.contains(v_str)
-                                    || vs.contains(
-                                        &format!(
-                                            "{}/{}",
-                                            child_name_str,
-                                            v_str
-                                        )
-                                        .as_str(),
-                                    )
-                            },
-                        )
-                });
-
-            if should_include {
-                let struct_dtype =
-                    child_node.to_struct_dtype();
+            if filter.selects_group(
+                child_str, child_node,
+            ) {
                 fields.push(Field::new(
-                    child_name_str.into(),
-                    struct_dtype,
+                    child_str.into(),
+                    child_node.to_struct_dtype(),
                 ));
             }
         }
@@ -229,90 +232,10 @@ impl ZarrNode {
         &self,
         variables: Option<&[IStr]>,
     ) -> Vec<IStr> {
-        let var_set: Option<BTreeSet<&str>> =
-            variables.map(|v| {
-                v.iter()
-                    .map(|s| s.as_ref())
-                    .collect()
-            });
-
-        let mut out: Vec<IStr> = Vec::new();
-        let mut seen: BTreeSet<IStr> =
-            BTreeSet::new();
-
-        for dim in self.dim_order() {
-            out.push(dim);
-            seen.insert(dim);
-        }
-
-        for var in &self.data_vars {
-            let var_str: &str = var.as_ref();
-            if var_set.as_ref().is_none_or(|vs| {
-                vs.contains(var_str)
-            }) && self.arrays.contains_key(var)
-            {
-                out.push(*var);
-                seen.insert(*var);
-            }
-        }
-
-        for var in self.arrays.keys() {
-            let var_str: &str = var.as_ref();
-            if seen.contains(var) {
-                continue;
-            }
-            if var_set.as_ref().is_none_or(|vs| {
-                vs.contains(var_str)
-            }) {
-                out.push(*var);
-                seen.insert(*var);
-            }
-        }
-
-        for (child_name, child_node) in
-            &self.children
-        {
-            let child_name_str: &str =
-                child_name.as_ref();
-            let should_include =
-                var_set.as_ref().is_none_or(|vs| {
-                    vs.contains(child_name_str)
-                        || child_node.data_vars.iter().any(
-                            |v| {
-                                let v_str: &str =
-                                    v.as_ref();
-                                vs.contains(v_str)
-                                    || vs.contains(
-                                        &format!(
-                                            "{}/{}",
-                                            child_name_str,
-                                            v_str
-                                        )
-                                        .as_str(),
-                                    )
-                            },
-                        )
-                });
-
-            if should_include {
-                out.push(*child_name);
-            }
-        }
-
-        out
-    }
-}
-
-impl ZarrNode {
-    /// Create a new empty node at the given path
-    pub fn new(path: IStr) -> Self {
-        Self {
-            path,
-            arrays: BTreeMap::new(),
-            children: BTreeMap::new(),
-            local_dims: Vec::new(),
-            data_vars: Vec::new(),
-        }
+        self.tidy_schema(variables)
+            .iter_names()
+            .map(IntoIStr::istr)
+            .collect()
     }
 
     /// Dimensions across this subtree in output order: this node's
@@ -397,6 +320,109 @@ impl ZarrNode {
 
         PlDataType::Struct(struct_fields)
     }
+
+    /// Look up an array by traversing the tree using path components.
+    fn array_at(
+        &self,
+        path: &ZarrPath,
+    ) -> Option<&ZarrArrayMeta> {
+        let comps = path.components();
+        match comps.len() {
+            0 => None,
+            1 => self
+                .arrays
+                .get(&comps[0])
+                .map(AsRef::as_ref),
+            _ => self
+                .children
+                .get(&comps[0])
+                .and_then(|child| {
+                    child.array_at(&path.tail())
+                }),
+        }
+    }
+
+    /// Collect the paths of every array of `kind` in this subtree, in DFS
+    /// pre-order, prefixed by `prefix`.
+    fn collect_paths(
+        &self,
+        kind: PathKind,
+        prefix: &ZarrPath,
+        out: &mut Vec<ZarrPath>,
+    ) {
+        match kind {
+            PathKind::All => out.extend(
+                self.arrays
+                    .keys()
+                    .map(|n| prefix.push(*n)),
+            ),
+            PathKind::DataVars => out.extend(
+                self.data_vars
+                    .iter()
+                    .map(|n| prefix.push(*n)),
+            ),
+            PathKind::Coords => {
+                let data_vars: BTreeSet<&IStr> =
+                    self.data_vars
+                        .iter()
+                        .collect();
+                out.extend(
+                    self.arrays
+                        .keys()
+                        .filter(|n| {
+                            !data_vars.contains(n)
+                        })
+                        .map(|n| prefix.push(*n)),
+                );
+            }
+        }
+
+        for (child_name, child_node) in
+            &self.children
+        {
+            child_node.collect_paths(
+                kind,
+                &prefix.push(*child_name),
+                out,
+            );
+        }
+    }
+
+    fn paths_of_kind(
+        &self,
+        kind: PathKind,
+    ) -> Vec<IStr> {
+        let mut paths = Vec::new();
+        self.collect_paths(
+            kind,
+            &ZarrPath::root(),
+            &mut paths,
+        );
+        paths.into_istrs()
+    }
+
+    /// All array paths beneath the group at `target`, as full paths from this
+    /// node. Empty when `target` names no group.
+    pub fn find_paths_under(
+        &self,
+        target: &ZarrPath,
+    ) -> Vec<ZarrPath> {
+        let mut node = self;
+        for component in target.components() {
+            match node.children.get(component) {
+                Some(child) => node = child,
+                None => return Vec::new(),
+            }
+        }
+
+        let mut out = Vec::new();
+        node.collect_paths(
+            PathKind::All,
+            target,
+            &mut out,
+        );
+        out
+    }
 }
 
 impl Display for ZarrNode {
@@ -409,161 +435,6 @@ impl Display for ZarrNode {
             "ZarrNode(path='{}')",
             self.path
         )
-    }
-}
-
-impl ZarrNode {
-    /// Look up an array by traversing the tree recursively using path components.
-    pub fn get_array_recursive(
-        &self,
-        path: &ZarrPath,
-    ) -> Option<&ZarrArrayMeta> {
-        let comps = path.components();
-        match comps.len() {
-            0 => None,
-            1 => self
-                .arrays
-                .get(&comps[0])
-                .map(|a| a.as_ref()),
-            _ => self
-                .children
-                .get(&comps[0])
-                .and_then(|child| {
-                    child.get_array_recursive(
-                        &path.tail(),
-                    )
-                }),
-        }
-    }
-
-    /// Recursively collect all array paths (as `ZarrPath`) from this node and descendants.
-    pub fn collect_paths_recursive(
-        &self,
-        prefix: &ZarrPath,
-        out: &mut Vec<ZarrPath>,
-    ) {
-        for var in self.arrays.keys() {
-            out.push(prefix.push(*var));
-        }
-        for (child_name, child_node) in
-            &self.children
-        {
-            let child_prefix =
-                prefix.push(*child_name);
-            child_node.collect_paths_recursive(
-                &child_prefix,
-                out,
-            );
-        }
-    }
-
-    /// Recursively collect data variable paths (non-coordinate arrays).
-    pub fn collect_data_var_paths_recursive(
-        &self,
-        prefix: &ZarrPath,
-        out: &mut Vec<ZarrPath>,
-    ) {
-        for var in &self.data_vars {
-            out.push(prefix.push(*var));
-        }
-        for (child_name, child_node) in
-            &self.children
-        {
-            let child_prefix =
-                prefix.push(*child_name);
-            child_node
-                .collect_data_var_paths_recursive(
-                    &child_prefix,
-                    out,
-                );
-        }
-    }
-
-    /// Recursively collect coordinate array paths.
-    ///
-    /// Coordinates are arrays in the node that are not listed as data
-    /// variables (i.e. self-coords like `lat`/`lon`/`time` and CF aux
-    /// coords listed in another array's `coordinates` attribute).
-    pub fn collect_coord_paths_recursive(
-        &self,
-        prefix: &ZarrPath,
-        out: &mut Vec<ZarrPath>,
-    ) {
-        let data_var_set: BTreeSet<&IStr> =
-            self.data_vars.iter().collect();
-        for name in self.arrays.keys() {
-            if !data_var_set.contains(name) {
-                out.push(prefix.push(*name));
-            }
-        }
-        for (child_name, child_node) in
-            &self.children
-        {
-            let child_prefix =
-                prefix.push(*child_name);
-            child_node
-                .collect_coord_paths_recursive(
-                    &child_prefix,
-                    out,
-                );
-        }
-    }
-
-    /// True if `path` resolves to an array under this node that is a
-    /// coordinate (i.e. exists in `arrays` but not in `data_vars`).
-    #[allow(dead_code)]
-    pub fn is_coord_at(
-        &self,
-        path: &ZarrPath,
-    ) -> bool {
-        let comps = path.components();
-        match comps.len() {
-            0 => false,
-            1 => {
-                self.arrays
-                    .contains_key(&comps[0])
-                    && !self
-                        .data_vars
-                        .contains(&comps[0])
-            }
-            _ => self
-                .children
-                .get(&comps[0])
-                .is_some_and(|child| {
-                    child
-                        .is_coord_at(&path.tail())
-                }),
-        }
-    }
-
-    /// Find all paths under this node that match a given prefix path.
-    /// Traverses to the target node then collects all paths beneath it.
-    pub fn find_paths_under(
-        &self,
-        target: &ZarrPath,
-    ) -> Vec<ZarrPath> {
-        let comps = target.components();
-        if comps.is_empty() {
-            let mut out = Vec::new();
-            self.collect_paths_recursive(
-                &ZarrPath::root(),
-                &mut out,
-            );
-            return out;
-        }
-        match self.children.get(&comps[0]) {
-            Some(child) if comps.len() == 1 => {
-                let mut out = Vec::new();
-                child.collect_paths_recursive(
-                    &ZarrPath::single(comps[0]),
-                    &mut out,
-                );
-                out
-            }
-            Some(child) => child
-                .find_paths_under(&target.tail()),
-            None => Vec::new(),
-        }
     }
 }
 
@@ -707,20 +578,7 @@ impl ZarrArrayMeta {
         Arc::clone(&self.metadata)
     }
 
-    #[allow(dead_code)]
-    pub fn raw_shape(&self) -> &[u64] {
-        match &*self.metadata {
-            ArrayMetadata::V2(metadata) => {
-                &metadata.shape
-            }
-            ArrayMetadata::V3(metadata) => {
-                &metadata.shape
-            }
-        }
-    }
-
-    #[allow(dead_code)]
-    pub fn attributes(
+    fn attributes(
         &self,
     ) -> &serde_json::Map<String, serde_json::Value>
     {
@@ -734,6 +592,7 @@ impl ZarrArrayMeta {
         }
     }
 
+    /// Array shape in elements, as recorded by the chunk grid.
     pub fn shape(&self) -> &[u64] {
         self.outer_chunk_grid.array_shape()
     }
@@ -756,7 +615,7 @@ impl ZarrArrayMeta {
                 cs.to_vec().into_boxed_slice()
             })
             .unwrap_or_else(|| {
-                self.raw_shape()
+                self.shape()
                     .to_vec()
                     .into_boxed_slice()
             })
@@ -800,7 +659,7 @@ impl ZarrArrayMeta {
                 .collect();
         }
 
-        (0..self.raw_shape().len())
+        (0..self.ndim())
             .map(|i| format!("dim_{i}").istr())
             .collect()
     }

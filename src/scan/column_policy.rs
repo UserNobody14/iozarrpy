@@ -63,7 +63,7 @@ fn expand_1d_aux_on_projection_dims(
     // Use every on-disk array path, not only `data_vars`. CF auxiliary coords
     // (e.g. lat/lon referenced via ``coordinates``) are stored in `node.arrays`
     // but excluded from `data_vars`, so `all_data_var_paths` would miss them.
-    for p in meta.all_zarr_array_paths() {
+    for p in meta.all_array_paths() {
         if expanded.contains(&p) {
             continue;
         }
