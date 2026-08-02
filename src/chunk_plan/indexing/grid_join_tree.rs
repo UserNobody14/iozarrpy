@@ -9,7 +9,7 @@
 //! - [`GridJoinTree::Independent`] – subtrees with no shared dimensions
 //!   (top-level diagonal-concat).
 //! - [`GridJoinTree::Group`] – wraps a single child subtree under a named group,
-//!   used by the builder to mirror `meta.root.children` hierarchy. Treated
+//!   used by the builder to mirror the root node's children. Treated
 //!   transparently by every traversal helper.
 //!
 //! The build algorithm partitions groups into connected components via union-find
@@ -109,7 +109,7 @@ pub enum GridJoinTree {
     /// Subtrees with no shared dims; combined via diagonal concat.
     Independent(Vec<GridJoinTree>),
     /// Wraps `child`'s combined DataFrame into a struct column named `name`.
-    /// Inserted by the builder to mirror `meta.root.children` hierarchy.
+    /// Inserted by the builder to mirror the root node's children.
     /// Treated transparently by every traversal helper here — the variant is
     /// purely a marker that affects the assembly layer (see `grid_join_reader`).
     Group {

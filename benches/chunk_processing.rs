@@ -155,7 +155,7 @@ fn make_test_meta() -> ZarrMeta {
     );
     arrays.insert(key, meta);
 
-    let root = ZarrNode {
+    ZarrNode {
         path: "/".istr(),
         arrays,
         children: BTreeMap::new(),
@@ -168,12 +168,7 @@ fn make_test_meta() -> ZarrMeta {
             "temperature".istr(),
             "pressure".istr(),
         ],
-    };
-
-    let dim_analysis =
-        DimensionAnalysis::compute(&root);
-
-    ZarrMeta { root, dim_analysis }
+    }
 }
 
 // =============================================================================

@@ -35,12 +35,7 @@ fn projection_dims_used(
 ) -> BTreeSet<IStr> {
     let mut out = BTreeSet::new();
     for col in expanded {
-        if meta
-            .dim_analysis
-            .all_dims
-            .iter()
-            .any(|d| d == col)
-        {
+        if meta.is_dim(col) {
             out.insert(*col);
             continue;
         }
@@ -108,8 +103,8 @@ pub(crate) fn expand_io_source_physical(
     // like `point` when the projection is only filter columns + `.select(...)`,
     // but we need them in each chunk row to join/enrich aux vars (`station_id`
     // on `point`, etc.).
-    for d in &meta.dim_analysis.all_dims {
-        cols.insert(*d);
+    for d in meta.dim_order() {
+        cols.insert(d);
     }
     let mut expanded =
         expand_projection_to_flat_paths(
