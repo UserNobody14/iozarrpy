@@ -701,11 +701,6 @@ impl ZarrArrayMeta {
         }
     }
 
-    #[allow(dead_code)]
-    pub fn metadata(&self) -> &ArrayMetadata {
-        &self.metadata
-    }
-
     pub fn metadata_arc(
         &self,
     ) -> Arc<ArrayMetadata> {
@@ -713,16 +708,8 @@ impl ZarrArrayMeta {
     }
 
     #[allow(dead_code)]
-    pub fn zarr_format(&self) -> u8 {
-        match self.metadata() {
-            ArrayMetadata::V2(_) => 2,
-            ArrayMetadata::V3(_) => 3,
-        }
-    }
-
-    #[allow(dead_code)]
     pub fn raw_shape(&self) -> &[u64] {
-        match self.metadata() {
+        match &*self.metadata {
             ArrayMetadata::V2(metadata) => {
                 &metadata.shape
             }
@@ -737,7 +724,7 @@ impl ZarrArrayMeta {
         &self,
     ) -> &serde_json::Map<String, serde_json::Value>
     {
-        match self.metadata() {
+        match &*self.metadata {
             ArrayMetadata::V2(metadata) => {
                 &metadata.attributes
             }
@@ -793,7 +780,7 @@ impl ZarrArrayMeta {
         }
 
         if let ArrayMetadata::V3(metadata) =
-            self.metadata()
+            &*self.metadata
             && let Some(names) =
                 &metadata.dimension_names
         {
@@ -819,7 +806,7 @@ impl ZarrArrayMeta {
     }
 
     pub fn zarr_dtype(&self) -> ZarrDataType {
-        match self.metadata() {
+        match &*self.metadata {
             ArrayMetadata::V2(metadata) => {
                 ZarrDataType::from_metadata(
                     &metadata.dtype,
@@ -872,22 +859,5 @@ impl ZarrArrayMeta {
                 },
                 Arc::clone,
             )
-    }
-
-    #[allow(dead_code)]
-    pub fn chunking_at_dim(
-        &self,
-        dim: &IStr,
-    ) -> Option<u64> {
-        let dim_idx = self
-            .dims()
-            .iter()
-            .position(|d| d == dim)?;
-        let chunk_shape = self.read_chunk_shape();
-        if dim_idx >= chunk_shape.len() {
-            None
-        } else {
-            Some(chunk_shape[dim_idx])
-        }
     }
 }
